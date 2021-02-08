@@ -1,3 +1,7 @@
 .tmp
 .output
 .DS_Store
+.ipynb_checkpoints
+dask-worker-space
+mydask.png
+__pycache__
