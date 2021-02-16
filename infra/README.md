@@ -1,6 +1,4 @@
-# causemos-data-pipline
-
-## SuperMaas to Causemos data pipeline
+## Prefect + Dask Infrastructure
 
 ### Python environment
 
