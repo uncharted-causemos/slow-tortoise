@@ -2,16 +2,16 @@ FROM docker-hub.uncharted.software/continuumio/miniconda3:4.8.2
 
 RUN conda install --yes \
     -c conda-forge \
-    python==3.8.6 \
-    python-blosc \
-    cytoolz \
+    "python>=3.8.0" \
     prefect \
     dask \
     lz4 \
-    nomkl \
-    numpy \
-    pandas \
-    tini==0.18.0 \
+    fastparquet \
+    python-snappy \
+    s3fs \
+    boto3 \
+    "protobuf>=3.13.0" \
+    "tini>=0.18.0" \
     && conda clean -tipsy \
     && find /opt/conda/ -type f,l -name '*.a' -delete \
     && find /opt/conda/ -type f,l -name '*.pyc' -delete \
