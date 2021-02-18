@@ -2,10 +2,12 @@
   [server.ui]
     apollo_url="http://10.65.18.52:4200/graphql"
 
+  [server.telemetry]
+    enabled = false
+
 [engine]
     [engine.executor]
     default_class = "prefect.executors.DaskExecutor"
 
         [engine.executor.dask]
         address = "tcp://10.65.18.58:8786"
-        
