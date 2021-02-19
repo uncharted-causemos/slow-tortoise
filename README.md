@@ -14,3 +14,9 @@ Activate the environment with `conda activate data-pipeline`. Deactivate with `c
 ### Running Jupyter Lab
    
 Start `jupyter lab`
+
+---
+
+### Infrastructure
+
+See [here](./infra/README.md) how to set up a dask cluster and prefect server.
