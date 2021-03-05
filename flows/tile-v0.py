@@ -88,7 +88,7 @@ def project(subtilecoord, tilecoord):
     return int(bin_index)
 
 # save proto tile file
-def save_tile(tile, dest, model_id, run_id, feature, timestamp):
+def save_tile(tile, dest, model_id, run_id, feature, time_res, timestamp):
     # Create s3 client only if it hasn't been created in current worker
     # since initalizing the client is expensive. Make sure we only initialize it once per worker
     global s3
@@ -107,9 +107,39 @@ def save_tile(tile, dest, model_id, run_id, feature, timestamp):
     ## HACK: currently our existing system expects unix timestamps in milliseconds
     #t = timestamp * 1000
     t = 0 # temporarily for lpjml data for testing
-    path = f'{model_id}/{run_id}/{feature}/{t}-{z}-{x}-{y}.tile'
+    path = f'{model_id}/{run_id}/{time_res}/{feature}/tiles/{t}-{z}-{x}-{y}.tile'
     s3.put_object(Body=tile.SerializeToString(), Bucket=dest['bucket'], Key=path)
     return tile
+
+# save timeseries as a json file
+def save_timeseries(x, dest, model_id, run_id, feature, time_res, column):
+    bucket = dest['bucket']
+    x.to_json(f's3://{bucket}/{model_id}/{run_id}/{time_res}/{feature}/timeseries/{column}.json', orient='records',
+        storage_options={
+        'anon': False,
+        'use_ssl': False,
+        'key': dest['key'],
+        'secret': dest['secret'],
+        'client_kwargs':{
+            'region_name': dest['region_name'],
+            'endpoint_url': dest['endpoint_url']
+        }
+    })
+    
+# save stats as a json file
+def save_stats(x, dest, model_id, run_id, feature):
+    bucket = dest['bucket']
+    x.to_json(f's3://{bucket}/{model_id}/{run_id}/{time_res}/{feature}/stats/stats.json', orient='index',
+        storage_options={
+        'anon': False,
+        'use_ssl': False,
+        'key': dest['key'],
+        'secret': dest['secret'],
+        'client_kwargs':{
+            'region_name': dest['region_name'],
+            'endpoint_url': dest['endpoint_url']
+        }
+    })
     
 # transform given row to tile protobuf
 def to_proto(row):
@@ -155,7 +185,7 @@ def define_pipeline(source, dest, model_id, run_id):
     
     # ==== Prepare data and run temporal and spatial aggregation =====
 
-
+    time_res = 'month'
     # Monthly temporal aggregation (compute for both sum and mean)
     df['timestamp'] = dd.to_datetime(df['timestamp']).apply(lambda x: to_month(x), meta=(None, 'int'))
     df = df.groupby(['feature', 'timestamp', 'lat', 'lng'])['value'].agg(['sum', 'mean'])
@@ -164,23 +194,56 @@ def define_pipeline(source, dest, model_id, run_id):
     df.columns = df.columns.str.replace('sum', 't_sum').str.replace('mean', 't_mean')
     df = df.reset_index()
 
+    # Timeseries aggregation
+    timeseries_aggs = ['min', 'max', 'sum', 'mean']
+    timeseries_lookup = {
+        ('t_sum', 'min'): 'min_sum', ('t_sum', 'max'): 'max_sum', ('t_sum', 'sum'): 'sum_bin_sum', ('t_sum', 'mean'): 'avg_bin_sum',
+        ('t_mean', 'min'): 'min_avg', ('t_mean', 'max'): 'max_avg', ('t_mean', 'sum'): 'sum_bin_avg', ('t_mean', 'mean'): 'avg_bin_avg'
+    }
+    timeseries_agg_columns = ['min_sum', 'max_sum', 'sum_bin_sum', 'avg_bin_sum', 'min_avg', 'max_avg', 'sum_bin_avg', 'avg_bin_avg']
+
+    timeseries_df = df.groupby(['feature', 'timestamp']).agg({ 't_sum' : timeseries_aggs, 't_mean' : timeseries_aggs })
+    timeseries_df.columns = timeseries_df.columns.to_flat_index()
+    timeseries_df = timeseries_df.rename(columns=timeseries_lookup).reset_index()
+    timeseries_df = timeseries_df.groupby(['feature']).apply(
+        lambda x: [ save_timeseries(x[['timestamp', col]], dest, model_id, run_id, x['feature'].values[0], time_res, col) for col in timeseries_agg_columns],
+        meta=(None, 'object'))
+    timeseries_df.compute()
+
     # Spatial aggregation to the higest supported precision(subtile z) level
     df['subtile'] = df.apply(lambda x: deg2num(x.lat, x.lng, MAX_SUBTILE_PRECISION), axis=1, meta=(None, 'object'))
     df = df[['feature', 'timestamp', 'subtile', 't_sum', 't_mean']] \
         .groupby(['feature', 'timestamp', 'subtile']) \
-        .agg(['sum', 'mean'])
+        .agg(['sum', 'mean', 'count'])
 
     # Rename columns
-    lookup = {('t_sum', 'sum'): 't_sum_s_sum', ('t_sum', 'mean'): 't_sum_s_mean', ('t_mean', 'sum'): 't_mean_s_sum', ('t_mean', 'mean'): 't_mean_s_mean'}
+    spatial_lookup = {('t_sum', 'sum'): 't_sum_s_sum', ('t_sum', 'mean'): 't_sum_s_mean', ('t_sum', 'count'): 't_sum_s_count',
+            ('t_mean', 'sum'): 't_mean_s_sum', ('t_mean', 'mean'): 't_mean_s_mean', ('t_mean', 'count'): 't_mean_s_count'}
     df.columns = df.columns.to_flat_index()
-    df = df.rename(columns=lookup).reset_index()
+    df = df.rename(columns=spatial_lookup).reset_index()
+
+    #Stats aggregation
+    stats_aggs = ['min', 'max']
+    stats_lookup = {
+        ('t_sum_s_sum', 'min'): 'min_t_sum_s_sum', ('t_sum_s_sum', 'max'): 'max_t_sum_s_sum',
+        ('t_sum_s_mean', 'min'): 'min_t_sum_s_mean', ('t_sum_s_mean', 'max'): 'max_t_sum_s_mean',
+        ('t_mean_s_sum', 'min'): 'min_t_mean_s_sum', ('t_mean_s_sum', 'max'): 'max_t_mean_s_sum',
+        ('t_mean_s_mean', 'min'): 'min_t_mean_s_mean', ('t_mean_s_mean', 'max'): 'max_t_mean_s_mean'
+    }
+    stats_agg_columns = ['min_t_sum_s_sum', 'max_t_sum_s_sum', 'min_t_sum_s_mean', 'max_t_sum_s_mean',
+                        'min_t_mean_s_sum', 'max_t_mean_s_sum', 'min_t_mean_s_mean', 'max_t_mean_s_mean']
+
+    stats_df = df.groupby(['feature']).agg({ 't_sum_s_sum' : stats_aggs, 't_sum_s_mean' : stats_aggs, 't_mean_s_sum' : stats_aggs, 't_mean_s_mean' : stats_aggs })
+    stats_df.columns = stats_df.columns.to_flat_index()
+    stats_df = stats_df.rename(columns=stats_lookup).reset_index()
+    stats_df = stats_df.groupby(['feature']).apply(
+        lambda x: save_stats(x[stats_agg_columns], dest, model_id, run_id, x['feature'].values[0]),
+        meta=(None, 'object'))
+    stats_df.compute()
 
     ## TODO: I think saving ^ result as file (for each feature) and store in our minio is useful. 
     ## Then same data can be used for producing tiles and also used for doing regional aggregation and other computation in other tasks.
     ## In that way we can have one jupyter notbook or python module for each tasks
-
-    ## TODO: 1. Get min max stats and save. 2. Compute timeseries and save
-
 
     ## 3. Tiling Process
     # Get all acestor subtiles and explode
@@ -195,7 +258,7 @@ def define_pipeline(source, dest, model_id, run_id):
         .agg(list) \
         .reset_index() \
         .repartition(npartitions = 200) \
-        .apply(lambda x: save_tile(to_proto(x), dest, model_id, run_id, x.feature, x.timestamp), axis=1, meta=(None, 'object'))  # convert each row to protobuf and save
+        .apply(lambda x: save_tile(to_proto(x), dest, model_id, run_id, x.feature, time_res, x.timestamp), axis=1, meta=(None, 'object'))  # convert each row to protobuf and save
     
     return df
 
