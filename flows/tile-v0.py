@@ -127,7 +127,7 @@ def save_timeseries(x, dest, model_id, run_id, feature, time_res, column):
     })
     
 # save stats as a json file
-def save_stats(x, dest, model_id, run_id, feature):
+def save_stats(x, dest, model_id, run_id, feature, time_res):
     bucket = dest['bucket']
     x.to_json(f's3://{bucket}/{model_id}/{run_id}/{time_res}/{feature}/stats/stats.json', orient='index',
         storage_options={
@@ -159,13 +159,18 @@ def to_proto(row):
     return tile
 
 # convert given datetime object to monthly epoch timestamp
-def to_month(date):
-    return int(datetime.datetime(date.year, date.month, 1).timestamp())
+def to_normalized_time(date, time_res):
+    if time_res == 'month':
+        return int(datetime.datetime(date.year, date.month, 1).timestamp())
+    elif time_res == 'year':
+        return int(datetime.datetime(date.year, 1, 1).timestamp())
+    else:
+        raise ValueError('time_res must be \'month\' or \'year\'')
 
 #############################################################################
 
 @task
-def define_pipeline(source, dest, model_id, run_id):
+def download_data(source, model_id, run_id):
     # Read parquet files in as set of dataframes
     bucket = source['bucket']
     df = dd.read_parquet(f's3://{bucket}/{model_id}/{run_id}/*.parquet',
@@ -182,18 +187,22 @@ def define_pipeline(source, dest, model_id, run_id):
     # Ensure types
     df = df.astype({'value': 'float64'})
     df.dtypes
-    
-    # ==== Prepare data and run temporal and spatial aggregation =====
+    return df
 
-    time_res = 'month'
+@task
+def temporal_aggregation(df, time_res)
     # Monthly temporal aggregation (compute for both sum and mean)
-    df['timestamp'] = dd.to_datetime(df['timestamp']).apply(lambda x: to_month(x), meta=(None, 'int'))
+    df['timestamp'] = dd.to_datetime(df['timestamp']).apply(lambda x: to_normalized_time(x, time_res), meta=(None, 'int'))
     df = df.groupby(['feature', 'timestamp', 'lat', 'lng'])['value'].agg(['sum', 'mean'])
 
     # Rename agg column names
     df.columns = df.columns.str.replace('sum', 't_sum').str.replace('mean', 't_mean')
     df = df.reset_index()
+    df.compute()
+    return df
 
+@task
+def compute_timeseries(df, dest, time_res, model_id, run_id)
     # Timeseries aggregation
     timeseries_aggs = ['min', 'max', 'sum', 'mean']
     timeseries_lookup = {
@@ -210,6 +219,8 @@ def define_pipeline(source, dest, model_id, run_id):
         meta=(None, 'object'))
     timeseries_df.compute()
 
+@task
+def spatial_aggregation(df)
     # Spatial aggregation to the higest supported precision(subtile z) level
     df['subtile'] = df.apply(lambda x: deg2num(x.lat, x.lng, MAX_SUBTILE_PRECISION), axis=1, meta=(None, 'object'))
     df = df[['feature', 'timestamp', 'subtile', 't_sum', 't_mean']] \
@@ -221,7 +232,11 @@ def define_pipeline(source, dest, model_id, run_id):
             ('t_mean', 'sum'): 't_mean_s_sum', ('t_mean', 'mean'): 't_mean_s_mean', ('t_mean', 'count'): 't_mean_s_count'}
     df.columns = df.columns.to_flat_index()
     df = df.rename(columns=spatial_lookup).reset_index()
+    df.compute()
+    return df
 
+@task
+def compute_stats(df, dest, time_res, model_id, run_id)
     #Stats aggregation
     stats_aggs = ['min', 'max']
     stats_lookup = {
@@ -237,15 +252,12 @@ def define_pipeline(source, dest, model_id, run_id):
     stats_df.columns = stats_df.columns.to_flat_index()
     stats_df = stats_df.rename(columns=stats_lookup).reset_index()
     stats_df = stats_df.groupby(['feature']).apply(
-        lambda x: save_stats(x[stats_agg_columns], dest, model_id, run_id, x['feature'].values[0]),
+        lambda x: save_stats(x[stats_agg_columns], dest, model_id, run_id, x['feature'].values[0], time_res),
         meta=(None, 'object'))
     stats_df.compute()
 
-    ## TODO: I think saving ^ result as file (for each feature) and store in our minio is useful. 
-    ## Then same data can be used for producing tiles and also used for doing regional aggregation and other computation in other tasks.
-    ## In that way we can have one jupyter notbook or python module for each tasks
-
-    ## 3. Tiling Process
+@task
+def compute_tiling(df, dest, time_res, model_id, run_id)
     # Get all acestor subtiles and explode
     # TODO: Instead of exploding, try reducing down by processing from higest zoom levels to lowest zoom levels one by one level. 
     df['subtile'] = df.apply(lambda x: filter_by_min_zoom(ancestor_tiles(x.subtile), MIN_SUBTILE_PRECISION), axis=1, meta=(None, 'object'))
@@ -259,18 +271,12 @@ def define_pipeline(source, dest, model_id, run_id):
         .reset_index() \
         .repartition(npartitions = 200) \
         .apply(lambda x: save_tile(to_proto(x), dest, model_id, run_id, x.feature, time_res, x.timestamp), axis=1, meta=(None, 'object'))  # convert each row to protobuf and save
-    
-    return df
-
-
-@task
-def compute(df):
     df.compute()
 
 
 ###########################################################################
 
-with Flow("tile-v0") as flow:
+with Flow('datacube-ingest-v0.1') as flow:
 
     # Parameters
     model_id = Parameter('model_id', default='e0a14dbf-e8e6-42bd-b908-e72a956fadd5')
@@ -292,10 +298,27 @@ with Flow("tile-v0") as flow:
         'bucket': 'mass-upload-test'
     })
 
-    # Tasks
-    df = define_pipeline(source, dest, model_id, run_id)
-    compute(df)
+    df = download_data(source, model_id, run_id)
+
+    # ==== Run aggregations based on monthly time resolution =====
+    monthly_data = temporal_aggregation(df, 'month')
+    compute_timeseries(monthly_data, dest, 'month', model_id, run_id)
+
+    monthly_spatial_data = spatial_aggregation(monthly_data)
+    compute_stats(monthly_spatial_data, dest, 'month', model_id, run_id)
+    compute_tiling(monthly_spatial_data, dest, 'month', model_id, run_id)
+
+    # ==== Run aggregations based on annual time resolution =====
+    annual_data = temporal_aggregation(df, 'year')
+    compute_timeseries(annual_data, dest, 'year', model_id, run_id)
+
+    annual_spatial_data = spatial_aggregation(annual_data)
+    compute_stats(annual_spatial_data, dest, 'year', model_id, run_id)
+    compute_tiling(annual_spatial_data, dest, 'year', model_id, run_id)
+
+    ## TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful. 
+    ## Then same data can be used for producing tiles and also used for doing regional aggregation and other computation in other tasks.
+    ## In that way we can have one jupyter notbook or python module for each tasks
 
 
-
-flow.register(project_name="Tiling")
+flow.register(project_name='Tiling')
