@@ -8,3 +8,8 @@
 - Docker deploy will take ~15 seconds. Verify that the services are running with `docker ps` and check the logs with `docker service logs dask_swarm_worker` and `docker service logs dask_swarm_scheduler`
 - Test the dask cluster by running [dask_test.py](./dask_test.py) from your local machine. 
 - To **stop** the docker services run `docker stack rm dask_swarm`
+
+## Updating dependencies
+- Stop the swarm with `docker stack rm dask_swarm`
+- Update the Dockerfile in `~/dask/base` with the desired dependencies
+- Rebuild and deploy using the steps above

@@ -5,8 +5,10 @@ RUN conda install --yes \
     "python>=3.8.0" \
     prefect \
     dask \
+    "distributed<2021.3.0" \
     lz4 \
     fastparquet \
+    "pandas>=1.2.0" \
     python-snappy \
     s3fs \
     boto3 \

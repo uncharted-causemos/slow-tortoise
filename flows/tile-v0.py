@@ -6,6 +6,10 @@ import pandas as pd
 import math
 import boto3
 
+client = Client('10.65.18.58:8786')
+client.upload_file('tiles_pb2.py')
+client
+
 import tiles_pb2
 
 from prefect import task, Flow, Parameter
@@ -190,7 +194,7 @@ def download_data(source, model_id, run_id):
     return df
 
 @task
-def temporal_aggregation(df, time_res)
+def temporal_aggregation(df, time_res, last_task_done=True):
     # Monthly temporal aggregation (compute for both sum and mean)
     df['timestamp'] = dd.to_datetime(df['timestamp']).apply(lambda x: to_normalized_time(x, time_res), meta=(None, 'int'))
     df = df.groupby(['feature', 'timestamp', 'lat', 'lng'])['value'].agg(['sum', 'mean'])
@@ -202,7 +206,7 @@ def temporal_aggregation(df, time_res)
     return df
 
 @task
-def compute_timeseries(df, dest, time_res, model_id, run_id)
+def compute_timeseries(df, dest, time_res, model_id, run_id):
     # Timeseries aggregation
     timeseries_aggs = ['min', 'max', 'sum', 'mean']
     timeseries_lookup = {
@@ -218,9 +222,10 @@ def compute_timeseries(df, dest, time_res, model_id, run_id)
         lambda x: [ save_timeseries(x[['timestamp', col]], dest, model_id, run_id, x['feature'].values[0], time_res, col) for col in timeseries_agg_columns],
         meta=(None, 'object'))
     timeseries_df.compute()
+    return True
 
 @task
-def spatial_aggregation(df)
+def spatial_aggregation(df, timeseries_finished):
     # Spatial aggregation to the higest supported precision(subtile z) level
     df['subtile'] = df.apply(lambda x: deg2num(x.lat, x.lng, MAX_SUBTILE_PRECISION), axis=1, meta=(None, 'object'))
     df = df[['feature', 'timestamp', 'subtile', 't_sum', 't_mean']] \
@@ -236,7 +241,7 @@ def spatial_aggregation(df)
     return df
 
 @task
-def compute_stats(df, dest, time_res, model_id, run_id)
+def compute_stats(df, dest, time_res, model_id, run_id):
     #Stats aggregation
     stats_aggs = ['min', 'max']
     stats_lookup = {
@@ -255,9 +260,10 @@ def compute_stats(df, dest, time_res, model_id, run_id)
         lambda x: save_stats(x[stats_agg_columns], dest, model_id, run_id, x['feature'].values[0], time_res),
         meta=(None, 'object'))
     stats_df.compute()
+    return True
 
 @task
-def compute_tiling(df, dest, time_res, model_id, run_id)
+def compute_tiling(df, stats_finished, dest, time_res, model_id, run_id):
     # Get all acestor subtiles and explode
     # TODO: Instead of exploding, try reducing down by processing from higest zoom levels to lowest zoom levels one by one level. 
     df['subtile'] = df.apply(lambda x: filter_by_min_zoom(ancestor_tiles(x.subtile), MIN_SUBTILE_PRECISION), axis=1, meta=(None, 'object'))
@@ -272,6 +278,7 @@ def compute_tiling(df, dest, time_res, model_id, run_id)
         .repartition(npartitions = 200) \
         .apply(lambda x: save_tile(to_proto(x), dest, model_id, run_id, x.feature, time_res, x.timestamp), axis=1, meta=(None, 'object'))  # convert each row to protobuf and save
     df.compute()
+    return True
 
 
 ###########################################################################
@@ -302,19 +309,19 @@ with Flow('datacube-ingest-v0.1') as flow:
 
     # ==== Run aggregations based on monthly time resolution =====
     monthly_data = temporal_aggregation(df, 'month')
-    compute_timeseries(monthly_data, dest, 'month', model_id, run_id)
+    month_ts_done = compute_timeseries(monthly_data, dest, 'month', model_id, run_id)
 
-    monthly_spatial_data = spatial_aggregation(monthly_data)
-    compute_stats(monthly_spatial_data, dest, 'month', model_id, run_id)
-    compute_tiling(monthly_spatial_data, dest, 'month', model_id, run_id)
+    monthly_spatial_data = spatial_aggregation(monthly_data, month_ts_done)
+    month_stats_done = compute_stats(monthly_spatial_data, dest, 'month', model_id, run_id)
+    month_done = compute_tiling(monthly_spatial_data, month_stats_done, dest, 'month', model_id, run_id)
 
     # ==== Run aggregations based on annual time resolution =====
-    annual_data = temporal_aggregation(df, 'year')
-    compute_timeseries(annual_data, dest, 'year', model_id, run_id)
+    annual_data = temporal_aggregation(df, 'year', month_done)
+    year_ts_done = compute_timeseries(annual_data, dest, 'year', model_id, run_id)
 
-    annual_spatial_data = spatial_aggregation(annual_data)
-    compute_stats(annual_spatial_data, dest, 'year', model_id, run_id)
-    compute_tiling(annual_spatial_data, dest, 'year', model_id, run_id)
+    annual_spatial_data = spatial_aggregation(annual_data, year_ts_done)
+    year_stats_done = compute_stats(annual_spatial_data, dest, 'year', model_id, run_id)
+    compute_tiling(annual_spatial_data, year_stats_done, dest, 'year', model_id, run_id)
 
     ## TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful. 
     ## Then same data can be used for producing tiles and also used for doing regional aggregation and other computation in other tasks.
