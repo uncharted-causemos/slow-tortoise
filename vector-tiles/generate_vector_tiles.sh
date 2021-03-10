@@ -14,8 +14,8 @@
 COUNTRIES=("DJI" "ERI" "SOM" "KEN" "UGA" "SSD" "SDN" "ETH")
 
 # Ensure there's a folder to store shape files
-mkdir -p tmp_vector_tiles
-cd ./tmp_vector_tiles
+mkdir -p .tmp dist
+cd ./.tmp
 
 # Downloading mbutil dependency (if not exist)
 if [ ! -d "mbutil" ]
@@ -61,4 +61,7 @@ for l in ${LEVELS[@]}; do
 
   echo "Extracting $mbtilesFile to folder ..."
   ./mbutil/mb-util --image_format=pbf $mbtilesFile $outputName
+
+  # Move the folder to dist
+  mv $outputName ../dist/$outputNam
 done
