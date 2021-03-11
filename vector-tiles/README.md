@@ -18,3 +18,5 @@ brew install gdal tippecanoe
 ```
 sh generate_vector_tiles.sh
 ```
+
+Vector tile sets will be generated in `dist` folder
