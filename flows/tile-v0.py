@@ -13,6 +13,7 @@ client
 import tiles_pb2
 
 from prefect import task, Flow, Parameter
+from prefect.engine.signals import SKIP
 
 
 # This determines the number of bins(subtiles) per tile. Eg. Each tile has 4^6=4096 grid cells (subtiles) when LEVEL_DIFF is 6
@@ -193,8 +194,8 @@ def download_data(source, model_id, run_id):
     df.dtypes
     return df
 
-@task
-def temporal_aggregation(df, time_res, last_task_done=True):
+@task(skip_on_upstream_skip=False)
+def temporal_aggregation(df, time_res):
     # Monthly temporal aggregation (compute for both sum and mean)
     df['timestamp'] = dd.to_datetime(df['timestamp']).apply(lambda x: to_normalized_time(x, time_res), meta=(None, 'int'))
     df = df.groupby(['feature', 'timestamp', 'lat', 'lng'])['value'].agg(['sum', 'mean'])
@@ -222,10 +223,9 @@ def compute_timeseries(df, dest, time_res, model_id, run_id):
         lambda x: [ save_timeseries(x[['timestamp', col]], dest, model_id, run_id, x['feature'].values[0], time_res, col) for col in timeseries_agg_columns],
         meta=(None, 'object'))
     timeseries_df.compute()
-    return True
 
 @task
-def spatial_aggregation(df, timeseries_finished):
+def spatial_aggregation(df):
     # Spatial aggregation to the higest supported precision(subtile z) level
     df['subtile'] = df.apply(lambda x: deg2num(x.lat, x.lng, MAX_SUBTILE_PRECISION), axis=1, meta=(None, 'object'))
     df = df[['feature', 'timestamp', 'subtile', 't_sum', 't_mean']] \
@@ -260,10 +260,12 @@ def compute_stats(df, dest, time_res, model_id, run_id):
         lambda x: save_stats(x[stats_agg_columns], dest, model_id, run_id, x['feature'].values[0], time_res),
         meta=(None, 'object'))
     stats_df.compute()
-    return True
 
 @task
-def compute_tiling(df, stats_finished, dest, time_res, model_id, run_id):
+def compute_tiling(df, should_run, dest, time_res, model_id, run_id):
+    if should_run is False:
+        raise SKIP("Tiling was not requested")
+    
     # Get all acestor subtiles and explode
     # TODO: Instead of exploding, try reducing down by processing from higest zoom levels to lowest zoom levels one by one level. 
     df['subtile'] = df.apply(lambda x: filter_by_min_zoom(ancestor_tiles(x.subtile), MIN_SUBTILE_PRECISION), axis=1, meta=(None, 'object'))
@@ -278,7 +280,6 @@ def compute_tiling(df, stats_finished, dest, time_res, model_id, run_id):
         .repartition(npartitions = 200) \
         .apply(lambda x: save_tile(to_proto(x), dest, model_id, run_id, x.feature, time_res, x.timestamp), axis=1, meta=(None, 'object'))  # convert each row to protobuf and save
     df.compute()
-    return True
 
 
 ###########################################################################
@@ -288,6 +289,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     # Parameters
     model_id = Parameter('model_id', default='e0a14dbf-e8e6-42bd-b908-e72a956fadd5')
     run_id = Parameter('run_id', default='749916f0-be24-4e4b-9a6c-798808a5be3c')
+    compute_tiles = Parameter('compute_tiles', default=False)
 
     source = Parameter('source', default = {
         'endpoint_url': 'http://10.65.18.73:9000',
@@ -311,17 +313,17 @@ with Flow('datacube-ingest-v0.1') as flow:
     monthly_data = temporal_aggregation(df, 'month')
     month_ts_done = compute_timeseries(monthly_data, dest, 'month', model_id, run_id)
 
-    monthly_spatial_data = spatial_aggregation(monthly_data, month_ts_done)
+    monthly_spatial_data = spatial_aggregation(monthly_data, upstream_tasks=[month_ts_done])
     month_stats_done = compute_stats(monthly_spatial_data, dest, 'month', model_id, run_id)
-    month_done = compute_tiling(monthly_spatial_data, month_stats_done, dest, 'month', model_id, run_id)
+    month_done = compute_tiling(monthly_spatial_data, compute_tiles, dest, 'month', model_id, run_id, upstream_tasks=[month_stats_done])
 
     # ==== Run aggregations based on annual time resolution =====
-    annual_data = temporal_aggregation(df, 'year', month_done)
+    annual_data = temporal_aggregation(df, 'year', upstream_tasks=[month_done])
     year_ts_done = compute_timeseries(annual_data, dest, 'year', model_id, run_id)
 
-    annual_spatial_data = spatial_aggregation(annual_data, year_ts_done)
+    annual_spatial_data = spatial_aggregation(annual_data, upstream_tasks=[year_ts_done])
     year_stats_done = compute_stats(annual_spatial_data, dest, 'year', model_id, run_id)
-    compute_tiling(annual_spatial_data, year_stats_done, dest, 'year', model_id, run_id)
+    compute_tiling(annual_spatial_data, compute_tiles, dest, 'year', model_id, run_id, upstream_tasks=[year_stats_done])
 
     ## TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful. 
     ## Then same data can be used for producing tiles and also used for doing regional aggregation and other computation in other tasks.
@@ -329,3 +331,7 @@ with Flow('datacube-ingest-v0.1') as flow:
 
 
 flow.register(project_name='Tiling')
+
+# from prefect.executors import DaskExecutor
+# executor = DaskExecutor(address="tcp://10.65.18.58:8786")
+# state = flow.run(executor=executor)
