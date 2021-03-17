@@ -164,8 +164,11 @@ def to_proto(row):
     
     for i in range(len(row.subtile)):
         bin_index = project(row.subtile[i], row.tile)
-        tile.bins.stats[bin_index].sum = row.t_sum_s_sum[i]
-        tile.bins.stats[bin_index].avg = row.t_mean_s_mean[i]
+        tile.bins.stats[bin_index].sum += row.t_mean_s_sum[i]
+        tile.bins.stats[bin_index].count += row.t_mean_s_count[i]
+    # Calculate the average
+    for bin_stat in tile.bins.stats.values():
+        bin_stat.avg = bin_stat.sum / bin_stat.count
     return tile
 
 # convert given datetime object to monthly epoch timestamp
