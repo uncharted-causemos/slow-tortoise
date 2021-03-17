@@ -9,6 +9,7 @@ import boto3
 client = Client('10.65.18.58:8786')
 client.upload_file('tiles_pb2.py')
 client
+print(client)
 
 import tiles_pb2
 
@@ -159,8 +160,11 @@ def to_proto(row):
     
     for i in range(len(row.subtile)):
         bin_index = project(row.subtile[i], row.tile)
-        tile.bins.stats[bin_index].sum = row.t_sum_s_sum[i]
-        tile.bins.stats[bin_index].avg = row.t_mean_s_mean[i]
+        tile.bins.stats[bin_index].sum += row.t_mean_s_sum[i]
+        tile.bins.stats[bin_index].count += row.t_mean_s_count[i]
+    # Calculate the average
+    for bin_stat in tile.bins.stats.values():
+        bin_stat.avg = bin_stat.sum / bin_stat.count
     return tile
 
 # convert given datetime object to monthly epoch timestamp
@@ -330,8 +334,8 @@ with Flow('datacube-ingest-v0.1') as flow:
     ## In that way we can have one jupyter notbook or python module for each tasks
 
 
-flow.register(project_name='Tiling')
+#flow.register(project_name='Tiling')
 
-# from prefect.executors import DaskExecutor
-# executor = DaskExecutor(address="tcp://10.65.18.58:8786")
-# state = flow.run(executor=executor)
+from prefect.executors import DaskExecutor
+executor = DaskExecutor(address="tcp://10.65.18.58:8786")
+state = flow.run(executor=executor)
