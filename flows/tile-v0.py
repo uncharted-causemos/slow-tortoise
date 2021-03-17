@@ -165,7 +165,7 @@ def to_proto(row):
     for i in range(len(row.subtile)):
         bin_index = project(row.subtile[i], row.tile)
         tile.bins.stats[bin_index].sum += row.t_mean_s_sum[i]
-        tile.bins.stats[bin_index].count += row.t_mean_s_count[i]
+        tile.bins.stats[bin_index].count += row.s_count[i]
     # Calculate the average
     for bin_stat in tile.bins.stats.values():
         bin_stat.avg = bin_stat.sum / bin_stat.count
@@ -242,7 +242,7 @@ def subtile_aggregation(df):
 
     # Rename columns
     spatial_lookup = {('t_sum', 'sum'): 't_sum_s_sum', ('t_sum', 'count'): 't_sum_s_count',
-            ('t_mean', 'sum'): 't_mean_s_sum', ('t_mean', 'count'): 't_mean_s_count'}
+            ('t_mean', 'sum'): 't_mean_s_sum', ('t_mean', 'count'): 's_count'}
     df.columns = df.columns.to_flat_index()
     df = df.rename(columns=spatial_lookup).drop(columns='t_sum_s_count').reset_index()
     df.compute()
@@ -251,8 +251,8 @@ def subtile_aggregation(df):
 @task
 def compute_stats(df, dest, time_res, model_id, run_id):
     #Compute mean
-    df['t_sum_s_mean'] = df.apply(lambda x: x['t_sum_s_sum'] / x['t_mean_s_count'], axis=1, meta=(None, 'float64'))
-    df['t_mean_s_mean'] = df.apply(lambda x: x['t_mean_s_sum'] / x['t_mean_s_count'], axis=1, meta=(None, 'float64'))
+    df['t_sum_s_mean'] = df.apply(lambda x: x['t_sum_s_sum'] / x['s_count'], axis=1, meta=(None, 'float64'))
+    df['t_mean_s_mean'] = df.apply(lambda x: x['t_mean_s_sum'] / x['s_count'], axis=1, meta=(None, 'float64'))
 
     #Stats aggregation
     stats_aggs = ['min', 'max']
