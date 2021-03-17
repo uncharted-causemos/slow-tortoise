@@ -9,7 +9,6 @@ import boto3
 client = Client('10.65.18.58:8786')
 client.upload_file('tiles_pb2.py')
 client
-print(client)
 
 import tiles_pb2
 
