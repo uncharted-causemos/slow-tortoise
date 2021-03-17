@@ -117,7 +117,12 @@ def save_tile(tile, dest, model_id, run_id, feature, time_res, timestamp):
     return tile
 
 # save timeseries as a json file
-def save_timeseries(x, dest, model_id, run_id, feature, time_res, column):
+def save_timeseries(df, dest, model_id, run_id, time_res, timeseries_agg_columns):
+    for col in timeseries_agg_columns:
+        timeseries_to_json(df[['timestamp', col]], dest, model_id, run_id, df['feature'].values[0], time_res, col)
+
+# write timeseries to json
+def timeseries_to_json(x, dest, model_id, run_id, feature, time_res, column):
     bucket = dest['bucket']
     x.to_json(f's3://{bucket}/{model_id}/{run_id}/{time_res}/{feature}/timeseries/{column}.json', orient='records',
         storage_options={
@@ -132,7 +137,7 @@ def save_timeseries(x, dest, model_id, run_id, feature, time_res, column):
     })
     
 # save stats as a json file
-def save_stats(x, dest, model_id, run_id, feature, time_res):
+def stats_to_json(x, dest, model_id, run_id, feature, time_res):
     bucket = dest['bucket']
     x.to_json(f's3://{bucket}/{model_id}/{run_id}/{time_res}/{feature}/stats/stats.json', orient='index',
         storage_options={
@@ -220,28 +225,32 @@ def compute_timeseries(df, dest, time_res, model_id, run_id):
     timeseries_df.columns = timeseries_df.columns.to_flat_index()
     timeseries_df = timeseries_df.rename(columns=timeseries_lookup).reset_index()
     timeseries_df = timeseries_df.groupby(['feature']).apply(
-        lambda x: [ save_timeseries(x[['timestamp', col]], dest, model_id, run_id, x['feature'].values[0], time_res, col) for col in timeseries_agg_columns],
+        lambda x: save_timeseries(x, dest, model_id, run_id, time_res, timeseries_agg_columns),
         meta=(None, 'object'))
     timeseries_df.compute()
 
 @task
-def spatial_aggregation(df):
+def subtile_aggregation(df):
     # Spatial aggregation to the higest supported precision(subtile z) level
     df['subtile'] = df.apply(lambda x: deg2num(x.lat, x.lng, MAX_SUBTILE_PRECISION), axis=1, meta=(None, 'object'))
     df = df[['feature', 'timestamp', 'subtile', 't_sum', 't_mean']] \
         .groupby(['feature', 'timestamp', 'subtile']) \
-        .agg(['sum', 'mean', 'count'])
+        .agg(['sum', 'count'])
 
     # Rename columns
-    spatial_lookup = {('t_sum', 'sum'): 't_sum_s_sum', ('t_sum', 'mean'): 't_sum_s_mean', ('t_sum', 'count'): 't_sum_s_count',
-            ('t_mean', 'sum'): 't_mean_s_sum', ('t_mean', 'mean'): 't_mean_s_mean', ('t_mean', 'count'): 't_mean_s_count'}
+    spatial_lookup = {('t_sum', 'sum'): 't_sum_s_sum', ('t_sum', 'count'): 't_sum_s_count',
+            ('t_mean', 'sum'): 't_mean_s_sum', ('t_mean', 'count'): 't_mean_s_count'}
     df.columns = df.columns.to_flat_index()
-    df = df.rename(columns=spatial_lookup).reset_index()
+    df = df.rename(columns=spatial_lookup).drop(columns='t_sum_s_count').reset_index()
     df.compute()
     return df
 
 @task
 def compute_stats(df, dest, time_res, model_id, run_id):
+    #Compute mean
+    df['t_sum_s_mean'] = df.apply(lambda x: x['t_sum_s_sum'] / x['t_mean_s_count'], axis=1, meta=(None, 'float64'))
+    df['t_mean_s_mean'] = df.apply(lambda x: x['t_mean_s_sum'] / x['t_mean_s_count'], axis=1, meta=(None, 'float64'))
+
     #Stats aggregation
     stats_aggs = ['min', 'max']
     stats_lookup = {
@@ -257,7 +266,7 @@ def compute_stats(df, dest, time_res, model_id, run_id):
     stats_df.columns = stats_df.columns.to_flat_index()
     stats_df = stats_df.rename(columns=stats_lookup).reset_index()
     stats_df = stats_df.groupby(['feature']).apply(
-        lambda x: save_stats(x[stats_agg_columns], dest, model_id, run_id, x['feature'].values[0], time_res),
+        lambda x: stats_to_json(x[stats_agg_columns], dest, model_id, run_id, x['feature'].values[0], time_res),
         meta=(None, 'object'))
     stats_df.compute()
 
@@ -313,7 +322,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     monthly_data = temporal_aggregation(df, 'month')
     month_ts_done = compute_timeseries(monthly_data, dest, 'month', model_id, run_id)
 
-    monthly_spatial_data = spatial_aggregation(monthly_data, upstream_tasks=[month_ts_done])
+    monthly_spatial_data = subtile_aggregation(monthly_data, upstream_tasks=[month_ts_done])
     month_stats_done = compute_stats(monthly_spatial_data, dest, 'month', model_id, run_id)
     month_done = compute_tiling(monthly_spatial_data, compute_tiles, dest, 'month', model_id, run_id, upstream_tasks=[month_stats_done])
 
@@ -321,7 +330,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     annual_data = temporal_aggregation(df, 'year', upstream_tasks=[month_done])
     year_ts_done = compute_timeseries(annual_data, dest, 'year', model_id, run_id)
 
-    annual_spatial_data = spatial_aggregation(annual_data, upstream_tasks=[year_ts_done])
+    annual_spatial_data = subtile_aggregation(annual_data, upstream_tasks=[year_ts_done])
     year_stats_done = compute_stats(annual_spatial_data, dest, 'year', model_id, run_id)
     compute_tiling(annual_spatial_data, compute_tiles, dest, 'year', model_id, run_id, upstream_tasks=[year_stats_done])
 
