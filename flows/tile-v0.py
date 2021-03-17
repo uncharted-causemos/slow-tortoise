@@ -334,8 +334,8 @@ with Flow('datacube-ingest-v0.1') as flow:
     ## In that way we can have one jupyter notbook or python module for each tasks
 
 
-#flow.register(project_name='Tiling')
+flow.register(project_name='Tiling')
 
-from prefect.executors import DaskExecutor
-executor = DaskExecutor(address="tcp://10.65.18.58:8786")
-state = flow.run(executor=executor)
+# from prefect.executors import DaskExecutor
+# executor = DaskExecutor(address="tcp://10.65.18.58:8786")
+# state = flow.run(executor=executor)
