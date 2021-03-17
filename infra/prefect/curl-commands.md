@@ -21,6 +21,7 @@ query='mutation {
 query="${query//[$'\n']}"
 curl 'http://10.65.18.52:4200/' -H 'Content-Type: application/json' -d '{"query":"'"${query//[\"]/\\\"}"'"}'
 ```
+**NOTE:** The `flow_id` of a flow changes with each version. To create a "stable" query that continues to work between flow updates use the flow's `version_group_id` instead.
 
 **Check the state of a flow run**
 ```
