@@ -147,3 +147,66 @@ def to_normalized_time(date, time_res):
         return int(datetime.datetime(date.year, 1, 1).timestamp())
     else:
         raise ValueError('time_res must be \'month\' or \'year\'')
+
+# Get storage option
+def get_storage_option(target):
+    options = {
+        'anon': False,
+        'use_ssl': False,
+        'key': target['key'],
+        'secret': target['secret'],
+        'client_kwargs':{
+            'region_name': target['region_name'],
+            'endpoint_url': target['endpoint_url']
+        }
+    }
+    return options
+
+def join_region_columns(df, level=3, deli='|'):
+    if level == 3:
+        return df['country'] + deli + df['admin1'] + deli + df['admin2'] + deli + df['admin3']
+    elif level == 2:
+        return df['country'] + deli + df['admin1'] + deli + df['admin2']
+    elif level == 1:
+        return df['country'] + deli + df['admin1']
+    else: 
+        return df['country']
+
+def save_regional_aggregation(x, dest, model_id, run_id, time_res, region_level='admin3'):
+    feature = x.feature
+    timestamp = x.timestamp
+
+    region_agg = {}
+    # Run sum up all values for each region.
+    for i in range(len(x.region_id)):
+        region_id = x.region_id[i]
+        if region_id not in region_agg:
+            region_agg[region_id] = {'t_sum_s_sum': 0, 't_mean_s_sum': 0, 's_count': 0}
+        
+        region_agg[region_id]['t_sum_s_sum'] += x['t_sum_s_sum'][i]
+        region_agg[region_id]['t_mean_s_sum'] += x['t_mean_s_sum'][i]
+        region_agg[region_id]['s_count'] += x['s_count'][i]
+
+    # Compute mean    
+    for key in region_agg:
+        region_agg[key]['t_sum_s_mean'] = region_agg[key]['t_sum_s_sum'] / region_agg[key]['s_count']
+        region_agg[key]['t_mean_s_mean'] = region_agg[key]['t_mean_s_sum'] / region_agg[key]['s_count']
+
+    # to Json
+    result = {'t_mean_s_sum': [], 't_mean_s_mean': [], 't_sum_s_sum': [], 't_sum_s_mean': [] }
+    for key in region_agg:
+        result['t_mean_s_sum'].append({ 'id': key, 'value': region_agg[key]['t_mean_s_sum']})
+        result['t_mean_s_mean'].append({ 'id': key, 'value': region_agg[key]['t_mean_s_mean']})
+        result['t_sum_s_sum'].append({ 'id': key, 'value': region_agg[key]['t_sum_s_sum']})
+        result['t_sum_s_mean'].append({ 'id': key, 'value': region_agg[key]['t_sum_s_mean']})
+    # Save the result to s3
+    save_regional_aggregation_to_s3(result, dest, model_id, run_id, time_res, region_level, feature, timestamp)
+    return result
+
+def save_regional_aggregation_to_s3(agg_result, dest, model_id, run_id, time_res, region_level, feature, timestamp):
+    bucket = dest['bucket']
+    for key in agg_result:
+        save_df = pd.DataFrame(agg_result[key])
+        save_df.to_json(f's3://{bucket}/{model_id}/{run_id}/{time_res}/{feature}/regional/{region_level}/aggs/{timestamp}/{key}.json',
+                        orient='records',
+                        storage_options=get_storage_option(dest))

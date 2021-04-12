@@ -53,10 +53,12 @@ def download_data(source, model_id, run_id):
 
 @task(skip_on_upstream_skip=False, log_stdout=True)
 def temporal_aggregation(df, time_res):
+    columns = df.columns.tolist()
+    columns.remove('value')
     # Monthly temporal aggregation (compute for both sum and mean)
     t = dd.to_datetime(df['timestamp'], unit='s').apply(lambda x: to_normalized_time(x, time_res), meta=(None, 'int'))
     temporal_df = df.assign(timestamp=t) \
-                    .groupby(['feature', 'timestamp', 'lat', 'lng'])['value'].agg(['sum', 'mean'])
+                    .groupby(columns)['value'].agg(['sum', 'mean'])
     # Rename agg column names
     temporal_df.columns = temporal_df.columns.str.replace('sum', 't_sum').str.replace('mean', 't_mean')
     temporal_df = temporal_df.reset_index()
