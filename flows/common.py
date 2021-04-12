@@ -210,3 +210,15 @@ def save_regional_aggregation_to_s3(agg_result, dest, model_id, run_id, time_res
         save_df.to_json(f's3://{bucket}/{model_id}/{run_id}/{time_res}/{feature}/regional/{region_level}/aggs/{timestamp}/{key}.json',
                         orient='records',
                         storage_options=get_storage_option(dest))
+
+def extract_region_columns(df):
+    region_col_names = ['country', 'admin1', 'admin2', 'admin3']
+    columns = df.columns.to_list()
+    # find the intersection
+    result = list(set(region_col_names) & set(columns)) 
+    # Re order the list by admin levels
+    result.sort()
+    if 'country' in result:
+        result.remove('country')
+        result.insert(0, 'country')
+    return result

@@ -12,7 +12,8 @@ from prefect.engine.signals import SKIP
 
 from common import deg2num, parent_tile, ancestor_tiles, filter_by_min_zoom, \
     tile_coord, project, save_tile, save_timeseries, timeseries_to_json, \
-    stats_to_json, to_proto, to_normalized_time
+    stats_to_json, to_proto, to_normalized_time, get_storage_option, \
+    extract_region_columns, join_region_columns, save_regional_aggregation
 
 # This determines the number of bins(subtiles) per tile. Eg. Each tile has 4^6=4096 grid cells (subtiles) when LEVEL_DIFF is 6
 # Tile (z, x, y) will have a sutbile where its zoom level is z + LEVEL_DIFF
@@ -33,9 +34,14 @@ MAX_ZOOM = MAX_SUBTILE_PRECISION - LEVEL_DIFF
 
 @task
 def download_data(source, model_id, run_id):
-    # Read parquet files in as set of dataframes
     bucket = source['bucket']
-    df = dd.read_parquet(f's3://{bucket}/{model_id}/{run_id}/*.parquet',
+    #TODO: get path from metadata using model_id and run_id
+    path = f's3://{bucket}/{model_id}/{run_id}/*.parquet' 
+    if model_id == 'geo-test-data':
+        path = f's3://{bucket}/geo-test-data.parquet'
+
+    # Read parquet files in as set of dataframes
+    df = dd.read_parquet(path,
         storage_options={
             'anon': False,
             'use_ssl': False,
@@ -143,6 +149,39 @@ def compute_tiling(df, should_run, dest, time_res, model_id, run_id):
         .apply(lambda x: save_tile(to_proto(x), dest, model_id, run_id, x.feature, time_res, x.timestamp), axis=1, meta=(None, 'object'))  # convert each row to protobuf and save
     tiling_df.compute()
 
+@task
+def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
+    # Copy input df so that original df doesn't get mutated
+    df = input_df.copy()
+    # Ranme columns
+    df.columns = df.columns.str.replace('t_sum', 't_sum_s_sum').str.replace('t_mean', 't_mean_s_sum')
+    df['s_count'] = 1
+    df = df.reset_index()
+
+    regions_cols = extract_region_columns(df)
+    
+    # Region aggregation at the highest admin level
+    df = df[['feature', 'timestamp', 't_sum_s_sum', 't_mean_s_sum', 's_count'] + regions_cols] \
+        .groupby(['feature', 'timestamp'] + regions_cols) \
+        .agg(['sum'])
+    df.columns = df.columns.droplevel(1)
+    df = df.reset_index()
+    # persist the result in memory at this point since this df is going to be used multiple times to compute for different regional levels
+    df = df.persist()
+
+    # Compute aggregation and save for all regional levels
+    for level in range(len(regions_cols)): 
+        save_df = df.copy()
+        # Merge region columns to single region_id column. eg. ['Ethiopia', 'Afar'] -> ['Ethiopia|Afar']
+        save_df['region_id'] = join_region_columns(save_df, level)
+    
+        # groupby feature and timestamp
+        save_df = save_df[['feature', 'timestamp', 'region_id', 't_sum_s_sum', 't_mean_s_sum', 's_count']] \
+            .groupby(['feature', 'timestamp']).agg(list)
+        save_df = save_df.reset_index()
+        save_df = save_df.apply(lambda x: save_regional_aggregation(x, dest, model_id, run_id, time_res, region_level=regions_cols[level]), 
+                      axis=1, meta=(None, 'object'))
+        save_df.compute()
 
 ###########################################################################
 
@@ -153,8 +192,8 @@ with Flow('datacube-ingest-v0.1') as flow:
     print(client)
 
     # Parameters
-    model_id = Parameter('model_id', default='e0a14dbf-e8e6-42bd-b908-e72a956fadd5')
-    run_id = Parameter('run_id', default='749916f0-be24-4e4b-9a6c-798808a5be3c')
+    model_id = Parameter('model_id', default='geo-test-data')
+    run_id = Parameter('run_id', default='test-run')
     compute_tiles = Parameter('compute_tiles', default=False)
 
     source = Parameter('source', default = {
@@ -162,7 +201,7 @@ with Flow('datacube-ingest-v0.1') as flow:
         'region_name':'us-east-1',
         'key': 'foobar',
         'secret': 'foobarbaz',
-        'bucket': 'airflow-test-data'
+        'bucket': 'test'
     })
 
     dest = Parameter('dest', default = {
@@ -178,6 +217,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     # ==== Run aggregations based on monthly time resolution =====
     monthly_data = temporal_aggregation(df, 'month')
     month_ts_done = compute_timeseries(monthly_data, dest, 'month', model_id, run_id)
+    compute_regional_aggregation(monthly_data, dest, 'month', model_id, run_id)
 
     monthly_spatial_data = subtile_aggregation(monthly_data, upstream_tasks=[month_ts_done])
     month_stats_done = compute_stats(monthly_spatial_data, dest, 'month', model_id, run_id)
@@ -186,6 +226,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     # ==== Run aggregations based on annual time resolution =====
     annual_data = temporal_aggregation(df, 'year', upstream_tasks=[month_done])
     year_ts_done = compute_timeseries(annual_data, dest, 'year', model_id, run_id)
+    compute_regional_aggregation(annual_data, dest, 'year', model_id, run_id)
 
     annual_spatial_data = subtile_aggregation(annual_data, upstream_tasks=[year_ts_done])
     year_stats_done = compute_stats(annual_spatial_data, dest, 'year', model_id, run_id)
