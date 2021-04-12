@@ -57,7 +57,7 @@ def download_data(source, model_id, run_id):
     df.dtypes
     return df
 
-@task(skip_on_upstream_skip=False, log_stdout=True)
+@task(skip_on_upstream_skip=False)
 def temporal_aggregation(df, time_res):
     columns = df.columns.tolist()
     columns.remove('value')
@@ -88,7 +88,7 @@ def compute_timeseries(df, dest, time_res, model_id, run_id):
         meta=(None, 'object'))
     timeseries_df.compute()
 
-@task 
+@task
 def subtile_aggregation(df):
     # Spatial aggregation to the higest supported precision(subtile z) level
 
