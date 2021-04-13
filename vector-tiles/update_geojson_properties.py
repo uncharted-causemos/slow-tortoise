@@ -15,7 +15,7 @@ with open(file) as geojson_file:
     for level in range(1, 3): 
       name_field = 'NAME_' + str(level)
       if name_field in properties:
-        region_id = region_id + '-' + properties[name_field]
+        region_id = region_id + '|' + properties[name_field]
     properties['id'] = region_id
   
 # Write back to the same file
