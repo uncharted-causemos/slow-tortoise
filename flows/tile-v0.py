@@ -172,7 +172,7 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
     # Compute aggregation and save for all regional levels
     for level in range(len(regions_cols)): 
         save_df = df.copy()
-        # Merge region columns to single region_id column. eg. ['Ethiopia', 'Afar'] -> ['Ethiopia|Afar']
+        # Merge region columns to single region_id column. eg. ['Ethiopia', 'Afar'] -> ['Ethiopia_Afar']
         save_df['region_id'] = join_region_columns(save_df, level)
     
         # groupby feature and timestamp
@@ -236,10 +236,12 @@ with Flow('datacube-ingest-v0.1') as flow:
     ## Then same data can be used for producing tiles and also used for doing regional aggregation and other computation in other tasks.
     ## In that way we can have one jupyter notbook or python module for each tasks
 
-flow.register(project_name='Tiling')
+# flow.register(project_name='Tiling')
 
-# from prefect.executors import DaskExecutor
-# from prefect.utilities.debug import raise_on_exception
-# with raise_on_exception():
-#     executor = DaskExecutor(address="tcp://10.65.18.58:8786") # Dask Dashboard: http://10.65.18.58:8787/status
-#     state = flow.run(executor=executor)
+from prefect.executors import DaskExecutor
+from prefect.utilities.debug import raise_on_exception
+with raise_on_exception():
+    executor = DaskExecutor(address="tcp://10.65.18.58:8786") # Dask Dashboard: http://10.65.18.58:8787/status
+    state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='maxhop_sample', run_id='run_hot_dry'))
+    # state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='maxhop_sample', run_id='run_cold_wet'))
+    # state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='maxhop_sample', run_id='run_baseline'))
