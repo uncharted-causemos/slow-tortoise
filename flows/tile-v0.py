@@ -236,10 +236,10 @@ with Flow('datacube-ingest-v0.1') as flow:
     ## Then same data can be used for producing tiles and also used for doing regional aggregation and other computation in other tasks.
     ## In that way we can have one jupyter notbook or python module for each tasks
 
-# flow.register(project_name='Tiling')
+flow.register(project_name='Tiling')
 
-from prefect.executors import DaskExecutor
-from prefect.utilities.debug import raise_on_exception
-with raise_on_exception():
-    executor = DaskExecutor(address="tcp://10.65.18.58:8786") # Dask Dashboard: http://10.65.18.58:8787/status
-    state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='geo-test-data', run_id='test-run'))
+# from prefect.executors import DaskExecutor
+# from prefect.utilities.debug import raise_on_exception
+# with raise_on_exception():
+#     executor = DaskExecutor(address="tcp://10.65.18.58:8786") # Dask Dashboard: http://10.65.18.58:8787/status
+#     state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='geo-test-data', run_id='test-run'))
