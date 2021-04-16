@@ -75,10 +75,10 @@ def compute_timeseries(df, dest, time_res, model_id, run_id):
     # Timeseries aggregation
     timeseries_aggs = ['min', 'max', 'sum', 'mean']
     timeseries_lookup = {
-        ('t_sum', 'min'): 'min_t_sum', ('t_sum', 'max'): 'max_t_sum', ('t_sum', 'sum'): 's_sum_t_sum', ('t_sum', 'mean'): 's_mean_t_sum',
-        ('t_mean', 'min'): 'min_t_mean', ('t_mean', 'max'): 'max_t_mean', ('t_mean', 'sum'): 's_sum_t_mean', ('t_mean', 'mean'): 's_mean_t_mean'
+        ('t_sum', 'min'): 's_min_t_sum', ('t_sum', 'max'): 's_max_t_sum', ('t_sum', 'sum'): 's_sum_t_sum', ('t_sum', 'mean'): 's_mean_t_sum',
+        ('t_mean', 'min'): 's_min_t_mean', ('t_mean', 'max'): 's_max_t_mean', ('t_mean', 'sum'): 's_sum_t_mean', ('t_mean', 'mean'): 's_mean_t_mean'
     }
-    timeseries_agg_columns = ['min_t_sum', 'max_t_sum', 's_sum_t_sum', 's_mean_t_sum', 'min_t_mean', 'max_t_mean', 's_sum_t_mean', 's_mean_t_mean']
+    timeseries_agg_columns = ['s_min_t_sum', 's_max_t_sum', 's_sum_t_sum', 's_mean_t_sum', 's_min_t_mean', 's_max_t_mean', 's_sum_t_mean', 's_mean_t_mean']
 
     timeseries_df = df.groupby(['feature', 'timestamp']).agg({ 't_sum' : timeseries_aggs, 't_mean' : timeseries_aggs })
     timeseries_df.columns = timeseries_df.columns.to_flat_index()
