@@ -90,9 +90,9 @@ def save_timeseries(df, dest, model_id, run_id, time_res, timeseries_agg_columns
         timeseries_to_json(df[['timestamp', col]], dest, model_id, run_id, df['feature'].values[0], time_res, col)
 
 # write timeseries to json
-def timeseries_to_json(x, dest, model_id, run_id, feature, time_res, column):
+def timeseries_to_json(df, dest, model_id, run_id, feature, time_res, column):
     bucket = dest['bucket']
-    x.to_json(f's3://{bucket}/{model_id}/{run_id}/{time_res}/{feature}/timeseries/{column}.json', orient='records',
+    df.to_json(f's3://{bucket}/{model_id}/{run_id}/{time_res}/{feature}/timeseries/{column}.json', orient='records',
         storage_options={
         'anon': False,
         'use_ssl': False,
@@ -132,7 +132,7 @@ def to_proto(row):
     
     for i in range(len(row.subtile)):
         bin_index = project(row.subtile[i], row.tile)
-        tile.bins.stats[bin_index].sum += row.t_mean_s_sum[i]
+        tile.bins.stats[bin_index].sum += row.s_sum_t_mean[i]
         tile.bins.stats[bin_index].count += row.s_count[i]
     # Calculate the average
     for bin_stat in tile.bins.stats.values():
@@ -181,24 +181,24 @@ def save_regional_aggregation(x, dest, model_id, run_id, time_res, region_level=
     for i in range(len(x.region_id)):
         region_id = x.region_id[i]
         if region_id not in region_agg:
-            region_agg[region_id] = {'t_sum_s_sum': 0, 't_mean_s_sum': 0, 's_count': 0}
+            region_agg[region_id] = {'s_sum_t_sum': 0, 's_sum_t_mean': 0, 's_count': 0}
         
-        region_agg[region_id]['t_sum_s_sum'] += x['t_sum_s_sum'][i]
-        region_agg[region_id]['t_mean_s_sum'] += x['t_mean_s_sum'][i]
+        region_agg[region_id]['s_sum_t_sum'] += x['s_sum_t_sum'][i]
+        region_agg[region_id]['s_sum_t_mean'] += x['s_sum_t_mean'][i]
         region_agg[region_id]['s_count'] += x['s_count'][i]
 
     # Compute mean    
     for key in region_agg:
-        region_agg[key]['t_sum_s_mean'] = region_agg[key]['t_sum_s_sum'] / region_agg[key]['s_count']
-        region_agg[key]['t_mean_s_mean'] = region_agg[key]['t_mean_s_sum'] / region_agg[key]['s_count']
+        region_agg[key]['s_mean_t_sum'] = region_agg[key]['s_sum_t_sum'] / region_agg[key]['s_count']
+        region_agg[key]['s_mean_t_mean'] = region_agg[key]['s_sum_t_mean'] / region_agg[key]['s_count']
 
     # to Json
-    result = {'t_mean_s_sum': [], 't_mean_s_mean': [], 't_sum_s_sum': [], 't_sum_s_mean': [] }
+    result = {'s_sum_t_mean': [], 's_mean_t_mean': [], 's_sum_t_sum': [], 's_mean_t_sum': [] }
     for key in region_agg:
-        result['t_mean_s_sum'].append({ 'id': key, 'value': region_agg[key]['t_mean_s_sum']})
-        result['t_mean_s_mean'].append({ 'id': key, 'value': region_agg[key]['t_mean_s_mean']})
-        result['t_sum_s_sum'].append({ 'id': key, 'value': region_agg[key]['t_sum_s_sum']})
-        result['t_sum_s_mean'].append({ 'id': key, 'value': region_agg[key]['t_sum_s_mean']})
+        result['s_sum_t_mean'].append({ 'id': key, 'value': region_agg[key]['s_sum_t_mean']})
+        result['s_mean_t_mean'].append({ 'id': key, 'value': region_agg[key]['s_mean_t_mean']})
+        result['s_sum_t_sum'].append({ 'id': key, 'value': region_agg[key]['s_sum_t_sum']})
+        result['s_mean_t_sum'].append({ 'id': key, 'value': region_agg[key]['s_mean_t_sum']})
     # Save the result to s3
     save_regional_aggregation_to_s3(result, dest, model_id, run_id, time_res, region_level, feature, timestamp)
     return result

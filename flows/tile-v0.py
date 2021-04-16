@@ -75,10 +75,10 @@ def compute_timeseries(df, dest, time_res, model_id, run_id):
     # Timeseries aggregation
     timeseries_aggs = ['min', 'max', 'sum', 'mean']
     timeseries_lookup = {
-        ('t_sum', 'min'): 'min_sum', ('t_sum', 'max'): 'max_sum', ('t_sum', 'sum'): 'sum_bin_sum', ('t_sum', 'mean'): 'avg_bin_sum',
-        ('t_mean', 'min'): 'min_avg', ('t_mean', 'max'): 'max_avg', ('t_mean', 'sum'): 'sum_bin_avg', ('t_mean', 'mean'): 'avg_bin_avg'
+        ('t_sum', 'min'): 'min_t_sum', ('t_sum', 'max'): 'max_t_sum', ('t_sum', 'sum'): 's_sum_t_sum', ('t_sum', 'mean'): 's_mean_t_sum',
+        ('t_mean', 'min'): 'min_t_mean', ('t_mean', 'max'): 'max_t_mean', ('t_mean', 'sum'): 's_sum_t_mean', ('t_mean', 'mean'): 's_mean_t_mean'
     }
-    timeseries_agg_columns = ['min_sum', 'max_sum', 'sum_bin_sum', 'avg_bin_sum', 'min_avg', 'max_avg', 'sum_bin_avg', 'avg_bin_avg']
+    timeseries_agg_columns = ['min_t_sum', 'max_t_sum', 's_sum_t_sum', 's_mean_t_sum', 'min_t_mean', 'max_t_mean', 's_sum_t_mean', 's_mean_t_mean']
 
     timeseries_df = df.groupby(['feature', 'timestamp']).agg({ 't_sum' : timeseries_aggs, 't_mean' : timeseries_aggs })
     timeseries_df.columns = timeseries_df.columns.to_flat_index()
@@ -99,28 +99,28 @@ def subtile_aggregation(df):
         .agg(['sum', 'count'])
 
     # Rename columns
-    spatial_lookup = {('t_sum', 'sum'): 't_sum_s_sum', ('t_sum', 'count'): 't_sum_s_count',
-            ('t_mean', 'sum'): 't_mean_s_sum', ('t_mean', 'count'): 's_count'}
+    spatial_lookup = {('t_sum', 'sum'): 's_sum_t_sum', ('t_sum', 'count'): 's_count_t_sum',
+            ('t_mean', 'sum'): 's_sum_t_mean', ('t_mean', 'count'): 's_count'}
     subtile_df.columns = subtile_df.columns.to_flat_index()
-    subtile_df = subtile_df.rename(columns=spatial_lookup).drop(columns='t_sum_s_count').reset_index()
+    subtile_df = subtile_df.rename(columns=spatial_lookup).drop(columns='s_count_t_sum').reset_index()
     return subtile_df
 
 @task
 def compute_stats(df, dest, time_res, model_id, run_id):
     #Compute mean and get new dataframe with mean columns added
-    stats_df = df.assign(t_sum_s_mean=df['t_sum_s_sum'] / df['s_count'], t_mean_s_mean=df['t_mean_s_sum'] / df['s_count'])
+    stats_df = df.assign(s_mean_t_sum=df['s_sum_t_sum'] / df['s_count'], s_mean_t_mean=df['s_sum_t_mean'] / df['s_count'])
     #Stats aggregation
     stats_aggs = ['min', 'max']
     stats_lookup = {
-        ('t_sum_s_sum', 'min'): 'min_t_sum_s_sum', ('t_sum_s_sum', 'max'): 'max_t_sum_s_sum',
-        ('t_sum_s_mean', 'min'): 'min_t_sum_s_mean', ('t_sum_s_mean', 'max'): 'max_t_sum_s_mean',
-        ('t_mean_s_sum', 'min'): 'min_t_mean_s_sum', ('t_mean_s_sum', 'max'): 'max_t_mean_s_sum',
-        ('t_mean_s_mean', 'min'): 'min_t_mean_s_mean', ('t_mean_s_mean', 'max'): 'max_t_mean_s_mean'
+        ('s_sum_t_sum', 'min'): 'min_s_sum_t_sum', ('s_sum_t_sum', 'max'): 'max_s_sum_t_sum',
+        ('s_mean_t_sum', 'min'): 'min_s_mean_t_sum', ('s_mean_t_sum', 'max'): 'max_s_mean_t_sum',
+        ('s_sum_t_mean', 'min'): 'min_s_sum_t_mean', ('s_sum_t_mean', 'max'): 'max_s_sum_t_mean',
+        ('s_mean_t_mean', 'min'): 'min_s_mean_t_mean', ('s_mean_t_mean', 'max'): 'max_s_mean_t_mean'
     }
-    stats_agg_columns = ['min_t_sum_s_sum', 'max_t_sum_s_sum', 'min_t_sum_s_mean', 'max_t_sum_s_mean',
-                        'min_t_mean_s_sum', 'max_t_mean_s_sum', 'min_t_mean_s_mean', 'max_t_mean_s_mean']
+    stats_agg_columns = ['min_s_sum_t_sum', 'max_s_sum_t_sum', 'min_s_mean_t_sum', 'max_s_mean_t_sum',
+                        'min_s_sum_t_mean', 'max_s_sum_t_mean', 'min_s_mean_t_mean', 'max_s_mean_t_mean']
 
-    stats_df = stats_df.groupby(['feature']).agg({ 't_sum_s_sum' : stats_aggs, 't_sum_s_mean' : stats_aggs, 't_mean_s_sum' : stats_aggs, 't_mean_s_mean' : stats_aggs })
+    stats_df = stats_df.groupby(['feature']).agg({ 's_sum_t_sum' : stats_aggs, 's_mean_t_sum' : stats_aggs, 's_sum_t_mean' : stats_aggs, 's_mean_t_mean' : stats_aggs })
     stats_df.columns = stats_df.columns.to_flat_index()
     stats_df = stats_df.rename(columns=stats_lookup).reset_index()
     stats_df = stats_df.groupby(['feature']).apply(
@@ -154,14 +154,14 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
     # Copy input df so that original df doesn't get mutated
     df = input_df.copy()
     # Ranme columns
-    df.columns = df.columns.str.replace('t_sum', 't_sum_s_sum').str.replace('t_mean', 't_mean_s_sum')
+    df.columns = df.columns.str.replace('t_sum', 's_sum_t_sum').str.replace('t_mean', 's_sum_t_mean')
     df['s_count'] = 1
     df = df.reset_index()
 
     regions_cols = extract_region_columns(df)
     
     # Region aggregation at the highest admin level
-    df = df[['feature', 'timestamp', 't_sum_s_sum', 't_mean_s_sum', 's_count'] + regions_cols] \
+    df = df[['feature', 'timestamp', 's_sum_t_sum', 's_sum_t_mean', 's_count'] + regions_cols] \
         .groupby(['feature', 'timestamp'] + regions_cols) \
         .agg(['sum'])
     df.columns = df.columns.droplevel(1)
@@ -176,7 +176,7 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
         save_df['region_id'] = join_region_columns(save_df, level)
     
         # groupby feature and timestamp
-        save_df = save_df[['feature', 'timestamp', 'region_id', 't_sum_s_sum', 't_mean_s_sum', 's_count']] \
+        save_df = save_df[['feature', 'timestamp', 'region_id', 's_sum_t_sum', 's_sum_t_mean', 's_count']] \
             .groupby(['feature', 'timestamp']).agg(list)
         save_df = save_df.reset_index()
         save_df = save_df.apply(lambda x: save_regional_aggregation(x, dest, model_id, run_id, time_res, region_level=regions_cols[level]), 
@@ -242,6 +242,8 @@ from prefect.executors import DaskExecutor
 from prefect.utilities.debug import raise_on_exception
 with raise_on_exception():
     executor = DaskExecutor(address="tcp://10.65.18.58:8786") # Dask Dashboard: http://10.65.18.58:8787/status
-    state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='maxhop_sample', run_id='run_hot_dry'))
+    state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='geo-test-data', run_id='test-run'))
+    # state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='maxhop_sample', run_id='run_hot_dry'))
+    # state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='dssat_sample', run_id='test_run'))
     # state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='maxhop_sample', run_id='run_cold_wet'))
     # state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='maxhop_sample', run_id='run_baseline'))
