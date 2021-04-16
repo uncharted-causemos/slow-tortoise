@@ -12,7 +12,7 @@ from prefect.engine.signals import SKIP
 
 from common import deg2num, parent_tile, ancestor_tiles, filter_by_min_zoom, \
     tile_coord, project, save_tile, save_timeseries, timeseries_to_json, \
-    stats_to_json, to_proto, to_normalized_time, get_storage_option, \
+    stats_to_json, to_proto, to_normalized_time, get_storage_options, \
     extract_region_columns, join_region_columns, save_regional_aggregation
 
 # This determines the number of bins(subtiles) per tile. Eg. Each tile has 4^6=4096 grid cells (subtiles) when LEVEL_DIFF is 6
@@ -243,7 +243,3 @@ from prefect.utilities.debug import raise_on_exception
 with raise_on_exception():
     executor = DaskExecutor(address="tcp://10.65.18.58:8786") # Dask Dashboard: http://10.65.18.58:8787/status
     state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='geo-test-data', run_id='test-run'))
-    # state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='maxhop_sample', run_id='run_hot_dry'))
-    # state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='dssat_sample', run_id='test_run'))
-    # state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='maxhop_sample', run_id='run_cold_wet'))
-    # state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='maxhop_sample', run_id='run_baseline'))

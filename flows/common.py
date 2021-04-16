@@ -92,32 +92,18 @@ def save_timeseries(df, dest, model_id, run_id, time_res, timeseries_agg_columns
 # write timeseries to json
 def timeseries_to_json(df, dest, model_id, run_id, feature, time_res, column):
     bucket = dest['bucket']
-    df.to_json(f's3://{bucket}/{model_id}/{run_id}/{time_res}/{feature}/timeseries/{column}.json', orient='records',
-        storage_options={
-        'anon': False,
-        'use_ssl': False,
-        'key': dest['key'],
-        'secret': dest['secret'],
-        'client_kwargs':{
-            'region_name': dest['region_name'],
-            'endpoint_url': dest['endpoint_url']
-        }
-    })
+    col_map = {}
+    col_map[column] = 'value'
+    df.rename(columns=col_map, inplace=False).to_json(f's3://{bucket}/{model_id}/{run_id}/{time_res}/{feature}/timeseries/{column}.json',
+        orient='records',
+        storage_options=get_storage_options(dest))
     
 # save stats as a json file
 def stats_to_json(x, dest, model_id, run_id, feature, time_res):
     bucket = dest['bucket']
-    x.to_json(f's3://{bucket}/{model_id}/{run_id}/{time_res}/{feature}/stats/stats.json', orient='index',
-        storage_options={
-        'anon': False,
-        'use_ssl': False,
-        'key': dest['key'],
-        'secret': dest['secret'],
-        'client_kwargs':{
-            'region_name': dest['region_name'],
-            'endpoint_url': dest['endpoint_url']
-        }
-    })
+    x.to_json(f's3://{bucket}/{model_id}/{run_id}/{time_res}/{feature}/stats/stats.json',
+        orient='index',
+        storage_options=get_storage_options(dest))
     
 # transform given row to tile protobuf
 def to_proto(row):
@@ -149,7 +135,7 @@ def to_normalized_time(date, time_res):
         raise ValueError('time_res must be \'month\' or \'year\'')
 
 # Get storage option
-def get_storage_option(target):
+def get_storage_options(target):
     options = {
         'anon': False,
         'use_ssl': False,
@@ -209,7 +195,7 @@ def save_regional_aggregation_to_s3(agg_result, dest, model_id, run_id, time_res
         save_df = pd.DataFrame(agg_result[key])
         save_df.to_json(f's3://{bucket}/{model_id}/{run_id}/{time_res}/{feature}/regional/{region_level}/aggs/{timestamp}/{key}.json',
                         orient='records',
-                        storage_options=get_storage_option(dest))
+                        storage_options=get_storage_options(dest))
 
 def extract_region_columns(df):
     region_col_names = ['country', 'admin1', 'admin2', 'admin3']
