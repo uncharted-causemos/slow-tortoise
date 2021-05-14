@@ -20,7 +20,7 @@
                 \- {agg-func}.json: [{“id”: {region-id}, “value”: 3}, ...]
 ```
 ### Region ID format
-  - admin3 id: `{country}_{admin1}_{admin2}_{admin3}`
-  - admin2 id: `{country}_{admin1}_{admin2}`
-  - admin1 id: `{country}_{admin1}`
+  - admin3 id: `{country}__{admin1}__{admin2}__{admin3}`
+  - admin2 id: `{country}__{admin1}__{admin2}`
+  - admin1 id: `{country}__{admin1}`
   - country id: `{country}`
