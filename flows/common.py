@@ -148,7 +148,7 @@ def get_storage_options(target):
     }
     return options
 
-def join_region_columns(df, level=3, deli='_'):
+def join_region_columns(df, level=3, deli='__'):
     if level == 3:
         return df['country'] + deli + df['admin1'] + deli + df['admin2'] + deli + df['admin3']
     elif level == 2:

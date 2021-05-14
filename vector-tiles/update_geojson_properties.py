@@ -12,15 +12,18 @@ with open(file) as geojson_file:
   for f in data['features']:
     properties = f['properties']
     region_id = properties['NAME_0']
-    if '_' in region_id:
-      raise ValueError(f'Region name, {region_id} contains "_".\n Can not create an unique region id using region names joined with "_"')
-    for level in range(1, 3): 
+    delimeter = '__'
+    if delimeter in region_id:
+      msg = f'Region name, {region_id} contains {delimeter}.\nCan not create an unique region id using region names joined with "_"'
+      raise ValueError(msg)
+    for level in range(1, 4): 
       name_field = 'NAME_' + str(level)
       if name_field in properties:
         region_name = properties[name_field] 
-        if '_' in region_name:
-          raise ValueError(f'Region name, {region_name} contains "_".\n Can not create an unique region id using region names joined with "_"')
-        region_id = region_id + '_' + region_name
+        if delimeter in region_name:
+          msg = f'Region name, {region_name} contains {delimeter}.\nCan not create an unique region id using region names joined with "_"' 
+          raise ValueError(msg)
+        region_id = region_id + delimeter + region_name
     properties['id'] = region_id
   
 # Write back to the same file
