@@ -16,6 +16,8 @@ services:
 
   worker:
     image: docker.uncharted.software/worldmodeler/wm-dask-server:latest
+    deploy:
+      replicas: 3
     logging:
       driver: "json-file"
       options:
