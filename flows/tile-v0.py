@@ -1,4 +1,5 @@
 from dask.distributed import Client
+from dask import delayed
 import dask.dataframe as dd
 import dask.bytes as db
 import prefect
@@ -33,25 +34,28 @@ MIN_SUBTILE_PRECISION = LEVEL_DIFF # since (0,0,0) main tile wil have (LEVEL_DIF
 MAX_ZOOM = MAX_SUBTILE_PRECISION - LEVEL_DIFF
 
 @task
-def download_data(source, model_id, run_id):
-    bucket = source['bucket']
-    #TODO: get path from metadata using model_id and run_id
-    path = f's3://{bucket}/{model_id}/{run_id}/*.parquet' 
-    if model_id == 'geo-test-data':
-        path = f's3://{bucket}/geo-test-data.parquet'
-
-    # Read parquet files in as set of dataframes
-    df = dd.read_parquet(path,
-        storage_options={
-            'anon': False,
-            'use_ssl': False,
-            'key': source['key'],
-            'secret': source['secret'],
-            'client_kwargs':{
-                'region_name': source['region_name'],
-                'endpoint_url': source['endpoint_url']
-            }
-        }).repartition(npartitions = 100)
+def download_data(source, model_id, run_id, data_paths):
+    # data_paths is comma seprated strings of urls
+    paths = data_paths.split(',')
+    df = None
+    # if source is from s3 bucket
+    if 's3://' in data_paths:
+        df = dd.read_parquet(paths,
+            storage_options={
+                'anon': False,
+                'use_ssl': False,
+                'key': source['key'],
+                'secret': source['secret'],
+                'client_kwargs':{
+                    'region_name': source['region_name'],
+                    'endpoint_url': source['endpoint_url']
+                }
+            }).repartition(npartitions = 12)
+    else:
+        # Note: dask read_parquet doesn't work for gzip files. So here is the work around using pandas read_parquet
+        dfs = [delayed(pd.read_parquet)(path) for path in paths]
+        # dfs
+        df = dd.from_delayed(dfs).repartition(npartitions = 12)
     # Ensure types
     df = df.astype({'value': 'float64'})
     df.dtypes
@@ -198,14 +202,14 @@ with Flow('datacube-ingest-v0.1') as flow:
     # Parameters
     model_id = Parameter('model_id', default='geo-test-data')
     run_id = Parameter('run_id', default='test-run')
+    data_paths = Parameter('data_paths', default='s3://test/geo-test-data.parquet')
     compute_tiles = Parameter('compute_tiles', default=False)
 
     source = Parameter('source', default = {
         'endpoint_url': 'http://10.65.18.73:9000',
         'region_name':'us-east-1',
         'key': 'foobar',
-        'secret': 'foobarbaz',
-        'bucket': 'test'
+        'secret': 'foobarbaz'
     })
 
     dest = Parameter('dest', default = {
@@ -216,7 +220,7 @@ with Flow('datacube-ingest-v0.1') as flow:
         'bucket': 'mass-upload-test'
     })
 
-    df = download_data(source, model_id, run_id)
+    df = download_data(source, model_id, run_id, data_paths)
 
     # ==== Run aggregations based on monthly time resolution =====
     monthly_data = temporal_aggregation(df, 'month')
@@ -246,4 +250,5 @@ flow.register(project_name='Tiling')
 # from prefect.utilities.debug import raise_on_exception
 # with raise_on_exception():
 #     executor = DaskExecutor(address="tcp://10.65.18.58:8786") # Dask Dashboard: http://10.65.18.58:8787/status
-#     state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='geo-test-data', run_id='test-run'))
+#     state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='geo-test-data', run_id='test-run', data_paths='s3://test/geo-test-data.parquet'))
+#     # state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='maxhop-v0.2', run_id='4675d89d-904c-466f-a588-354c047ecf72', data_paths='https://jataware-world-modelers.s3.amazonaws.com/dmc_results/4675d89d-904c-466f-a588-354c047ecf72/4675d89d-904c-466f-a588-354c047ecf72_maxhop-v0.2.parquet.gzip'))
