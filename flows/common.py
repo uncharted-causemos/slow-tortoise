@@ -3,6 +3,7 @@ import pandas as pd
 import dask.dataframe as dd
 import math
 import boto3
+import json
 
 import tiles_pb2
 
@@ -97,6 +98,12 @@ def timeseries_to_json(df, dest, model_id, run_id, feature, time_res, column):
     df.rename(columns=col_map, inplace=False).to_json(f's3://{bucket}/{model_id}/{run_id}/{time_res}/{feature}/timeseries/{column}.json',
         orient='records',
         storage_options=get_storage_options(dest))
+
+# write timeseries to json
+def output_values_to_json_array(df):
+    col_map = { 'feature': 'name' }
+    json_str = df.rename(columns=col_map, inplace=False).to_json(orient='records')
+    return json.loads(json_str)
     
 # save stats as a json file
 def stats_to_json(x, dest, model_id, run_id, feature, time_res):
@@ -129,6 +136,8 @@ def to_normalized_time(date, time_res):
         return int(datetime.datetime(date.year, date.month, 1).timestamp())
     elif time_res == 'year':
         return int(datetime.datetime(date.year, 1, 1).timestamp())
+    elif time_res == 'all':
+        return 0 # just put everything under one timestamp
     else:
         raise ValueError('time_res must be \'month\' or \'year\'')
 

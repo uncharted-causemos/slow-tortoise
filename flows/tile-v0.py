@@ -133,7 +133,7 @@ def compute_stats(df, dest, time_res, model_id, run_id):
 @task
 def compute_tiling(df, should_run, dest, time_res, model_id, run_id):
     if should_run is False:
-        raise SKIP("Tiling was not requested")
+        raise SKIP('Tiling was not requested')
     
     # Get all acestor subtiles and explode
     # TODO: Instead of exploding, try reducing down by processing from higest zoom levels to lowest zoom levels one by one level. 
@@ -189,6 +189,29 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
                       axis=1, meta=(None, 'object'))
         save_df.compute()
 
+@task
+def compute_output_summary(df):
+    # Timeseries aggregation
+    timeseries_aggs = ['mean']
+    timeseries_lookup = { ('t_mean', 'mean'): 's_mean_t_mean' }
+    timeseries_agg_column = 's_mean_t_mean'
+
+    timeseries_df = df.groupby(['feature', 'timestamp']).agg({ 't_mean' : timeseries_aggs })
+    timeseries_df.columns = timeseries_df.columns.to_flat_index()
+    timeseries_df = timeseries_df.rename(columns=timeseries_lookup).reset_index()
+
+    summary = output_values_to_json_array(timeseries_df[['feature', timeseries_agg_column]])
+    return summary
+
+@task
+def update_metadata(run_id, summary_values, elastic_url):
+    r = requests.post(elastic_url + '/data-model-run/_update/' + run_id, data = {
+        'doc' : {
+            'status': 'READY',
+            'output_agg_values': summary_values
+        }
+    })
+
 ###########################################################################
 
 with Flow('datacube-ingest-v0.1') as flow:
@@ -202,6 +225,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     run_id = Parameter('run_id', default='test-run')
     data_paths = Parameter('data_paths', default=['s3://test/geo-test-data.parquet'])
     compute_tiles = Parameter('compute_tiles', default=False)
+    elastic_url = Parameter('elastic_url', default='http://10.64.18.99:9200')
 
     source = Parameter('source', default = {
         'endpoint_url': 'http://10.65.18.73:9000',
@@ -236,7 +260,13 @@ with Flow('datacube-ingest-v0.1') as flow:
 
     annual_spatial_data = subtile_aggregation(annual_data, upstream_tasks=[year_ts_done])
     year_stats_done = compute_stats(annual_spatial_data, dest, 'year', model_id, run_id)
-    compute_tiling(annual_spatial_data, compute_tiles, dest, 'year', model_id, run_id, upstream_tasks=[year_stats_done])
+    year_done = compute_tiling(annual_spatial_data, compute_tiles, dest, 'year', model_id, run_id, upstream_tasks=[year_stats_done])
+
+    # ==== Generate a single aggregate value per feature =====
+    summary_data = temporal_aggregation(df, 'all', upstream_tasks=[year_done])
+    summary_values = compute_output_summary(summary_data)
+
+    update_metadata(run_id, summary_values, elastic_url)
 
     ## TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful. 
     ## Then same data can be used for producing tiles and also used for doing regional aggregation and other computation in other tasks.
@@ -247,6 +277,6 @@ flow.register(project_name='Tiling')
 # from prefect.executors import DaskExecutor
 # from prefect.utilities.debug import raise_on_exception
 # with raise_on_exception():
-#     executor = DaskExecutor(address="tcp://10.65.18.58:8786") # Dask Dashboard: http://10.65.18.58:8787/status
+#     executor = DaskExecutor(address='tcp://10.65.18.58:8786') # Dask Dashboard: http://10.65.18.58:8787/status
 #     # state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='geo-test-data', run_id='test-run', data_paths=['s3://test/geo-test-data.parquet']))
 #     state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='maxhop-v0.2', run_id='4675d89d-904c-466f-a588-354c047ecf72', data_paths=['https://jataware-world-modelers.s3.amazonaws.com/dmc_results/4675d89d-904c-466f-a588-354c047ecf72/4675d89d-904c-466f-a588-354c047ecf72_maxhop-v0.2.parquet.gzip']))
