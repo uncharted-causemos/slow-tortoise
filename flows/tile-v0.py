@@ -35,12 +35,10 @@ MAX_ZOOM = MAX_SUBTILE_PRECISION - LEVEL_DIFF
 
 @task
 def download_data(source, model_id, run_id, data_paths):
-    # data_paths is comma seprated strings of urls
-    paths = data_paths.split(',')
     df = None
     # if source is from s3 bucket
-    if 's3://' in data_paths:
-        df = dd.read_parquet(paths,
+    if 's3://' in data_paths[0]:
+        df = dd.read_parquet(data_paths,
             storage_options={
                 'anon': False,
                 'use_ssl': False,
@@ -53,7 +51,7 @@ def download_data(source, model_id, run_id, data_paths):
             }).repartition(npartitions = 12)
     else:
         # Note: dask read_parquet doesn't work for gzip files. So here is the work around using pandas read_parquet
-        dfs = [delayed(pd.read_parquet)(path) for path in paths]
+        dfs = [delayed(pd.read_parquet)(path) for path in data_paths]
         # dfs
         df = dd.from_delayed(dfs).repartition(npartitions = 12)
     # Ensure types
@@ -202,7 +200,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     # Parameters
     model_id = Parameter('model_id', default='geo-test-data')
     run_id = Parameter('run_id', default='test-run')
-    data_paths = Parameter('data_paths', default='s3://test/geo-test-data.parquet')
+    data_paths = Parameter('data_paths', default=['s3://test/geo-test-data.parquet'])
     compute_tiles = Parameter('compute_tiles', default=False)
 
     source = Parameter('source', default = {
@@ -244,11 +242,11 @@ with Flow('datacube-ingest-v0.1') as flow:
     ## Then same data can be used for producing tiles and also used for doing regional aggregation and other computation in other tasks.
     ## In that way we can have one jupyter notbook or python module for each tasks
 
-flow.register(project_name='Tiling')
+# flow.register(project_name='Tiling')
 
-# from prefect.executors import DaskExecutor
-# from prefect.utilities.debug import raise_on_exception
-# with raise_on_exception():
-#     executor = DaskExecutor(address="tcp://10.65.18.58:8786") # Dask Dashboard: http://10.65.18.58:8787/status
-#     state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='geo-test-data', run_id='test-run', data_paths='s3://test/geo-test-data.parquet'))
-#     # state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='maxhop-v0.2', run_id='4675d89d-904c-466f-a588-354c047ecf72', data_paths='https://jataware-world-modelers.s3.amazonaws.com/dmc_results/4675d89d-904c-466f-a588-354c047ecf72/4675d89d-904c-466f-a588-354c047ecf72_maxhop-v0.2.parquet.gzip'))
+from prefect.executors import DaskExecutor
+from prefect.utilities.debug import raise_on_exception
+with raise_on_exception():
+    executor = DaskExecutor(address="tcp://10.65.18.58:8786") # Dask Dashboard: http://10.65.18.58:8787/status
+    # state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='geo-test-data', run_id='test-run', data_paths=['s3://test/geo-test-data.parquet']))
+    state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='maxhop-v0.2', run_id='4675d89d-904c-466f-a588-354c047ecf72', data_paths=['https://jataware-world-modelers.s3.amazonaws.com/dmc_results/4675d89d-904c-466f-a588-354c047ecf72/4675d89d-904c-466f-a588-354c047ecf72_maxhop-v0.2.parquet.gzip']))
