@@ -19,7 +19,7 @@ DESCRIPTOR = _descriptor.FileDescriptor(
   syntax='proto3',
   serialized_options=b'Z+gitlab.uncharted.software/WM/wm-proto/tiles',
   create_key=_descriptor._internal_create_key,
-  serialized_pb=b'\n\x0btiles.proto\x12\x05tiles\"4\n\tTileStats\x12\r\n\x05\x63ount\x18\x01 \x01(\x04\x12\x0b\n\x03sum\x18\x02 \x01(\x01\x12\x0b\n\x03\x61vg\x18\x03 \x01(\x01\"\x88\x01\n\x08TileBins\x12)\n\x05stats\x18\x01 \x03(\x0b\x32\x1a.tiles.TileBins.StatsEntry\x12\x11\n\ttotalBins\x18\x02 \x01(\r\x1a>\n\nStatsEntry\x12\x0b\n\x03key\x18\x01 \x01(\r\x12\x1f\n\x05value\x18\x02 \x01(\x0b\x32\x10.tiles.TileStats:\x02\x38\x01\"7\n\tTileCoord\x12\t\n\x01x\x18\x01 \x01(\r\x12\t\n\x01y\x18\x02 \x01(\r\x12\t\n\x01z\x18\x03 \x01(\r\x12\t\n\x01t\x18\x04 \x01(\x03\"F\n\x04Tile\x12\x1f\n\x05\x63oord\x18\x01 \x01(\x0b\x32\x10.tiles.TileCoord\x12\x1d\n\x04\x62ins\x18\x02 \x01(\x0b\x32\x0f.tiles.TileBinsB-Z+gitlab.uncharted.software/WM/wm-proto/tilesb\x06proto3'
+  serialized_pb=b'\n\x0btiles.proto\x12\x05tiles\"o\n\tTileStats\x12\r\n\x05\x63ount\x18\x01 \x01(\x04\x12\x0b\n\x03sum\x18\x02 \x01(\x01\x12\x0b\n\x03\x61vg\x18\x03 \x01(\x01\x12\x13\n\x0bs_sum_t_sum\x18\x04 \x01(\x01\x12\x14\n\x0cs_sum_t_mean\x18\x05 \x01(\x01\x12\x0e\n\x06weight\x18\x06 \x01(\x01\"\x88\x01\n\x08TileBins\x12)\n\x05stats\x18\x01 \x03(\x0b\x32\x1a.tiles.TileBins.StatsEntry\x12\x11\n\ttotalBins\x18\x02 \x01(\r\x1a>\n\nStatsEntry\x12\x0b\n\x03key\x18\x01 \x01(\r\x12\x1f\n\x05value\x18\x02 \x01(\x0b\x32\x10.tiles.TileStats:\x02\x38\x01\"7\n\tTileCoord\x12\t\n\x01x\x18\x01 \x01(\r\x12\t\n\x01y\x18\x02 \x01(\r\x12\t\n\x01z\x18\x03 \x01(\r\x12\t\n\x01t\x18\x04 \x01(\x03\"F\n\x04Tile\x12\x1f\n\x05\x63oord\x18\x01 \x01(\x0b\x32\x10.tiles.TileCoord\x12\x1d\n\x04\x62ins\x18\x02 \x01(\x0b\x32\x0f.tiles.TileBinsB-Z+gitlab.uncharted.software/WM/wm-proto/tilesb\x06proto3'
 )
 
 
@@ -54,6 +54,27 @@ _TILESTATS = _descriptor.Descriptor(
       message_type=None, enum_type=None, containing_type=None,
       is_extension=False, extension_scope=None,
       serialized_options=None, file=DESCRIPTOR,  create_key=_descriptor._internal_create_key),
+    _descriptor.FieldDescriptor(
+      name='s_sum_t_sum', full_name='tiles.TileStats.s_sum_t_sum', index=3,
+      number=4, type=1, cpp_type=5, label=1,
+      has_default_value=False, default_value=float(0),
+      message_type=None, enum_type=None, containing_type=None,
+      is_extension=False, extension_scope=None,
+      serialized_options=None, file=DESCRIPTOR,  create_key=_descriptor._internal_create_key),
+    _descriptor.FieldDescriptor(
+      name='s_sum_t_mean', full_name='tiles.TileStats.s_sum_t_mean', index=4,
+      number=5, type=1, cpp_type=5, label=1,
+      has_default_value=False, default_value=float(0),
+      message_type=None, enum_type=None, containing_type=None,
+      is_extension=False, extension_scope=None,
+      serialized_options=None, file=DESCRIPTOR,  create_key=_descriptor._internal_create_key),
+    _descriptor.FieldDescriptor(
+      name='weight', full_name='tiles.TileStats.weight', index=5,
+      number=6, type=1, cpp_type=5, label=1,
+      has_default_value=False, default_value=float(0),
+      message_type=None, enum_type=None, containing_type=None,
+      is_extension=False, extension_scope=None,
+      serialized_options=None, file=DESCRIPTOR,  create_key=_descriptor._internal_create_key),
   ],
   extensions=[
   ],
@@ -67,7 +88,7 @@ _TILESTATS = _descriptor.Descriptor(
   oneofs=[
   ],
   serialized_start=22,
-  serialized_end=74,
+  serialized_end=133,
 )
 
 
@@ -105,8 +126,8 @@ _TILEBINS_STATSENTRY = _descriptor.Descriptor(
   extension_ranges=[],
   oneofs=[
   ],
-  serialized_start=151,
-  serialized_end=213,
+  serialized_start=210,
+  serialized_end=272,
 )
 
 _TILEBINS = _descriptor.Descriptor(
@@ -143,8 +164,8 @@ _TILEBINS = _descriptor.Descriptor(
   extension_ranges=[],
   oneofs=[
   ],
-  serialized_start=77,
-  serialized_end=213,
+  serialized_start=136,
+  serialized_end=272,
 )
 
 
@@ -196,8 +217,8 @@ _TILECOORD = _descriptor.Descriptor(
   extension_ranges=[],
   oneofs=[
   ],
-  serialized_start=215,
-  serialized_end=270,
+  serialized_start=274,
+  serialized_end=329,
 )
 
 
@@ -235,8 +256,8 @@ _TILE = _descriptor.Descriptor(
   extension_ranges=[],
   oneofs=[
   ],
-  serialized_start=272,
-  serialized_end=342,
+  serialized_start=331,
+  serialized_end=401,
 )
 
 _TILEBINS_STATSENTRY.fields_by_name['value'].message_type = _TILESTATS

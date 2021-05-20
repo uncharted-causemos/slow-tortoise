@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# Exit the script as soon as one of the commands failed
+set -e
+
 # Downlaod and process GADM shape files and generate vector tile sets
 
 # Currently Supported Countries
@@ -51,7 +54,7 @@ done
 #update geojson feature properties
 geojsonFiles=($(ls *.geojson))
 for f in ${geojsonFiles[@]}; do
-  echo "Updating feature properties for $f" ...
+  echo "Updating feature properties for $f ..."
   python ../update_geojson_properties.py $f
 done
 
