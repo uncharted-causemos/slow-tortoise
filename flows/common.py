@@ -85,12 +85,12 @@ def save_tile(tile, dest, model_id, run_id, feature, time_res, timestamp):
     s3.put_object(Body=tile.SerializeToString(), Bucket=dest['bucket'], Key=path)
     return tile
 
-# save timeseries as a json file
+# save timeseries as json
 def save_timeseries(df, dest, model_id, run_id, time_res, timeseries_agg_columns):
     for col in timeseries_agg_columns:
         timeseries_to_json(df[['timestamp', col]], dest, model_id, run_id, df['feature'].values[0], time_res, col)
 
-# write timeseries to json
+# write timeseries to json in S3
 def timeseries_to_json(df, dest, model_id, run_id, feature, time_res, column):
     bucket = dest['bucket']
     col_map = {}
@@ -99,7 +99,14 @@ def timeseries_to_json(df, dest, model_id, run_id, feature, time_res, column):
         orient='records',
         storage_options=get_storage_options(dest))
 
-# write timeseries to json
+# write raw data to json file in S3
+def raw_data_to_json(df, dest, model_id, run_id, time_res, feature):
+    bucket = dest['bucket']
+    df.to_json(f's3://{bucket}/{model_id}/{run_id}/{time_res}/{feature}/raw/raw.json',
+        orient='records',
+        storage_options=get_storage_options(dest))
+
+# save output values to json array
 def output_values_to_json_array(df):
     col_map = { 'feature': 'name' }
     json_str = df.rename(columns=col_map, inplace=False).to_json(orient='records')

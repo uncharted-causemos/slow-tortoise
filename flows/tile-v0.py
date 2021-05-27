@@ -1,5 +1,6 @@
 from dask.distributed import Client
 from dask import delayed
+from typing import Tuple
 import dask.dataframe as dd
 import dask.bytes as db
 import prefect
@@ -7,6 +8,7 @@ import datetime
 import pandas as pd
 import math
 import boto3
+import requests
 
 from prefect import task, Flow, Parameter
 from prefect.engine.signals import SKIP
@@ -14,7 +16,8 @@ from prefect.engine.signals import SKIP
 from common import deg2num, parent_tile, ancestor_tiles, filter_by_min_zoom, \
     tile_coord, project, save_tile, save_timeseries, timeseries_to_json, \
     stats_to_json, to_proto, to_normalized_time, get_storage_options, \
-    extract_region_columns, join_region_columns, save_regional_aggregation
+    extract_region_columns, join_region_columns, save_regional_aggregation, \
+    output_values_to_json_array, raw_data_to_json
 
 # This determines the number of bins(subtiles) per tile. Eg. Each tile has 4^6=4096 grid cells (subtiles) when LEVEL_DIFF is 6
 # Tile (z, x, y) will have a sutbile where its zoom level is z + LEVEL_DIFF
@@ -33,8 +36,11 @@ MIN_SUBTILE_PRECISION = LEVEL_DIFF # since (0,0,0) main tile wil have (LEVEL_DIF
 # Maximum zoom level for a main tile
 MAX_ZOOM = MAX_SUBTILE_PRECISION - LEVEL_DIFF
 
+ELASTIC_MODEL_RUN_INDEX = 'data-model-run'
+ELASTIC_INDICATOR_INDEX = 'data-datacube'
+
 @task
-def download_data(source, model_id, run_id, data_paths):
+def download_data(source, data_paths):
     df = None
     # if source is from s3 bucket
     if 's3://' in data_paths[0]:
@@ -59,8 +65,32 @@ def download_data(source, model_id, run_id, data_paths):
     df.dtypes
     return df
 
+@task
+def configure_pipeline(dest, indicator_bucket, model_bucket, model_id, run_id, is_indicator) -> Tuple[dict, str, str, bool, bool, bool, bool]:
+    if is_indicator:
+        dest['bucket'] = indicator_bucket
+        elastic_index = ELASTIC_INDICATOR_INDEX
+        elastic_id = model_id
+        compute_raw = True
+        compute_monthly = False
+        compute_annual = False
+        compute_summary = False
+    else:
+        dest['bucket'] = model_bucket
+        elastic_index = ELASTIC_MODEL_RUN_INDEX
+        elastic_id = run_id
+        compute_raw = False
+        compute_monthly = True
+        compute_annual = True
+        compute_summary = True
+
+    return (dest, elastic_index, elastic_id, compute_raw, compute_monthly, compute_annual, compute_summary)
+
 @task(skip_on_upstream_skip=False)
-def temporal_aggregation(df, time_res):
+def temporal_aggregation(df, time_res, should_run):
+    if should_run is False:
+        raise SKIP(f'Aggregating for resolution {time_res} was not requested')
+
     columns = df.columns.tolist()
     columns.remove('value')
     # Monthly temporal aggregation (compute for both sum and mean)
@@ -190,6 +220,18 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
         save_df.compute()
 
 @task
+def save_raw_data(df, dest, time_res, model_id, run_id, should_run):
+    if should_run is False:
+        raise SKIP('Saving raw data was not requested')
+
+    output_columns = ['timestamp', 'country', 'admin1', 'admin2', 'admin3', 'value']
+
+    raw_df = df.groupby(['feature']).apply(
+        lambda x: raw_data_to_json(x[output_columns], dest, model_id, run_id, time_res, x['feature'].values[0]),
+        meta=(None, 'object'))
+    raw_df.compute()
+
+@task
 def compute_output_summary(df):
     # Timeseries aggregation
     timeseries_aggs = ['mean']
@@ -203,14 +245,19 @@ def compute_output_summary(df):
     summary = output_values_to_json_array(timeseries_df[['feature', timeseries_agg_column]])
     return summary
 
-@task
-def update_metadata(run_id, summary_values, elastic_url):
-    r = requests.post(elastic_url + '/data-model-run/_update/' + run_id, data = {
+@task(skip_on_upstream_skip=False, log_stdout=True)
+def update_metadata(elastic_id, summary_values, elastic_url, elastic_index):
+    data = {
         'doc' : {
-            'status': 'READY',
-            'output_agg_values': summary_values
+            'status': 'READY'
         }
-    })
+    }
+    if summary_values is not None:
+        data['doc']['output_agg_values'] = summary_values
+    
+    r = requests.post(f'{elastic_url}/{elastic_index}/_update/{elastic_id}', json = data)
+    print(r.text)
+    r.raise_for_status()
 
 ###########################################################################
 
@@ -225,7 +272,10 @@ with Flow('datacube-ingest-v0.1') as flow:
     run_id = Parameter('run_id', default='test-run')
     data_paths = Parameter('data_paths', default=['s3://test/geo-test-data.parquet'])
     compute_tiles = Parameter('compute_tiles', default=False)
-    elastic_url = Parameter('elastic_url', default='http://10.64.18.99:9200')
+    is_indicator = Parameter('is_indicator', default=False)
+    elastic_url = Parameter('elastic_url', default='http://10.65.18.69:9200')
+    indicator_bucket = Parameter('indicator_bucket', default='indicators')
+    model_bucket = Parameter('model_bucket', default='mass-upload-test')
 
     source = Parameter('source', default = {
         'endpoint_url': 'http://10.65.18.73:9000',
@@ -235,17 +285,30 @@ with Flow('datacube-ingest-v0.1') as flow:
     })
 
     dest = Parameter('dest', default = {
-        'endpoint_url': 'http://10.65.18.73:9000',
+        'endpoint_url': 'http://10.65.18.9:9000',
         'region_name': 'us-east-1',
         'key': 'foobar',
-        'secret': 'foobarbaz',
-        'bucket': 'mass-upload-test'
+        'secret': 'foobarbaz'
     })
 
-    df = download_data(source, model_id, run_id, data_paths)
+    df = download_data(source, data_paths)
+
+    # ==== Set parameters that determine which tasks should run based on the type of data we're ingesting ====
+    (
+        dest,
+        elastic_index,
+        elastic_id,
+        compute_raw,
+        compute_monthly,
+        compute_annual,
+        compute_summary,
+    ) = configure_pipeline(dest, indicator_bucket, model_bucket, model_id, run_id, is_indicator)
+
+    # ==== Save raw data =====
+    save_raw_data(df, dest, 'raw', model_id, 'indicator', compute_raw)
 
     # ==== Run aggregations based on monthly time resolution =====
-    monthly_data = temporal_aggregation(df, 'month')
+    monthly_data = temporal_aggregation(df, 'month', compute_monthly)
     month_ts_done = compute_timeseries(monthly_data, dest, 'month', model_id, run_id)
     compute_regional_aggregation(monthly_data, dest, 'month', model_id, run_id)
 
@@ -254,7 +317,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     month_done = compute_tiling(monthly_spatial_data, compute_tiles, dest, 'month', model_id, run_id, upstream_tasks=[month_stats_done])
 
     # ==== Run aggregations based on annual time resolution =====
-    annual_data = temporal_aggregation(df, 'year', upstream_tasks=[month_done])
+    annual_data = temporal_aggregation(df, 'year', compute_annual, upstream_tasks=[month_done])
     year_ts_done = compute_timeseries(annual_data, dest, 'year', model_id, run_id)
     compute_regional_aggregation(annual_data, dest, 'year', model_id, run_id)
 
@@ -263,20 +326,22 @@ with Flow('datacube-ingest-v0.1') as flow:
     year_done = compute_tiling(annual_spatial_data, compute_tiles, dest, 'year', model_id, run_id, upstream_tasks=[year_stats_done])
 
     # ==== Generate a single aggregate value per feature =====
-    summary_data = temporal_aggregation(df, 'all', upstream_tasks=[year_done])
+    summary_data = temporal_aggregation(df, 'all', compute_summary, upstream_tasks=[year_done])
     summary_values = compute_output_summary(summary_data)
 
-    update_metadata(run_id, summary_values, elastic_url)
+    # ==== Update document in ES setting the status to READY =====
+    update_metadata(elastic_id, summary_values, elastic_url, elastic_index)
 
     ## TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful. 
     ## Then same data can be used for producing tiles and also used for doing regional aggregation and other computation in other tasks.
     ## In that way we can have one jupyter notbook or python module for each tasks
 
-flow.register(project_name='Tiling')
+flow.register(project_name='Tiling', labels=['dask'])
 
 # from prefect.executors import DaskExecutor
 # from prefect.utilities.debug import raise_on_exception
 # with raise_on_exception():
 #     executor = DaskExecutor(address='tcp://10.65.18.58:8786') # Dask Dashboard: http://10.65.18.58:8787/status
+#     state = flow.run(executor=executor)
 #     # state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='geo-test-data', run_id='test-run', data_paths=['s3://test/geo-test-data.parquet']))
-#     state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='maxhop-v0.2', run_id='4675d89d-904c-466f-a588-354c047ecf72', data_paths=['https://jataware-world-modelers.s3.amazonaws.com/dmc_results/4675d89d-904c-466f-a588-354c047ecf72/4675d89d-904c-466f-a588-354c047ecf72_maxhop-v0.2.parquet.gzip']))
+#     # state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='maxhop-v0.2', run_id='4675d89d-904c-466f-a588-354c047ecf72', data_paths=['https://jataware-world-modelers.s3.amazonaws.com/dmc_results/4675d89d-904c-466f-a588-354c047ecf72/4675d89d-904c-466f-a588-354c047ecf72_maxhop-v0.2.parquet.gzip']))
