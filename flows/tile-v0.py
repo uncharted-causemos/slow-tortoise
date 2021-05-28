@@ -40,7 +40,7 @@ ELASTIC_MODEL_RUN_INDEX = 'data-model-run'
 ELASTIC_INDICATOR_INDEX = 'data-datacube'
 
 @task
-def download_data(source, data_paths):
+def download_data(source, data_paths, is_indicator):
     df = None
     # if source is from s3 bucket
     if 's3://' in data_paths[0]:
@@ -60,21 +60,27 @@ def download_data(source, data_paths):
         dfs = [delayed(pd.read_parquet)(path) for path in data_paths]
         # dfs
         df = dd.from_delayed(dfs).repartition(npartitions = 12)
+    
+    # These columns are empty for indicators and they seem to break the pipeline
+    if is_indicator:
+        df = df.drop(columns=['lat', 'lng'])
+    
     # Ensure types
     df = df.astype({'value': 'float64'})
     df.dtypes
     return df
 
 @task
-def configure_pipeline(dest, indicator_bucket, model_bucket, model_id, run_id, is_indicator) -> Tuple[dict, str, str, bool, bool, bool, bool]:
+def configure_pipeline(dest, indicator_bucket, model_bucket, model_id, run_id, compute_tiles, is_indicator) -> Tuple[dict, str, str, bool, bool, bool, bool, bool]:
     if is_indicator:
         dest['bucket'] = indicator_bucket
         elastic_index = ELASTIC_INDICATOR_INDEX
         elastic_id = model_id
         compute_raw = True
-        compute_monthly = False
-        compute_annual = False
+        compute_monthly = True
+        compute_annual = True
         compute_summary = False
+        compute_tiles = False
     else:
         dest['bucket'] = model_bucket
         elastic_index = ELASTIC_MODEL_RUN_INDEX
@@ -84,7 +90,7 @@ def configure_pipeline(dest, indicator_bucket, model_bucket, model_id, run_id, i
         compute_annual = True
         compute_summary = True
 
-    return (dest, elastic_index, elastic_id, compute_raw, compute_monthly, compute_annual, compute_summary)
+    return (dest, elastic_index, elastic_id, compute_raw, compute_monthly, compute_annual, compute_summary, compute_tiles)
 
 @task(skip_on_upstream_skip=False)
 def temporal_aggregation(df, time_res, should_run):
@@ -121,7 +127,10 @@ def compute_timeseries(df, dest, time_res, model_id, run_id):
     timeseries_df.compute()
 
 @task
-def subtile_aggregation(df):
+def subtile_aggregation(df, should_run):
+    if should_run is False:
+        raise SKIP('Tiling was not requested')
+    
     # Spatial aggregation to the higest supported precision(subtile z) level
 
     stile = df.apply(lambda x: deg2num(x.lat, x.lng, MAX_SUBTILE_PRECISION), axis=1, meta=(None, 'object'))
@@ -161,10 +170,7 @@ def compute_stats(df, dest, time_res, model_id, run_id):
     stats_df.compute()
 
 @task
-def compute_tiling(df, should_run, dest, time_res, model_id, run_id):
-    if should_run is False:
-        raise SKIP('Tiling was not requested')
-    
+def compute_tiling(df, dest, time_res, model_id, run_id):
     # Get all acestor subtiles and explode
     # TODO: Instead of exploding, try reducing down by processing from higest zoom levels to lowest zoom levels one by one level. 
     stile = df.apply(lambda x: filter_by_min_zoom(ancestor_tiles(x.subtile), MIN_SUBTILE_PRECISION), axis=1, meta=(None, 'object'))
@@ -268,14 +274,14 @@ with Flow('datacube-ingest-v0.1') as flow:
     print(client)
 
     # Parameters
-    model_id = Parameter('model_id', default='geo-test-data')
-    run_id = Parameter('run_id', default='test-run')
-    data_paths = Parameter('data_paths', default=['s3://test/geo-test-data.parquet'])
+    model_id = Parameter('model_id', default='ACLED')
+    run_id = Parameter('run_id', default='indicator')
+    data_paths = Parameter('data_paths', default=['s3://test/acled/acled-test.bin'])
     compute_tiles = Parameter('compute_tiles', default=False)
     is_indicator = Parameter('is_indicator', default=False)
     elastic_url = Parameter('elastic_url', default='http://10.65.18.69:9200')
     indicator_bucket = Parameter('indicator_bucket', default='indicators')
-    model_bucket = Parameter('model_bucket', default='mass-upload-test')
+    model_bucket = Parameter('model_bucket', default='models')
 
     source = Parameter('source', default = {
         'endpoint_url': 'http://10.65.18.73:9000',
@@ -291,7 +297,7 @@ with Flow('datacube-ingest-v0.1') as flow:
         'secret': 'foobarbaz'
     })
 
-    df = download_data(source, data_paths)
+    df = download_data(source, data_paths, is_indicator)
 
     # ==== Set parameters that determine which tasks should run based on the type of data we're ingesting ====
     (
@@ -302,7 +308,8 @@ with Flow('datacube-ingest-v0.1') as flow:
         compute_monthly,
         compute_annual,
         compute_summary,
-    ) = configure_pipeline(dest, indicator_bucket, model_bucket, model_id, run_id, is_indicator)
+        compute_tiles,
+    ) = configure_pipeline(dest, indicator_bucket, model_bucket, model_id, run_id, compute_tiles, is_indicator)
 
     # ==== Save raw data =====
     save_raw_data(df, dest, 'raw', model_id, 'indicator', compute_raw)
@@ -312,18 +319,18 @@ with Flow('datacube-ingest-v0.1') as flow:
     month_ts_done = compute_timeseries(monthly_data, dest, 'month', model_id, run_id)
     compute_regional_aggregation(monthly_data, dest, 'month', model_id, run_id)
 
-    monthly_spatial_data = subtile_aggregation(monthly_data, upstream_tasks=[month_ts_done])
+    monthly_spatial_data = subtile_aggregation(monthly_data, compute_tiles, upstream_tasks=[month_ts_done])
     month_stats_done = compute_stats(monthly_spatial_data, dest, 'month', model_id, run_id)
-    month_done = compute_tiling(monthly_spatial_data, compute_tiles, dest, 'month', model_id, run_id, upstream_tasks=[month_stats_done])
+    month_done = compute_tiling(monthly_spatial_data, dest, 'month', model_id, run_id, upstream_tasks=[month_stats_done])
 
     # ==== Run aggregations based on annual time resolution =====
     annual_data = temporal_aggregation(df, 'year', compute_annual, upstream_tasks=[month_done])
     year_ts_done = compute_timeseries(annual_data, dest, 'year', model_id, run_id)
     compute_regional_aggregation(annual_data, dest, 'year', model_id, run_id)
 
-    annual_spatial_data = subtile_aggregation(annual_data, upstream_tasks=[year_ts_done])
+    annual_spatial_data = subtile_aggregation(annual_data, compute_tiles, upstream_tasks=[year_ts_done])
     year_stats_done = compute_stats(annual_spatial_data, dest, 'year', model_id, run_id)
-    year_done = compute_tiling(annual_spatial_data, compute_tiles, dest, 'year', model_id, run_id, upstream_tasks=[year_stats_done])
+    year_done = compute_tiling(annual_spatial_data, dest, 'year', model_id, run_id, upstream_tasks=[year_stats_done])
 
     # ==== Generate a single aggregate value per feature =====
     summary_data = temporal_aggregation(df, 'all', compute_summary, upstream_tasks=[year_done])
