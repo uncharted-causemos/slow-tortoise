@@ -1,2 +1,6 @@
 #!/bin/bash
-prefect agent docker start --api http://172.20.0.6:4200 --network prefect-server --show-flow-logs --env WM_DASK_SCHEDULER=scheduler:8786
+APOLLO_ADDR=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' tmp_apollo_1 )
+
+if [ -z ${APOLLO_ADDR+x} ]; then echo "ERROR: Can't find prefect API address: start server before launching agent"; exit 1; fi
+
+prefect agent docker start --api http://$APOLLO_ADDR:4200 --network prefect-server --show-flow-logs --env WM_DASK_SCHEDULER=scheduler:8786
