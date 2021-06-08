@@ -28,6 +28,7 @@ services:
         max-file: "2"
     hostname: dask-worker
     networks:
+      - prefect-server
       - dask
     command: ["dask-worker", "tcp://scheduler:8786"]
 
