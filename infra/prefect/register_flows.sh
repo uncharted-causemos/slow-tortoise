@@ -7,8 +7,8 @@ export PREFECT__SERVER__HOST=http://10.65.18.52
 # registration process - not necessary if testing locally
 export WM_PUSH_IMAGE=true
 
-PROJECT="project"
+PROJECT="Tiling"
 
 # add calls to register flows here
-prefect register --project="$PROJECT" --path ../../flows/tiles-v0.py
+prefect register --project="$PROJECT" --label wm-prefect-server.openstack.uncharted.software --path ../../flows/tile-v0.py
 
