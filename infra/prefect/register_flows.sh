@@ -1,4 +1,14 @@
 #!/bin/bash
+
+# agent reads this env var to find the prefect server
 export PREFECT__SERVER__HOST=http://10.65.18.52
-prefect register --project="project" --path ../../flows/flow_test.py
+
+# set this to true if images should be pushed to the docker registry as part of the
+# registration process - not necessary if testing locally
+export WM_PUSH_IMAGE=true
+
+PROJECT="project"
+
+# add calls to register flows here
+prefect register --project="$PROJECT" --path ../../flows/tiles-v0.py
 

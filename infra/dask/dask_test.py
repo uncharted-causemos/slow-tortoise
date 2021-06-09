@@ -4,7 +4,7 @@ import random
 import dask
 import os
 
-DASK_SCHEDULER = os.getenv("WM_DASK_SCHEDULER")
+DASK_SCHEDULER = os.getenv("WM_DASK_SCHEDULER", "10.65.18.83:8786")
 
 client = Client(DASK_SCHEDULER)
 client.get_versions(check=True)
@@ -25,6 +25,7 @@ def add(x, y):
     time.sleep(random.random())
     return x + y
 
+
 if __name__ == "__main__":
     inc = dask.delayed(inc)
     dec = dask.delayed(dec)
@@ -35,5 +36,3 @@ if __name__ == "__main__":
     z = add(x, y)
     result = z.compute()
     print(result)
-
-
