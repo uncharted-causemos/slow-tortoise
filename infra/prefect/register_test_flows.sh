@@ -9,6 +9,6 @@ export WM_PUSH_IMAGE=true
 
 PROJECT="project"
 
-prefect register --project="$PROJECT" --label wm-prefect-server.openstack.uncharted.software --path ../../flows/flow_test.py
-prefect register --project="$PROJECT" --label wm-prefect-server.openstack.uncharted.software --path ../../flows/dask_flow_test.py
+prefect register --project="$PROJECT" --label wm-prefect-server.openstack.uncharted.software --label docker --path ../../flows/flow_test.py
+prefect register --project="$PROJECT" --label wm-prefect-server.openstack.uncharted.software --label docker --path ../../flows/dask_flow_test.py
 
