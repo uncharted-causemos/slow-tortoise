@@ -7,3 +7,4 @@ dask-worker-space
 mydask.png
 __pycache__
 infra/docker/src
+wm_data_pipeline.egg-info

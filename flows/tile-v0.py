@@ -1,33 +1,58 @@
-from dask.distributed import Client
 from dask import delayed
 from typing import Tuple
 import dask.dataframe as dd
 import dask.bytes as db
-import prefect
-import datetime
 import pandas as pd
-import math
-import boto3
 import requests
+import os
 
 from prefect import task, Flow, Parameter
 from prefect.engine.signals import SKIP
+from prefect.storage import Docker
+from prefect.executors import DaskExecutor
 
-from common import deg2num, parent_tile, ancestor_tiles, filter_by_min_zoom, \
-    tile_coord, project, save_tile, save_timeseries, timeseries_to_json, \
-    stats_to_json, to_proto, to_normalized_time, get_storage_options, \
+from flows.common import deg2num, ancestor_tiles, filter_by_min_zoom, \
+    tile_coord, save_tile, save_timeseries, \
+    stats_to_json, to_proto, to_normalized_time, \
     extract_region_columns, join_region_columns, save_regional_aggregation, \
     output_values_to_json_array, raw_data_to_json
+
+
+# address of the dask scheduler to connect to - set this to empty to spawn a local
+# dask cluster
+DASK_SCHEDULER = os.getenv("WM_DASK_SCHEDULER", "10.65.18.53:8786")
+
+# run the flow locally without the prefect agent and server
+LOCAL_RUN = os.getenv("WM_LOCAL", "False").lower() in ("true", "1", "t")
+
+# indicate whether or not this flow should be pushed to the docker registry as part of its
+# registration process
+PUSH_IMAGE = os.getenv("WM_PUSH_IMAGE", "False").lower() in ("true", "1", "t")
+
+# elastic search output URL
+ELASTIC_URL = os.getenv("WM_ELASTIC_URL", "http://10.65.18.69:9200")
+
+# S3 data source URL
+S3_SOURCE_URL = os.getenv("WM_S3_SOURCE_URL", "http://10.65.18.73:9000")
+
+# S3 data destination URL
+S3_DEST_URL = os.getenv("WM_S3_DEST_URL", "http://10.65.18.9:9000")
+
+# default s3 indicator write bucket
+S3_DEFAULT_INDICATOR_BUCKET = os.getenv("WM_S3_DEFAULT_INDICATOR_BUCKET", 'indicators')
+
+# default model s3 write bucket
+S3_DEFAULT_MODEL_BUCKET = os.getenv("WM_S3_DEFAULT_INDICATOR_BUCKET", 'models')
 
 # This determines the number of bins(subtiles) per tile. Eg. Each tile has 4^6=4096 grid cells (subtiles) when LEVEL_DIFF is 6
 # Tile (z, x, y) will have a sutbile where its zoom level is z + LEVEL_DIFF
 # eg. Tile (9, 0, 0) will have (15, 0, 0) as a subtile with LEVEL_DIFF = 6
 LEVEL_DIFF = 6
 
-# Note: We need to figure out the spatial resolution of a run output in advance. For some model, 15 precision is way too high. 
+# Note: We need to figure out the spatial resolution of a run output in advance. For some model, 15 precision is way too high.
 # For example, lpjml model covers the entire world in very coarse resolution and with 15 precision, it takes 1 hour to process and upload
-# the tiles resulting 397395 tile files. (uploading takes most of the time ) 
-# where it takes only a minitue with 10 precision. And having high precision tiles doesn't make 
+# the tiles resulting 397395 tile files. (uploading takes most of the time )
+# where it takes only a minitue with 10 precision. And having high precision tiles doesn't make
 # significant difference visually since underlying data itself is very coarse.
 MAX_SUBTILE_PRECISION = 14
 
@@ -68,11 +93,11 @@ def download_data(source, data_paths, is_indicator):
         # Note: dask read_parquet doesn't work for gzip files. So here is the work around using pandas read_parquet
         dfs = [delayed(pd.read_parquet)(path) for path in numeric_files]
         df = dd.from_delayed(dfs).repartition(npartitions = 12)
-    
+
     # These columns are empty for indicators and they seem to break the pipeline
     if is_indicator:
         df = df.drop(columns=['lat', 'lng'])
-    
+
     # Ensure types
     df = df.astype({'value': 'float64'})
     df.dtypes
@@ -114,7 +139,7 @@ def temporal_aggregation(df, time_res, should_run):
     # Rename agg column names
     temporal_df.columns = temporal_df.columns.str.replace('sum', 't_sum').str.replace('mean', 't_mean')
     temporal_df = temporal_df.reset_index()
-    return temporal_df 
+    return temporal_df
 
 @task
 def compute_timeseries(df, dest, time_res, model_id, run_id):
@@ -138,7 +163,7 @@ def compute_timeseries(df, dest, time_res, model_id, run_id):
 def subtile_aggregation(df, should_run):
     if should_run is False:
         raise SKIP('Tiling was not requested')
-    
+
     # Spatial aggregation to the higest supported precision(subtile z) level
 
     stile = df.apply(lambda x: deg2num(x.lat, x.lng, MAX_SUBTILE_PRECISION), axis=1, meta=(None, 'object'))
@@ -180,7 +205,7 @@ def compute_stats(df, dest, time_res, model_id, run_id):
 @task
 def compute_tiling(df, dest, time_res, model_id, run_id):
     # Get all acestor subtiles and explode
-    # TODO: Instead of exploding, try reducing down by processing from higest zoom levels to lowest zoom levels one by one level. 
+    # TODO: Instead of exploding, try reducing down by processing from higest zoom levels to lowest zoom levels one by one level.
     stile = df.apply(lambda x: filter_by_min_zoom(ancestor_tiles(x.subtile), MIN_SUBTILE_PRECISION), axis=1, meta=(None, 'object'))
     tiling_df = df.assign(subtile=stile)
     tiling_df = tiling_df.explode('subtile').repartition(npartitions = 100)
@@ -205,7 +230,7 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
     df = df.reset_index()
 
     regions_cols = extract_region_columns(df)
-    
+
     # Region aggregation at the highest admin level
     df = df[['feature', 'timestamp', 's_sum_t_sum', 's_sum_t_mean', 's_count'] + regions_cols] \
         .groupby(['feature', 'timestamp'] + regions_cols) \
@@ -216,20 +241,20 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
     df = df.persist()
 
     # Compute aggregation and save for all regional levels
-    for level in range(len(regions_cols)): 
+    for level in range(len(regions_cols)):
         save_df = df.copy()
         # Merge region columns to single region_id column. eg. ['Ethiopia', 'Afar'] -> ['Ethiopia_Afar']
         save_df['region_id'] = join_region_columns(save_df, level)
-    
+
         # groupby feature and timestamp
         save_df = save_df[['feature', 'timestamp', 'region_id', 's_sum_t_sum', 's_sum_t_mean', 's_count']] \
             .groupby(['feature', 'timestamp']).agg(list)
         save_df = save_df.reset_index()
-        # At this point data is already reduced to reasonably small size due to prior admin aggregation. 
+        # At this point data is already reduced to reasonably small size due to prior admin aggregation.
         # Just perform repartition to make sure save io operation runs in parallel since each writing operation is expensive and blocks
         # Set npartitions to same as # of available workers/threads. Increasing partition number beyond the number of the workers doesn't seem to give more performance benefits.
         save_df = save_df.repartition(npartitions = 12)
-        save_df = save_df.apply(lambda x: save_regional_aggregation(x, dest, model_id, run_id, time_res, region_level=regions_cols[level]), 
+        save_df = save_df.apply(lambda x: save_regional_aggregation(x, dest, model_id, run_id, time_res, region_level=regions_cols[level]),
                       axis=1, meta=(None, 'object'))
         save_df.compute()
 
@@ -268,18 +293,36 @@ def update_metadata(elastic_id, summary_values, elastic_url, elastic_index):
     }
     if summary_values is not None:
         data['doc']['output_agg_values'] = summary_values
-    
+
     r = requests.post(f'{elastic_url}/{elastic_index}/_update/{elastic_id}', json = data)
     print(r.text)
     r.raise_for_status()
 
 ###########################################################################
 
-with Flow('datacube-ingest-v0.1') as flow:
-    client = Client('10.65.18.58:8786')
-    client.upload_file('tiles_pb2.py')
-    client.upload_file('common.py')
-    print(client)
+with Flow('datacube-ingest-docker-test') as flow:
+    # setup the flow executor - if a scheduler address is applied it will attempt to connect
+    # to the cluster, if none is supplied it will rely on dask spinning up a temporary local
+    # cluster
+    flow.executor = DaskExecutor() if DASK_SCHEDULER == "" else DaskExecutor(DASK_SCHEDULER)
+
+    # setup the flow storage - will build a docker image containing the flow from the base image
+    # provided
+    registry_url = "docker.uncharted.software"
+    image_name = "worldmodeler/wm-data-pipeline/datacube-ingest-docker-test"
+    if not PUSH_IMAGE:
+        image_name = f"{registry_url}/{image_name}"
+        registry_url = ""
+
+    flow.storage = Docker(
+        registry_url= registry_url,
+        base_image="docker.uncharted.software/worldmodeler/wm-data-pipeline:latest",
+        image_name=image_name,
+        local_image=True,
+        stored_as_script=True,
+        path="/wm_data_pipeline/flows/tile-v0.py",
+        ignore_healthchecks=True,
+    )
 
     # Parameters
     model_id = Parameter('model_id', default='geo-test-data')
@@ -287,19 +330,19 @@ with Flow('datacube-ingest-v0.1') as flow:
     data_paths = Parameter('data_paths', default=['s3://test/geo-test-data.parquet'])
     compute_tiles = Parameter('compute_tiles', default=False)
     is_indicator = Parameter('is_indicator', default=False)
-    elastic_url = Parameter('elastic_url', default='http://10.65.18.69:9200')
-    indicator_bucket = Parameter('indicator_bucket', default='indicators')
-    model_bucket = Parameter('model_bucket', default='models')
+    # elastic_url = Parameter('elastic_url', default=ELASTIC_URL)
+    indicator_bucket = Parameter('indicator_bucket', default=S3_DEFAULT_INDICATOR_BUCKET)
+    model_bucket = Parameter('model_bucket', default=S3_DEFAULT_MODEL_BUCKET)
 
     source = Parameter('source', default = {
-        'endpoint_url': 'http://10.65.18.73:9000',
+        'endpoint_url': S3_SOURCE_URL,
         'region_name':'us-east-1',
         'key': 'foobar',
         'secret': 'foobarbaz'
     })
 
     dest = Parameter('dest', default = {
-        'endpoint_url': 'http://10.65.18.9:9000',
+        'endpoint_url': S3_DEST_URL,
         'region_name': 'us-east-1',
         'key': 'foobar',
         'secret': 'foobarbaz'
@@ -345,18 +388,23 @@ with Flow('datacube-ingest-v0.1') as flow:
     summary_values = compute_output_summary(summary_data)
 
     # ==== Update document in ES setting the status to READY =====
-    update_metadata(elastic_id, summary_values, elastic_url, elastic_index)
+    # if ELASTIC_URL != "":
+    #     update_metadata(elastic_id, summary_values, elastic_url, elastic_index)
 
-    ## TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful. 
+    ## TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful.
     ## Then same data can be used for producing tiles and also used for doing regional aggregation and other computation in other tasks.
     ## In that way we can have one jupyter notbook or python module for each tasks
 
-flow.register(project_name='Tiling', labels=['dask'])
-
-# from prefect.executors import DaskExecutor
-# from prefect.utilities.debug import raise_on_exception
-# with raise_on_exception():
-#     executor = DaskExecutor(address='tcp://10.65.18.58:8786') # Dask Dashboard: http://10.65.18.58:8787/status
-#     state = flow.run(executor=executor, parameters=dict(is_indicator=True, model_id='ACLED', run_id='indicator', data_paths=['s3://test/acled/acled-test.bin']))
-#     # state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='geo-test-data', run_id='test-run', data_paths=['s3://test/geo-test-data.parquet']))
-#     # state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='maxhop-v0.2', run_id='4675d89d-904c-466f-a588-354c047ecf72', data_paths=['https://jataware-world-modelers.s3.amazonaws.com/dmc_results/4675d89d-904c-466f-a588-354c047ecf72/4675d89d-904c-466f-a588-354c047ecf72_maxhop-v0.2.parquet.gzip']))
+# If this is a local run, just execute the flow in process.  Setting WM_DASK_SCHEDULER="" will result in a local cluster
+# being run as well.
+if __name__ == "__main__" and LOCAL_RUN:
+    from prefect.utilities.debug import raise_on_exception
+    with raise_on_exception():
+        flow.run(parameters=dict(is_indicator=True, model_id='ACLED', run_id='indicator', data_paths=['s3://test/acled/acled-test.bin']))
+        # flow.run(parameters=dict(compute_tiles=True, model_id='geo-test-data', run_id='test-run', data_paths=['s3://test/geo-test-data.parquet']))
+        # flow.run(parameters=dict(
+        #     compute_tiles=True,
+        #     model_id='maxhop-v0.2',
+        #     run_id='4675d89d-904c-466f-a588-354c047ecf72',
+        #     data_paths=['https://jataware-world-modelers.s3.amazonaws.com/dmc_results/4675d89d-904c-466f-a588-354c047ecf72/4675d89d-904c-466f-a588-354c047ecf72_maxhop-v0.2.parquet.gzip']
+        # ))

@@ -25,7 +25,7 @@ registry_url = "docker.uncharted.software"
 image_name = "worldmodeler/wm-data-pipeline/flow-test"
 if not PUSH_IMAGE:
     image_name = f"{registry_url}/{image_name}"
-    registry_url = ""
+    registry_url = None
 
 flow.storage = Docker(
     registry_url=registry_url,
