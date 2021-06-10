@@ -343,7 +343,7 @@ with Flow('datacube-ingest-docker-test') as flow:
 
     # skip write to elastic if URL unset - we define this and don't use it prefect
     # errors
-    if not ELASTIC_URL:
+    if ELASTIC_URL:
         elastic_url = Parameter('elastic_url', default=ELASTIC_URL)
 
     source = Parameter('source', default = {
@@ -400,7 +400,7 @@ with Flow('datacube-ingest-docker-test') as flow:
     summary_values = compute_output_summary(summary_data)
 
     # ==== Update document in ES setting the status to READY =====
-    if not ELASTIC_URL:
+    if ELASTIC_URL:
         update_metadata(elastic_id, summary_values, elastic_url, elastic_index)
 
     ## TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful.
@@ -412,11 +412,11 @@ with Flow('datacube-ingest-docker-test') as flow:
 if __name__ == "__main__" and LOCAL_RUN:
     from prefect.utilities.debug import raise_on_exception
     with raise_on_exception():
-        flow.run(parameters=dict(is_indicator=True, model_id='ACLED', run_id='indicator', data_paths=['s3://test/acled/acled-test.bin']))
+        # flow.run(parameters=dict(is_indicator=True, model_id='ACLED', run_id='indicator', data_paths=['s3://test/acled/acled-test.bin']))
         # flow.run(parameters=dict(compute_tiles=True, model_id='geo-test-data', run_id='test-run', data_paths=['s3://test/geo-test-data.parquet']))
-        # flow.run(parameters=dict(
-        #     compute_tiles=True,
-        #     model_id='maxhop-v0.2',
-        #     run_id='4675d89d-904c-466f-a588-354c047ecf72',
-        #     data_paths=['https://jataware-world-modelers.s3.amazonaws.com/dmc_results/4675d89d-904c-466f-a588-354c047ecf72/4675d89d-904c-466f-a588-354c047ecf72_maxhop-v0.2.parquet.gzip']
-        # ))
+        flow.run(parameters=dict(
+             compute_tiles=True,
+             model_id='maxhop-v0.2',
+             run_id='4675d89d-904c-466f-a588-354c047ecf72',
+             data_paths=['https://jataware-world-modelers.s3.amazonaws.com/dmc_results/4675d89d-904c-466f-a588-354c047ecf72/4675d89d-904c-466f-a588-354c047ecf72_maxhop-v0.2.parquet.gzip']
+        ))
