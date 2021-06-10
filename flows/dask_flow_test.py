@@ -1,6 +1,6 @@
 from prefect import task, Flow
 from prefect.storage import Docker
-from prefect.executors import DaskExecutor
+from prefect.executors import DaskExecutor, LocalDaskExecutor
 import dask
 import os
 import time
@@ -42,8 +42,10 @@ PUSH_IMAGE = os.getenv("WM_PUSH_IMAGE", "False").lower() in ("true", "1", "t")
 with Flow("dask_flow") as flow:
     foo_result = foo()
 
-executor = DaskExecutor() if DASK_SCHEDULER == "" else DaskExecutor(DASK_SCHEDULER)
-flow.executor = executor
+if not DASK_SCHEDULER:
+    flow.executor = LocalDaskExecutor()
+else:
+    flow.executor = DaskExecutor(DASK_SCHEDULER)
 
 # setup the flow storage - will build a docker image containing the flow from the base image
 # provided

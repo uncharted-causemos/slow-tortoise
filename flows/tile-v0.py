@@ -9,13 +9,13 @@ import os
 from prefect import task, Flow, Parameter
 from prefect.engine.signals import SKIP
 from prefect.storage import Docker
-from prefect.executors import DaskExecutor
-
+from prefect.executors import DaskExecutor, LocalDaskExecutor
 from flows.common import deg2num, ancestor_tiles, filter_by_min_zoom, \
     tile_coord, save_tile, save_timeseries, \
     stats_to_json, to_proto, to_normalized_time, \
     extract_region_columns, join_region_columns, save_regional_aggregation, \
     output_values_to_json_array, raw_data_to_json
+
 
 
 # address of the dask scheduler to connect to - set this to empty to spawn a local
@@ -28,6 +28,13 @@ LOCAL_RUN = os.getenv("WM_LOCAL", "False").lower() in ("true", "1", "t")
 # indicate whether or not this flow should be pushed to the docker registry as part of its
 # registration process
 PUSH_IMAGE = os.getenv("WM_PUSH_IMAGE", "False").lower() in ("true", "1", "t")
+
+# Following env vars provide the defaults assigned to the prefect flow parameters.  The parameters
+# are normally set when a run is scheduled in the deployment environment, but when we do a local
+# run (WM_LOCAL set to true) the parameters will not be specified, and the default values are applied.
+# Updating these env vars will therefore allow us to set local dev values.
+#
+# TODO: Safer to set these to reasonable dev values (or leave them empty) so that nothing is accidentally overwritten?
 
 # elastic search output URL
 ELASTIC_URL = os.getenv("WM_ELASTIC_URL", "http://10.65.18.69:9200")
@@ -301,10 +308,11 @@ def update_metadata(elastic_id, summary_values, elastic_url, elastic_index):
 ###########################################################################
 
 with Flow('datacube-ingest-docker-test') as flow:
-    # setup the flow executor - if a scheduler address is applied it will attempt to connect
-    # to the cluster, if none is supplied it will rely on dask spinning up a temporary local
-    # cluster
-    flow.executor = DaskExecutor() if DASK_SCHEDULER == "" else DaskExecutor(DASK_SCHEDULER)
+    # setup the flow executor - if no adress is set rely on a local dask instance
+    if not DASK_SCHEDULER:
+        flow.executor = LocalDaskExecutor()
+    else:
+        flow.executor = DaskExecutor(DASK_SCHEDULER)
 
     # setup the flow storage - will build a docker image containing the flow from the base image
     # provided
@@ -330,9 +338,13 @@ with Flow('datacube-ingest-docker-test') as flow:
     data_paths = Parameter('data_paths', default=['s3://test/geo-test-data.parquet'])
     compute_tiles = Parameter('compute_tiles', default=False)
     is_indicator = Parameter('is_indicator', default=False)
-    # elastic_url = Parameter('elastic_url', default=ELASTIC_URL)
     indicator_bucket = Parameter('indicator_bucket', default=S3_DEFAULT_INDICATOR_BUCKET)
     model_bucket = Parameter('model_bucket', default=S3_DEFAULT_MODEL_BUCKET)
+
+    # skip write to elastic if URL unset - we define this and don't use it prefect
+    # errors
+    if not ELASTIC_URL:
+        elastic_url = Parameter('elastic_url', default=ELASTIC_URL)
 
     source = Parameter('source', default = {
         'endpoint_url': S3_SOURCE_URL,
@@ -388,8 +400,8 @@ with Flow('datacube-ingest-docker-test') as flow:
     summary_values = compute_output_summary(summary_data)
 
     # ==== Update document in ES setting the status to READY =====
-    # if ELASTIC_URL != "":
-    #     update_metadata(elastic_id, summary_values, elastic_url, elastic_index)
+    if not ELASTIC_URL:
+        update_metadata(elastic_id, summary_values, elastic_url, elastic_index)
 
     ## TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful.
     ## Then same data can be used for producing tiles and also used for doing regional aggregation and other computation in other tasks.
