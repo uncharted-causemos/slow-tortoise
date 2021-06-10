@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# agent reads this env var to find the prefect server
+# registration process reads this env var to find the prefect server
 export PREFECT__SERVER__HOST=http://10.65.18.52
 
 # set this to true if images should be pushed to the docker registry as part of the

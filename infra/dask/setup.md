@@ -11,4 +11,4 @@
 
 ## Updating the image
 - Stop the swarm with `docker stack rm dask_swarm`
-- Rebuild and deploy using the steps above
+- If not yet done, update the docker image by running [docker_build.sh](../docker/docker_build.sh) from the `infra/docker` directory, and push the image to the registry by running [docker_push.sh](../docker/docker_push.sh).
