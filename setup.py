@@ -15,7 +15,7 @@ setup(
     license="Apache-2.0",
     install_requires=[
         "prefect==0.14.20",
-        "dask==2021.2.0",
+        "dask==2021.6.0",
         "lz4==3.1.3",
         "blosc==1.10.4",
         "pandas==1.2.4",
