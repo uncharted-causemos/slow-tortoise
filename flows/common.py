@@ -164,11 +164,11 @@ def get_storage_options(target):
 
 def join_region_columns(df, level=3, deli='__'):
     if level == 3:
-        return df['country'] + deli + df['admin1'] + deli + df['admin2'] + deli + df['admin3']
+        return df['country'].astype(str) + deli + df['admin1'].astype(str) + deli + df['admin2'].astype(str) + deli + df['admin3'].astype(str)
     elif level == 2:
-        return df['country'] + deli + df['admin1'] + deli + df['admin2']
+        return df['country'].astype(str) + deli + df['admin1'].astype(str) + deli + df['admin2'].astype(str)
     elif level == 1:
-        return df['country'] + deli + df['admin1']
+        return df['country'].astype(str) + deli + df['admin1'].astype(str)
     else: 
         return df['country']
 

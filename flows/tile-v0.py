@@ -100,7 +100,7 @@ def temporal_aggregation(df, time_res, should_run):
     columns = df.columns.tolist()
     columns.remove('value')
     # Monthly temporal aggregation (compute for both sum and mean)
-    t = dd.to_datetime(df['timestamp'], unit='s').apply(lambda x: to_normalized_time(x, time_res), meta=(None, 'int'))
+    t = dd.to_datetime(df['timestamp'], unit='ms').apply(lambda x: to_normalized_time(x, time_res), meta=(None, 'int'))
     temporal_df = df.assign(timestamp=t) \
                     .groupby(columns)['value'].agg(['sum', 'mean'])
     # Rename agg column names
@@ -188,7 +188,7 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
     tiling_df.compute()
 
 @task
-def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
+def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id, feature_name):
     # Copy input df so that original df doesn't get mutated
     df = input_df.copy()
     # Ranme columns
@@ -210,12 +210,30 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
     # Compute aggregation and save for all regional levels
     for level in range(len(regions_cols)): 
         save_df = df.copy()
+        print('+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++')
+        print(level)
+        print('+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++')
         # Merge region columns to single region_id column. eg. ['Ethiopia', 'Afar'] -> ['Ethiopia_Afar']
         save_df['region_id'] = join_region_columns(save_df, level)
-    
-        # groupby feature and timestamp
-        save_df = save_df[['feature', 'timestamp', 'region_id', 's_sum_t_sum', 's_sum_t_mean', 's_count']] \
-            .groupby(['feature', 'timestamp']).agg(list)
+
+        cols_to_drop = list(save_df.columns[
+            save_df.isnull().all()
+        ])
+        if 'feature' in cols_to_drop:
+            cols_to_drop.remove('feature')
+            save_df['feature'] = feature_name
+        if 'timestamp' in cols_to_drop:
+            cols_to_drop.remove('timestamp')
+        save_df = save_df.drop(columns=cols_to_drop)
+        desired_columns = set(['feature', 'timestamp', 'region_id', 's_sum_t_sum', 's_sum_t_mean', 's_count'])
+        desired_columns = list(set(save_df.columns).intersection(desired_columns))
+
+        try:
+            save_df = save_df[desired_columns] \
+                .groupby(['feature', 'timestamp']).agg(list)
+        except:
+            save_df = save_df[desired_columns] \
+                .groupby(['feature']).agg(list)
         save_df = save_df.reset_index()
         # At this point data is already reduced to reasonably small size due to prior admin aggregation. 
         # Just perform repartition to make sure save io operation runs in parallel since each writing operation is expensive and blocks
@@ -269,8 +287,8 @@ def update_metadata(elastic_id, summary_values, elastic_url, elastic_index):
 
 with Flow('datacube-ingest-v0.1') as flow:
     client = Client('10.65.18.58:8786')
-    client.upload_file('tiles_pb2.py')
-    client.upload_file('common.py')
+    client.upload_file('/Users/vkorapaty/Desktop/wm/slow-tortoise/flows/tiles_pb2.py')
+    client.upload_file('/Users/vkorapaty/Desktop/wm/slow-tortoise/flows/common.py')
     print(client)
 
     # Parameters
@@ -282,6 +300,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     elastic_url = Parameter('elastic_url', default='http://10.65.18.69:9200')
     indicator_bucket = Parameter('indicator_bucket', default='indicators')
     model_bucket = Parameter('model_bucket', default='models')
+    feature_name = Parameter('feature_name', default='feature')
 
     source = Parameter('source', default = {
         'endpoint_url': 'http://10.65.18.73:9000',
@@ -291,7 +310,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     })
 
     dest = Parameter('dest', default = {
-        'endpoint_url': 'http://10.65.18.9:9000',
+        'endpoint_url': 'http://10.65.18.73:9000',#'http://10.65.18.9:9000',
         'region_name': 'us-east-1',
         'key': 'foobar',
         'secret': 'foobarbaz'
@@ -317,7 +336,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     # ==== Run aggregations based on monthly time resolution =====
     monthly_data = temporal_aggregation(df, 'month', compute_monthly)
     month_ts_done = compute_timeseries(monthly_data, dest, 'month', model_id, run_id)
-    compute_regional_aggregation(monthly_data, dest, 'month', model_id, run_id)
+    compute_regional_aggregation(monthly_data, dest, 'month', model_id, run_id, feature_name)
 
     monthly_spatial_data = subtile_aggregation(monthly_data, compute_tiles, upstream_tasks=[month_ts_done])
     month_stats_done = compute_stats(monthly_spatial_data, dest, 'month', model_id, run_id)
@@ -326,7 +345,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     # ==== Run aggregations based on annual time resolution =====
     annual_data = temporal_aggregation(df, 'year', compute_annual, upstream_tasks=[month_done])
     year_ts_done = compute_timeseries(annual_data, dest, 'year', model_id, run_id)
-    compute_regional_aggregation(annual_data, dest, 'year', model_id, run_id)
+    compute_regional_aggregation(annual_data, dest, 'year', model_id, run_id, feature_name)
 
     annual_spatial_data = subtile_aggregation(annual_data, compute_tiles, upstream_tasks=[year_ts_done])
     year_stats_done = compute_stats(annual_spatial_data, dest, 'year', model_id, run_id)
@@ -337,18 +356,25 @@ with Flow('datacube-ingest-v0.1') as flow:
     summary_values = compute_output_summary(summary_data)
 
     # ==== Update document in ES setting the status to READY =====
-    update_metadata(elastic_id, summary_values, elastic_url, elastic_index)
+    # update_metadata(elastic_id, summary_values, elastic_url, elastic_index)
 
     ## TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful. 
     ## Then same data can be used for producing tiles and also used for doing regional aggregation and other computation in other tasks.
     ## In that way we can have one jupyter notbook or python module for each tasks
 
-flow.register(project_name='Tiling', labels=['dask'])
+# flow.register(project_name='Tiling', labels=['dask'])
 
-# from prefect.executors import DaskExecutor
-# from prefect.utilities.debug import raise_on_exception
-# with raise_on_exception():
-#     executor = DaskExecutor(address='tcp://10.65.18.58:8786') # Dask Dashboard: http://10.65.18.58:8787/status
-#     state = flow.run(executor=executor, parameters=dict(is_indicator=True, model_id='ACLED', run_id='indicator', data_paths=['s3://test/acled/acled-test.bin']))
-#     # state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='geo-test-data', run_id='test-run', data_paths=['s3://test/geo-test-data.parquet']))
-#     # state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='maxhop-v0.2', run_id='4675d89d-904c-466f-a588-354c047ecf72', data_paths=['https://jataware-world-modelers.s3.amazonaws.com/dmc_results/4675d89d-904c-466f-a588-354c047ecf72/4675d89d-904c-466f-a588-354c047ecf72_maxhop-v0.2.parquet.gzip']))
+from prefect.executors import DaskExecutor
+from prefect.utilities.debug import raise_on_exception
+# import sys
+# import json
+# import os
+# data_paths = json.loads(sys.argv[1])
+# model_id = sys.argv[2]
+
+def run(model_id, data_paths, feature_name):
+    with raise_on_exception():
+        executor = DaskExecutor(address='tcp://10.65.18.58:8786') # Dask Dashboard: http://10.65.18.58:8787/status
+        state = flow.run(executor=executor, parameters=dict(is_indicator=True, model_id=model_id, run_id='indicator', data_paths=data_paths, feature_name=feature_name))
+    #     # state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='geo-test-data', run_id='test-run', data_paths=['s3://test/geo-test-data.parquet']))
+    #     # state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='maxhop-v0.2', run_id='4675d89d-904c-466f-a588-354c047ecf72', data_paths=['https://jataware-world-modelers.s3.amazonaws.com/dmc_results/4675d89d-904c-466f-a588-354c047ecf72/4675d89d-904c-466f-a588-354c047ecf72_maxhop-v0.2.parquet.gzip']))
