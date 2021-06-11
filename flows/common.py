@@ -107,9 +107,11 @@ def raw_data_to_json(df, dest, model_id, run_id, time_res, feature):
         storage_options=get_storage_options(dest))
 
 # save output values to json array
-def output_values_to_json_array(df):
+def output_values_to_json_array(df, column):
     col_map = { 'feature': 'name' }
-    json_str = df.rename(columns=col_map, inplace=False).to_json(orient='records')
+    col_map[column] = 'value'
+    pdf = df.rename(columns=col_map).compute()
+    json_str = pdf.to_json(orient='records')
     return json.loads(json_str)
     
 # save stats as a json file
