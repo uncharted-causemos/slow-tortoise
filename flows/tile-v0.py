@@ -259,14 +259,14 @@ def save_raw_data(df, dest, time_res, model_id, run_id, should_run):
 def compute_output_summary(df):
     # Timeseries aggregation
     timeseries_aggs = ['mean']
-    timeseries_lookup = { ('t_mean', 'mean'): 's_mean_t_mean' }
     timeseries_agg_column = 's_mean_t_mean'
+    timeseries_lookup = { ('t_mean', 'mean'): timeseries_agg_column }
 
     timeseries_df = df.groupby(['feature', 'timestamp']).agg({ 't_mean' : timeseries_aggs })
     timeseries_df.columns = timeseries_df.columns.to_flat_index()
     timeseries_df = timeseries_df.rename(columns=timeseries_lookup).reset_index()
 
-    summary = output_values_to_json_array(timeseries_df[['feature', timeseries_agg_column]])
+    summary = output_values_to_json_array(timeseries_df[['feature', timeseries_agg_column]], timeseries_agg_column)
     return summary
 
 @task(skip_on_upstream_skip=False, log_stdout=True)
