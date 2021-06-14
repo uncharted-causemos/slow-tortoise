@@ -56,9 +56,17 @@ def download_data(source, data_paths, is_indicator):
                 }
             }).repartition(npartitions = 12)
     else:
+        # In some parquet files the value column will be type string. Filter out those parquet files and ignore for now
+        numeric_files = []
+        string_files = []
+        for path in data_paths:
+            if path.endswith('_str.parquet.gzip'):
+                string_files.append(path)
+            else:
+                numeric_files.append(path)
+
         # Note: dask read_parquet doesn't work for gzip files. So here is the work around using pandas read_parquet
-        dfs = [delayed(pd.read_parquet)(path) for path in data_paths]
-        # dfs
+        dfs = [delayed(pd.read_parquet)(path) for path in numeric_files]
         df = dd.from_delayed(dfs).repartition(npartitions = 12)
     
     # These columns are empty for indicators and they seem to break the pipeline
