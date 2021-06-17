@@ -223,4 +223,7 @@ def extract_region_columns(df):
     if 'country' in result:
         result.remove('country')
         result.insert(0, 'country')
+    # null_cols = df[result].isnull().all()
+    # result = df[result].columns[null_cols]
+    # result = list(df[result].columns[df[result].isnull().all()])
     return result
