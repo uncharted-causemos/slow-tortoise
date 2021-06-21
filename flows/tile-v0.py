@@ -56,9 +56,17 @@ def download_data(source, data_paths, is_indicator):
                 }
             }).repartition(npartitions = 12)
     else:
+        # In some parquet files the value column will be type string. Filter out those parquet files and ignore for now
+        numeric_files = []
+        string_files = []
+        for path in data_paths:
+            if path.endswith('_str.parquet.gzip'):
+                string_files.append(path)
+            else:
+                numeric_files.append(path)
+
         # Note: dask read_parquet doesn't work for gzip files. So here is the work around using pandas read_parquet
-        dfs = [delayed(pd.read_parquet)(path) for path in data_paths]
-        # dfs
+        dfs = [delayed(pd.read_parquet)(path) for path in numeric_files]
         df = dd.from_delayed(dfs).repartition(npartitions = 12)
     
     # These columns are empty for indicators and they seem to break the pipeline
@@ -98,8 +106,8 @@ def configure_pipeline(dest, indicator_bucket, model_bucket, model_id, run_id, c
 
 @task(skip_on_upstream_skip=False)
 def temporal_aggregation(df, time_res, should_run):
-    print("temporal_aggregation PRE: " + time_res)
-    print(df.compute())
+    # print("temporal_aggregation PRE: " + time_res)
+    # print(df.compute())
     if should_run is False:
         raise SKIP(f'Aggregating for resolution {time_res} was not requested')
 
@@ -115,27 +123,28 @@ def temporal_aggregation(df, time_res, should_run):
     #     print(df['timestamp'])
     # Monthly temporal aggregation (compute for both sum and mean)
     t = dd.to_datetime(df['timestamp'], unit='ms').apply(lambda x: to_normalized_time(x, time_res), meta=(None, 'int'))
-    print("temporal_aggregation PRE-MIDDLE: " + time_res)
+    # print("temporal_aggregation PRE-MIDDLE: " + time_res)
     # print(df.assign(timestamp=t).groupby(['timestamp', 'country', 'feature'])['value'].agg(['sum']).compute())
     temporal_df = df.assign(timestamp=t) \
                     .groupby(columns)['value'].agg(['sum', 'mean'])
-    print("temporal_aggregation MIDDLE: " + time_res)
-    print(temporal_df.compute())
+    # print("temporal_aggregation MIDDLE: " + time_res)
+    # print(temporal_df.compute())
     # Rename agg column names
     temporal_df.columns = temporal_df.columns.str.replace('sum', 't_sum').str.replace('mean', 't_mean')
     temporal_df = temporal_df.reset_index()
-    print("temporal_aggregation POST: " + time_res)
-    print(temporal_df.compute())
-    print(temporal_df.shape[0].compute())
-    print(temporal_df.shape[1])
-    print("SHAPE^^^")
+    # print("temporal_aggregation POST: " + time_res)
+    # print(temporal_df.compute())
+    # print(temporal_df.shape[0].compute())
+    # print(temporal_df.shape[1])
+    # print("SHAPE^^^")
     return temporal_df 
 
 @task
 def compute_timeseries(df, dest, time_res, model_id, run_id):
-    # print("compute_timeseries PRE: " + time_res)
+    print("compute_timeseries PRE: " + time_res)
     # df.compute()
     # print(df)
+    df_copy = df.copy()
     # Timeseries aggregation
     timeseries_aggs = ['min', 'max', 'sum', 'mean']
     timeseries_lookup = {
@@ -144,14 +153,14 @@ def compute_timeseries(df, dest, time_res, model_id, run_id):
     }
     timeseries_agg_columns = ['s_min_t_sum', 's_max_t_sum', 's_sum_t_sum', 's_mean_t_sum', 's_min_t_mean', 's_max_t_mean', 's_sum_t_mean', 's_mean_t_mean']
 
-    timeseries_df = df.groupby(['feature', 'timestamp']).agg({ 't_sum' : timeseries_aggs, 't_mean' : timeseries_aggs })
+    timeseries_df = df_copy.groupby(['feature', 'timestamp']).agg({ 't_sum' : timeseries_aggs, 't_mean' : timeseries_aggs })
     timeseries_df.columns = timeseries_df.columns.to_flat_index()
     timeseries_df = timeseries_df.rename(columns=timeseries_lookup).reset_index()
     timeseries_df = timeseries_df.groupby(['feature']).apply(
         lambda x: save_timeseries(x, dest, model_id, run_id, time_res, timeseries_agg_columns),
         meta=(None, 'object'))
     timeseries_df.compute()
-    # print("compute_timeseries POST: " + time_res)
+    print("compute_timeseries POST: " + time_res)
     # print(timeseries_df)
 
 @task
@@ -225,13 +234,13 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id, fea
     df = df.reset_index()
 
     regions_cols = extract_region_columns(df)
-    regions_cols_to_drop = list(df[regions_cols].columns[df[regions_cols].isnull().all()])
-    # print("compute_regional_aggregation:")
-    # coun = df['country'].compute()
-    # print(coun)
-    df = df.drop(columns=regions_cols_to_drop)
-    # print(df)
-    regions_cols = list(set(regions_cols).difference(set(regions_cols_to_drop)))
+    # regions_cols_to_drop = list(df[regions_cols].columns[df[regions_cols].isnull().all()])
+    # # print("compute_regional_aggregation:")
+    # # coun = df['country'].compute()
+    # # print(coun)
+    # df = df.drop(columns=regions_cols_to_drop)
+    # # print(df)
+    # regions_cols = list(set(regions_cols).difference(set(regions_cols_to_drop)))
     
     # Region aggregation at the highest admin level
     df = df[['feature', 'timestamp', 's_sum_t_sum', 's_sum_t_mean', 's_count'] + regions_cols] \
@@ -274,6 +283,8 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id, fea
         save_df = save_df.apply(lambda x: save_regional_aggregation(x, dest, model_id, run_id, time_res, region_level=regions_cols[level]), 
                       axis=1, meta=(None, 'object'))
         save_df.compute()
+        print("AGGREGATION: ")
+        print(save_df)
 
 @task
 def save_raw_data(df, dest, time_res, model_id, run_id, should_run):
