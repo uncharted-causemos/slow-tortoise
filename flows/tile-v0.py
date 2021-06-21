@@ -76,10 +76,7 @@ def download_data(source, data_paths, is_indicator):
     # Ensure types
     df = df.astype({'value': 'float64'})
     df.dtypes
-    # print("download_data:")
-    # print(df.compute())
-    # coun = df['country'].compute()
-    # print(coun)
+
     return df
 
 @task
@@ -106,44 +103,26 @@ def configure_pipeline(dest, indicator_bucket, model_bucket, model_id, run_id, c
 
 @task(skip_on_upstream_skip=False)
 def temporal_aggregation(df, time_res, should_run):
-    # print("temporal_aggregation PRE: " + time_res)
-    # print(df.compute())
+
     if should_run is False:
         raise SKIP(f'Aggregating for resolution {time_res} was not requested')
 
     columns = df.columns.tolist()
     columns.remove('value')
 
-    # is_ts_null = df['timestamp'].isnull().all().compute()
-    # print("TIMESTAMP:")
-    # print(df['timestamp'].compute())
-    # if is_ts_null:
-    #     df['timestamp'] = 0
-    #     df.compute()
-    #     print(df['timestamp'])
     # Monthly temporal aggregation (compute for both sum and mean)
     t = dd.to_datetime(df['timestamp'], unit='ms').apply(lambda x: to_normalized_time(x, time_res), meta=(None, 'int'))
-    # print("temporal_aggregation PRE-MIDDLE: " + time_res)
-    # print(df.assign(timestamp=t).groupby(['timestamp', 'country', 'feature'])['value'].agg(['sum']).compute())
     temporal_df = df.assign(timestamp=t) \
                     .groupby(columns)['value'].agg(['sum', 'mean'])
-    # print("temporal_aggregation MIDDLE: " + time_res)
-    # print(temporal_df.compute())
+
     # Rename agg column names
     temporal_df.columns = temporal_df.columns.str.replace('sum', 't_sum').str.replace('mean', 't_mean')
     temporal_df = temporal_df.reset_index()
-    # print("temporal_aggregation POST: " + time_res)
-    # print(temporal_df.compute())
-    # print(temporal_df.shape[0].compute())
-    # print(temporal_df.shape[1])
-    # print("SHAPE^^^")
+
     return temporal_df 
 
 @task
 def compute_timeseries(df, dest, time_res, model_id, run_id):
-    print("compute_timeseries PRE: " + time_res)
-    # df.compute()
-    # print(df)
     df_copy = df.copy()
     # Timeseries aggregation
     timeseries_aggs = ['min', 'max', 'sum', 'mean']
@@ -160,8 +139,7 @@ def compute_timeseries(df, dest, time_res, model_id, run_id):
         lambda x: save_timeseries(x, dest, model_id, run_id, time_res, timeseries_agg_columns),
         meta=(None, 'object'))
     timeseries_df.compute()
-    print("compute_timeseries POST: " + time_res)
-    # print(timeseries_df)
+
 
 @task
 def subtile_aggregation(df, should_run):
@@ -234,13 +212,6 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id, fea
     df = df.reset_index()
 
     regions_cols = extract_region_columns(df)
-    # regions_cols_to_drop = list(df[regions_cols].columns[df[regions_cols].isnull().all()])
-    # # print("compute_regional_aggregation:")
-    # # coun = df['country'].compute()
-    # # print(coun)
-    # df = df.drop(columns=regions_cols_to_drop)
-    # # print(df)
-    # regions_cols = list(set(regions_cols).difference(set(regions_cols_to_drop)))
     
     # Region aggregation at the highest admin level
     df = df[['feature', 'timestamp', 's_sum_t_sum', 's_sum_t_mean', 's_count'] + regions_cols] \
@@ -262,19 +233,15 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id, fea
         ])
         if 'feature' in cols_to_drop:
             cols_to_drop.remove('feature')
-            # save_df['feature'] = feature_name
         if 'timestamp' in cols_to_drop:
             cols_to_drop.remove('timestamp')
         save_df = save_df.drop(columns=cols_to_drop)
         desired_columns = set(['feature', 'timestamp', 'region_id', 's_sum_t_sum', 's_sum_t_mean', 's_count'])
         desired_columns = list(set(save_df.columns).intersection(desired_columns))
 
-        # try:
         save_df = save_df[desired_columns] \
             .groupby(['feature', 'timestamp']).agg(list)
-        # except:
-        #     save_df = save_df[desired_columns] \
-        #         .groupby(['feature']).agg(list)
+
         save_df = save_df.reset_index()
         # At this point data is already reduced to reasonably small size due to prior admin aggregation. 
         # Just perform repartition to make sure save io operation runs in parallel since each writing operation is expensive and blocks
@@ -283,8 +250,6 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id, fea
         save_df = save_df.apply(lambda x: save_regional_aggregation(x, dest, model_id, run_id, time_res, region_level=regions_cols[level]), 
                       axis=1, meta=(None, 'object'))
         save_df.compute()
-        print("AGGREGATION: ")
-        print(save_df)
 
 @task
 def save_raw_data(df, dest, time_res, model_id, run_id, should_run):
@@ -335,8 +300,7 @@ def remove_null_region_columns(df):
 ###########################################################################
 
 with Flow('datacube-ingest-v0.1') as flow:
-    # client = Client('10.65.18.58:8786')
-    client = Client('192.168.0.105:8786')
+    client = Client('10.65.18.58:8786')
     client.upload_file('/Users/vkorapaty/Desktop/wm/slow-tortoise/flows/tiles_pb2.py')
     client.upload_file('/Users/vkorapaty/Desktop/wm/slow-tortoise/flows/common.py')
     print(client)
@@ -417,16 +381,11 @@ with Flow('datacube-ingest-v0.1') as flow:
 
 from prefect.executors import DaskExecutor
 from prefect.utilities.debug import raise_on_exception
-# import sys
-# import json
-# import os
-# data_paths = json.loads(sys.argv[1])
-# model_id = sys.argv[2]
+
 
 def run(model_id, data_paths, feature_name):
     with raise_on_exception():
-        executor = DaskExecutor(address='tcp://192.168.0.105:8786')
-        # executor = DaskExecutor(address='tcp://10.65.18.58:8786') # Dask Dashboard: http://10.65.18.58:8787/status
+        executor = DaskExecutor(address='tcp://10.65.18.58:8786') # Dask Dashboard: http://10.65.18.58:8787/status
         state = flow.run(executor=executor, parameters=dict(is_indicator=True, model_id=model_id, run_id='indicator', data_paths=data_paths, feature_name=feature_name))
     #     # state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='geo-test-data', run_id='test-run', data_paths=['s3://test/geo-test-data.parquet']))
     #     # state = flow.run(executor=executor, parameters=dict(compute_tiles=True, model_id='maxhop-v0.2', run_id='4675d89d-904c-466f-a588-354c047ecf72', data_paths=['https://jataware-world-modelers.s3.amazonaws.com/dmc_results/4675d89d-904c-466f-a588-354c047ecf72/4675d89d-904c-466f-a588-354c047ecf72_maxhop-v0.2.parquet.gzip']))

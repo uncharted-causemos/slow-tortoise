@@ -8,8 +8,8 @@ jsons_dir = root + '/s3_jsons/'
 indicator_metadata_files = os.listdir(jsons_dir)
 indicator_metadata_files.sort()
 failed_indicators = []
-# indicator_metadata_files = ['UNICEF_Complementary_Feeding_Latest_Regional_Global.json']#, 'UNICEF_Continued_Breastfeeding_Latest_Regional_Global.json', 'UNICEF_Early_Initiation_Latest_Regional_Global.json', 'UNICEF_Exclusive_Breastfeeding_Latest_Regional_Global.json', 'UNICEF_ISSSF_Latest_Regional_Global.json']
-for json_name in indicator_metadata_files:# [9891:]:
+
+for json_name in indicator_metadata_files:
     if json_name[:3] != "UAZ":
         try:
             with open(jsons_dir + json_name) as json_file:
