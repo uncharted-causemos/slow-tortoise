@@ -23,5 +23,6 @@ setup(
         "boto3==1.17.49",
         "protobuf==3.17.3",
         "pyarrow==4.0.1",
-    ]
+        "prometheus_client==0.7.1",
+    ],
 )
