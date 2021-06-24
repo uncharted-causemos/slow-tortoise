@@ -20,7 +20,7 @@ from flows.common import deg2num, ancestor_tiles, filter_by_min_zoom, \
 
 # address of the dask scheduler to connect to - set this to empty to spawn a local
 # dask cluster
-DASK_SCHEDULER = os.getenv("WM_DASK_SCHEDULER", "10.65.18.53:8786")
+DASK_SCHEDULER = os.getenv("WM_DASK_SCHEDULER", "10.65.18.58:8786")
 
 # run the flow locally without the prefect agent and server
 LOCAL_RUN = os.getenv("WM_LOCAL", "False").lower() in ("true", "1", "t")
@@ -37,7 +37,7 @@ PUSH_IMAGE = os.getenv("WM_PUSH_IMAGE", "False").lower() in ("true", "1", "t")
 # TODO: Safer to set these to reasonable dev values (or leave them empty) so that nothing is accidentally overwritten?
 
 # elastic search output URL
-ELASTIC_URL = os.getenv("WM_ELASTIC_URL", "http://10.65.18.69:9200")
+ELASTIC_URL = os.getenv("WM_ELASTIC_URL", "http://10.65.18.34:9200")
 
 # S3 data source URL
 S3_SOURCE_URL = os.getenv("WM_S3_SOURCE_URL", "http://10.65.18.73:9000")
@@ -307,7 +307,7 @@ def update_metadata(elastic_id, summary_values, elastic_url, elastic_index):
 
 ###########################################################################
 
-with Flow('datacube-ingest-docker-test') as flow:
+with Flow('datacube-ingest-v0.1') as flow:
     # setup the flow executor - if no adress is set rely on a local dask instance
     if not DASK_SCHEDULER:
         flow.executor = LocalDaskExecutor()
