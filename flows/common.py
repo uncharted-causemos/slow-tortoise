@@ -6,6 +6,14 @@ import json
 
 from flows import tiles_pb2
 
+# Bit of a WTF here, but it is well considered.  Dask will serialize the tiles_pb2.Task *class* since it is passed
+# to workers within a lambda that calls to_proto.  The problem is that pickling a class object can result in the
+# parent *module* object being pickled depending on how its imported, and according to the pickling spec, module
+# objects can't be pickled.  This manifests itself as an error on a Dask worker indicating that it can't serialize the
+# tiles_pb2 module.  To get around this, we need to import tiles_pb2 module directly, instead of through the flow package,
+# which means we need to add the parent directory to the sys path.
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__))))
+import tiles_pb2
 # More details on tile calculations https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames
 # Convert lat, long to tile coord
 # https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames#Python
