@@ -256,19 +256,8 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
         # Merge region columns to single region_id column. eg. ['Ethiopia', 'Afar'] -> ['Ethiopia_Afar']
         save_df['region_id'] = join_region_columns(save_df, level)
 
-        cols_to_drop = list(save_df.columns[
-            save_df.isnull().all()
-        ])
-        if 'feature' in cols_to_drop:
-            cols_to_drop.remove('feature')
-        if 'timestamp' in cols_to_drop:
-            cols_to_drop.remove('timestamp')
-        save_df = save_df.drop(columns=cols_to_drop)
-        desired_columns = set(['feature', 'timestamp', 'region_id', 's_sum_t_sum', 's_sum_t_mean', 's_count'])
-        desired_columns = list(set(save_df.columns).intersection(desired_columns))
-
-        save_df = save_df[desired_columns] \
-            .groupby(['feature', 'timestamp']).agg(list)
+        desired_columns = ['feature', 'timestamp', 'region_id', 's_sum_t_sum', 's_sum_t_mean', 's_count']
+        save_df = save_df[desired_columns].groupby(['feature', 'timestamp']).agg(list)
 
         save_df = save_df.reset_index()
         # At this point data is already reduced to reasonably small size due to prior admin aggregation.
@@ -321,9 +310,10 @@ def update_metadata(elastic_id, summary_values, elastic_url, elastic_index):
 
 @task(log_stdout=True)
 def remove_null_region_columns(df):
-    regions_cols = extract_region_columns(df)
-    regions_cols_to_drop = list(df[regions_cols].columns[df[regions_cols].isnull().all()])
-    return df.drop(columns=regions_cols_to_drop)
+    region_cols = extract_region_columns(df)
+    cols_to_drop = set(df.columns[df.isnull().all()])
+    region_cols_to_drop = list(cols_to_drop.intersection(region_cols))
+    return df.drop(columns=region_cols_to_drop)
 
 ###########################################################################
 
