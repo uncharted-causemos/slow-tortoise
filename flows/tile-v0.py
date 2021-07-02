@@ -49,7 +49,7 @@ S3_DEST_URL = os.getenv("WM_S3_DEST_URL", "http://10.65.18.9:9000")
 S3_DEFAULT_INDICATOR_BUCKET = os.getenv("WM_S3_DEFAULT_INDICATOR_BUCKET", 'indicators')
 
 # default model s3 write bucket
-S3_DEFAULT_MODEL_BUCKET = os.getenv("WM_S3_DEFAULT_INDICATOR_BUCKET", 'models')
+S3_DEFAULT_MODEL_BUCKET = os.getenv("WM_S3_DEFAULT_MODEL_BUCKET", 'models')
 
 # This determines the number of bins(subtiles) per tile. Eg. Each tile has 4^6=4096 grid cells (subtiles) when LEVEL_DIFF is 6
 # Tile (z, x, y) will have a sutbile where its zoom level is z + LEVEL_DIFF
@@ -234,7 +234,7 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
     tiling_df.compute()
 
 @task(log_stdout=True)
-def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id, feature_name):
+def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
     # Copy input df so that original df doesn't get mutated
     df = input_df.copy()
     # Ranme columns
@@ -404,7 +404,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     # ==== Run aggregations based on monthly time resolution =====
     monthly_data = temporal_aggregation(df, 'month', compute_monthly)
     month_ts_done = compute_timeseries(monthly_data, dest, 'month', model_id, run_id)
-    compute_regional_aggregation(monthly_data, dest, 'month', model_id, run_id, feature_name)
+    compute_regional_aggregation(monthly_data, dest, 'month', model_id, run_id)
 
     monthly_spatial_data = subtile_aggregation(monthly_data, compute_tiles, upstream_tasks=[month_ts_done])
     month_stats_done = compute_stats(monthly_spatial_data, dest, 'month', model_id, run_id)
@@ -413,7 +413,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     # ==== Run aggregations based on annual time resolution =====
     annual_data = temporal_aggregation(df, 'year', compute_annual, upstream_tasks=[month_done])
     year_ts_done = compute_timeseries(annual_data, dest, 'year', model_id, run_id)
-    compute_regional_aggregation(annual_data, dest, 'year', model_id, run_id, feature_name)
+    compute_regional_aggregation(annual_data, dest, 'year', model_id, run_id)
 
     annual_spatial_data = subtile_aggregation(annual_data, compute_tiles, upstream_tasks=[year_ts_done])
     year_stats_done = compute_stats(annual_spatial_data, dest, 'year', model_id, run_id)
