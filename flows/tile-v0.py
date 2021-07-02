@@ -140,7 +140,7 @@ def temporal_aggregation(df, time_res, should_run):
     columns = df.columns.tolist()
     columns.remove('value')
     # Monthly temporal aggregation (compute for both sum and mean)
-    t = dd.to_datetime(df['timestamp'], unit='s').apply(lambda x: to_normalized_time(x, time_res), meta=(None, 'int'))
+    t = dd.to_datetime(df['timestamp'], unit='s').apply(lambda x: to_normalized_time(x, time_res) * 1000, meta=(None, 'int'))
     temporal_df = df.assign(timestamp=t) \
                     .groupby(columns)['value'].agg(['sum', 'mean'])
     # Rename agg column names
