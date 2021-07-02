@@ -1,12 +1,21 @@
 import datetime
 import pandas as pd
-import dask.dataframe as dd
 import math
 import boto3
 import json
+import sys
+import os
 
+from flows import tiles_pb2
+
+# Bit of a WTF here, but it is well considered.  Dask will serialize the tiles_pb2.Task *class* since it is passed
+# to workers within a lambda that calls to_proto.  The problem is that pickling a class object can result in the
+# parent *module* object being pickled depending on how its imported, and according to the pickling spec, module
+# objects can't be pickled.  This manifests itself as an error on a Dask worker indicating that it can't serialize the
+# tiles_pb2 module.  To get around this, we need to import tiles_pb2 module directly, instead of through the flow package,
+# which means we need to add the parent directory to the sys path.
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__))))
 import tiles_pb2
-
 # More details on tile calculations https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames
 # Convert lat, long to tile coord
 # https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames#Python
@@ -32,8 +41,8 @@ def ancestor_tiles(coord, min_zoom=0):
 # Filter tiles by minimum zoom level
 def filter_by_min_zoom(tiles, min_zoom=0):
     return list(filter(lambda x: x[0] >= min_zoom, tiles))
-    
-    
+
+
 # Return the tile that is leveldiff up of given tile. Eg. return (1, 0, 0) for (6, 0, 0) with leveldiff = 5
 # The main tile will contain up to 4^leveldiff subtiles with same level
 def tile_coord(coord, leveldiff=6):
@@ -46,21 +55,21 @@ def project(subtilecoord, tilecoord):
     z, x, y = tilecoord
     sz, sx, sy = subtilecoord
     zdiff = sz - z # zoom level (prececsion) difference
-    
+
     # Calculate the x and y of the coordinate of the subtile located at the most top left corner of the main tile
     offset_x = math.pow(2, zdiff) * x
     offset_y = math.pow(2, zdiff) * y
-    
+
     # Project subtile coordinate to n * n (n * n = 4^zdiff) grid coordinate
     binx = sx - offset_x
     biny = sy - offset_y
-    
+
     # Total number of grid cells
     total_bins = math.pow(4, zdiff)
     max_x_bins = math.sqrt(total_bins)
-    
+
     bin_index = binx + biny*max_x_bins
-    
+
     return int(bin_index)
 
 # save proto tile file
@@ -76,7 +85,7 @@ def save_tile(tile, dest, model_id, run_id, feature, time_res, timestamp):
             aws_access_key_id=dest['key'],
             aws_secret_access_key=dest['secret']
         )
-        
+
     z = tile.coord.z
     x = tile.coord.x
     y = tile.coord.y
@@ -113,25 +122,25 @@ def output_values_to_json_array(df, column):
     pdf = df.rename(columns=col_map).compute()
     json_str = pdf.to_json(orient='records')
     return json.loads(json_str)
-    
+
 # save stats as a json file
 def stats_to_json(x, dest, model_id, run_id, feature, time_res):
     bucket = dest['bucket']
     x.to_json(f's3://{bucket}/{model_id}/{run_id}/{time_res}/{feature}/stats/stats.json',
         orient='index',
         storage_options=get_storage_options(dest))
-    
+
 # transform given row to tile protobuf
 def to_proto(row):
     z, x, y = row.tile
-    
+
     tile = tiles_pb2.Tile()
     tile.coord.z = z
     tile.coord.x = x
     tile.coord.y = y
-    
+
     tile.bins.totalBins = int(math.pow(4, row.subtile[0][0] - z)) # Total number of bins (subtile) for the tile
-    
+
     for i in range(len(row.subtile)):
         bin_index = project(row.subtile[i], row.tile)
         tile.bins.stats[bin_index].s_sum_t_sum += row.s_sum_t_sum[i]
@@ -171,7 +180,7 @@ def join_region_columns(df, level=3, deli='__'):
         return df['country'] + deli + df['admin1'] + deli + df['admin2']
     elif level == 1:
         return df['country'] + deli + df['admin1']
-    else: 
+    else:
         return df['country']
 
 def save_regional_aggregation(x, dest, model_id, run_id, time_res, region_level='admin3'):
@@ -184,12 +193,12 @@ def save_regional_aggregation(x, dest, model_id, run_id, time_res, region_level=
         region_id = x.region_id[i]
         if region_id not in region_agg:
             region_agg[region_id] = {'s_sum_t_sum': 0, 's_sum_t_mean': 0, 's_count': 0}
-        
+
         region_agg[region_id]['s_sum_t_sum'] += x['s_sum_t_sum'][i]
         region_agg[region_id]['s_sum_t_mean'] += x['s_sum_t_mean'][i]
         region_agg[region_id]['s_count'] += x['s_count'][i]
 
-    # Compute mean    
+    # Compute mean
     for key in region_agg:
         region_agg[key]['s_mean_t_sum'] = region_agg[key]['s_sum_t_sum'] / region_agg[key]['s_count']
         region_agg[key]['s_mean_t_mean'] = region_agg[key]['s_sum_t_mean'] / region_agg[key]['s_count']
@@ -217,7 +226,7 @@ def extract_region_columns(df):
     region_col_names = ['country', 'admin1', 'admin2', 'admin3']
     columns = df.columns.to_list()
     # find the intersection
-    result = list(set(region_col_names) & set(columns)) 
+    result = list(set(region_col_names) & set(columns))
     # Re order the list by admin levels
     result.sort()
     if 'country' in result:
