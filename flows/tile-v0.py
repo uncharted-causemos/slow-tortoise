@@ -152,7 +152,6 @@ def temporal_aggregation(df, time_res, should_run):
 
 @task(log_stdout=True)
 def compute_timeseries(df, dest, time_res, model_id, run_id):
-    df_copy = df.copy()
     # Timeseries aggregation
     timeseries_aggs = ['min', 'max', 'sum', 'mean']
     timeseries_lookup = {
@@ -161,7 +160,7 @@ def compute_timeseries(df, dest, time_res, model_id, run_id):
     }
     timeseries_agg_columns = ['s_min_t_sum', 's_max_t_sum', 's_sum_t_sum', 's_mean_t_sum', 's_min_t_mean', 's_max_t_mean', 's_sum_t_mean', 's_mean_t_mean']
 
-    timeseries_df = df_copy.groupby(['feature', 'timestamp']).agg({ 't_sum' : timeseries_aggs, 't_mean' : timeseries_aggs })
+    timeseries_df = df.groupby(['feature', 'timestamp']).agg({ 't_sum' : timeseries_aggs, 't_mean' : timeseries_aggs })
     timeseries_df.columns = timeseries_df.columns.to_flat_index()
     timeseries_df = timeseries_df.rename(columns=timeseries_lookup).reset_index()
     timeseries_df = timeseries_df.groupby(['feature']).apply(
