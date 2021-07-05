@@ -2,6 +2,7 @@ import json
 import os
 import time
 import requests
+from dask.distributed import Client
 from prefect.executors import DaskExecutor
 from prefect.utilities.debug import raise_on_exception
 
@@ -10,6 +11,9 @@ tile_v0 = __import__('tile-v0')
 total_start_time = time.time()
 with raise_on_exception():
     executor = DaskExecutor(address='tcp://10.65.18.58:8786') # Dask Dashboard: http://10.65.18.58:8787/status
+    client = Client('10.65.18.58:8786')
+    client.upload_file('tiles_pb2.py')
+    client.upload_file('common.py')
 
     root = os.getcwd()
     jsons_dir = root + '/s3_jsons/'
