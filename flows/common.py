@@ -150,14 +150,16 @@ def to_proto(row):
 
 # convert given datetime object to monthly epoch timestamp
 def to_normalized_time(date, time_res):
-    if time_res == 'month':
-        return int(datetime.datetime(date.year, date.month, 1).timestamp())
-    elif time_res == 'year':
-        return int(datetime.datetime(date.year, 1, 1).timestamp())
-    elif time_res == 'all':
-        return 0 # just put everything under one timestamp
-    else:
-        raise ValueError('time_res must be \'month\' or \'year\'')
+    def time_in_seconds():
+        if time_res == 'month':
+            return int(datetime.datetime(date.year, date.month, 1).timestamp())
+        elif time_res == 'year':
+            return int(datetime.datetime(date.year, 1, 1).timestamp())
+        elif time_res == 'all':
+            return 0 # just put everything under one timestamp
+        else:
+            raise ValueError('time_res must be \'month\' or \'year\'')
+    return time_in_seconds() * 1000
 
 # Get storage option
 def get_storage_options(target):
