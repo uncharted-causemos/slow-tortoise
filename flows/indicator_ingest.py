@@ -64,7 +64,7 @@ with raise_on_exception():
                 else:
                     print(f'>> Ingest failed for {metadata["id"]}')
         except Exception as exc:
-            print(f'>> Error processing {metadata["id"]}')
+            print(f'>> Error processing {file_name}')
             print(exc)
         print('>> Finished in %.2f seconds' % (time.time() - start_time))
 
