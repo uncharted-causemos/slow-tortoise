@@ -28,8 +28,8 @@ with raise_on_exception():
     num_indicators = len(indicator_metadata_files)
 
     for index, file_name in enumerate(indicator_metadata_files):
-        print(f'>> Processing {file_name}')
         print(f'>> Progess {index}/{num_indicators}. Started {int((time.time() - total_start_time) / 60)} minutes ago.')
+        print(f'>> Processing {file_name}')
         start_time = time.time()
         try:
             with open(f'{jsons_dir}{file_name}') as f:
