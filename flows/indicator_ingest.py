@@ -1,35 +1,48 @@
 import json
+import sys
 import os
 import time
 import requests
 from dask.distributed import Client
-from prefect.executors import DaskExecutor
+from prefect.executors import DaskExecutor, LocalDaskExecutor
 from prefect.utilities.debug import raise_on_exception
 
 tile_v0 = __import__('tile-v0')
 
+DASK_SCHEDULER = os.getenv('WM_DASK_SCHEDULER', '10.65.18.58:8786')  # Dask Dashboard: http://10.65.18.58:8787/status
+ELASTIC_URL = os.getenv('WM_ELASTIC_URL', 'http://10.64.18.99:9200')
+
 total_start_time = time.time()
 with raise_on_exception():
-    executor = DaskExecutor(address='tcp://10.65.18.58:8786') # Dask Dashboard: http://10.65.18.58:8787/status
-    client = Client('10.65.18.58:8786')
-    client.upload_file('tiles_pb2.py')
-    client.upload_file('common.py')
+    if not DASK_SCHEDULER:
+        executor = LocalDaskExecutor()
+    else:
+        executor = DaskExecutor(address=DASK_SCHEDULER)
+        client = Client(DASK_SCHEDULER)
+        client.upload_file('tiles_pb2.py')
+        client.upload_file('common.py')
 
-    root = os.getcwd()
-    jsons_dir = root + '/s3_jsons/'
+    jsons_dir = f'{os.getcwd()}/s3_jsons/'
     indicator_metadata_files = os.listdir(jsons_dir)
     indicator_metadata_files.sort()
-    index = 0
+    num_indicators = len(indicator_metadata_files)
 
-    for file_name in indicator_metadata_files:
-        index += 1
+    for index, file_name in enumerate(indicator_metadata_files):
         print(f'>> Processing {file_name}')
-        print(f'>> Progess {index}/{len(indicator_metadata_files)}. Started {int((time.time() - total_start_time) / 60)} minutes ago.')
+        print(f'>> Progess {index}/{num_indicators}. Started {int((time.time() - total_start_time) / 60)} minutes ago.')
         start_time = time.time()
         try:
-            with open(jsons_dir + file_name) as f:
+            with open(f'{jsons_dir}{file_name}') as f:
                 metadata = json.loads(f.read())
-                state = tile_v0.flow.run(executor=executor, parameters=dict(is_indicator=True, model_id=metadata['id'], run_id='indicator', data_paths=metadata['data_paths']))
+                state = tile_v0.flow.run(
+                    executor=executor,
+                    parameters=dict(
+                        is_indicator=True,
+                        model_id=metadata['id'],
+                        run_id='indicator',
+                        data_paths=metadata['data_paths'],
+                    ),
+                )
                 if state.is_successful():
                     print(f'>> Successfully ingested {metadata["id"]}')
 
@@ -40,11 +53,12 @@ with raise_on_exception():
                     metadata['status'] = 'READY'
 
                     tags = ['DATAMART']
-                    if file_name[:3] == "UAZ" or file_name[:3] == "WDI":
-                        tags.append(file_name[:3])
+                    prefix = file_name[:3]
+                    if prefix == "UAZ" or prefix == "WDI":
+                        tags.append(prefix)
                     metadata['tags'] = tags
 
-                    r = requests.post(f'http://10.64.18.99:9200/data-datacube/_create/{metadata["id"]}', json = metadata)
+                    r = requests.post(f'{ELASTIC_URL}/data-datacube/_create/{metadata["id"]}', json=metadata)
                     r.raise_for_status()
                     print(r.text)
                 else:
