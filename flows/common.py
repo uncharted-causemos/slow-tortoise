@@ -3,9 +3,19 @@ import pandas as pd
 import math
 import boto3
 import json
+import sys
+import os
 
 from flows import tiles_pb2
 
+# Bit of a WTF here, but it is well considered.  Dask will serialize the tiles_pb2.Task *class* since it is passed
+# to workers within a lambda that calls to_proto.  The problem is that pickling a class object can result in the
+# parent *module* object being pickled depending on how its imported, and according to the pickling spec, module
+# objects can't be pickled.  This manifests itself as an error on a Dask worker indicating that it can't serialize the
+# tiles_pb2 module.  To get around this, we need to import tiles_pb2 module directly, instead of through the flow package,
+# which means we need to add the parent directory to the sys path.
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__))))
+import tiles_pb2
 # More details on tile calculations https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames
 # Convert lat, long to tile coord
 # https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames#Python
@@ -140,14 +150,16 @@ def to_proto(row):
 
 # convert given datetime object to monthly epoch timestamp
 def to_normalized_time(date, time_res):
-    if time_res == 'month':
-        return int(datetime.datetime(date.year, date.month, 1).timestamp())
-    elif time_res == 'year':
-        return int(datetime.datetime(date.year, 1, 1).timestamp())
-    elif time_res == 'all':
-        return 0 # just put everything under one timestamp
-    else:
-        raise ValueError('time_res must be \'month\' or \'year\'')
+    def time_in_seconds():
+        if time_res == 'month':
+            return int(datetime.datetime(date.year, date.month, 1).timestamp())
+        elif time_res == 'year':
+            return int(datetime.datetime(date.year, 1, 1).timestamp())
+        elif time_res == 'all':
+            return 0 # just put everything under one timestamp
+        else:
+            raise ValueError('time_res must be \'month\' or \'year\'')
+    return time_in_seconds() * 1000
 
 # Get storage option
 def get_storage_options(target):

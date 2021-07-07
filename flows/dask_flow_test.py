@@ -68,5 +68,5 @@ flow.storage = Docker(
 # For debugging support - local dask cluster needs to run in main otherwise process forking
 # fails.
 if __name__ == "__main__" and LOCAL_RUN:
-    state = flow.run(executor=executor)
+    state = flow.run()
     print(state.result[foo_result].result)
