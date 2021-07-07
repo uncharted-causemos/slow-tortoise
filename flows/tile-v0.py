@@ -248,9 +248,9 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
 def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id) -> [RegionalAggregation]:
     # Copy input df so that original df doesn't get mutated
     print("Example1")
-    row = input_df.loc[0].compute()
-    print(type(row))
-    print(row)
+    # row = input_df.loc[0]
+    # print(type(row))
+    # print(row)
     df = input_df.copy()
     # Ranme columns
     df.columns = df.columns.str.replace('t_sum', 's_sum_t_sum').str.replace('t_mean', 's_sum_t_mean')
@@ -264,13 +264,12 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id) -> 
     df = df[['feature', 'timestamp', 's_sum_t_sum', 's_sum_t_mean', 's_count'] + regions_cols] \
         .groupby(['feature', 'timestamp'] + regions_cols) \
         .agg(['sum'])
-    df.compute()
-    print("Example2")
-    print("Example2")
-    row = df.loc[0].compute()
-    print(row)
-    print("Printing type")
-    print(row)
+    # print("Example2")
+    # print(df.loc[0].compute())
+    # row = df.loc[0].compute()
+    # print(row)
+    # print("Printing type")
+    # print(row)
     # print(type(df.loc[0]['admin2']))
     # for index, row in df.loc[0].iterrows():
     #     print(type(row))
@@ -287,6 +286,7 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id) -> 
         # Merge region columns to single region_id column. eg. ['Ethiopia', 'Afar'] -> ['Ethiopia_Afar']
         save_df['region_id'] = join_region_columns(save_df, level)
 
+        computed_dataframe = save_df.copy()
         # groupby feature and timestamp
         save_df = save_df[['feature', 'timestamp', 'region_id', 's_sum_t_sum', 's_sum_t_mean', 's_count']] \
             .groupby(['feature', 'timestamp']).agg(list)
@@ -295,9 +295,9 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id) -> 
         # Just perform repartition to make sure save io operation runs in parallel since each writing operation is expensive and blocks
         # Set npartitions to same as # of available workers/threads. Increasing partition number beyond the number of the workers doesn't seem to give more performance benefits.
         save_df = save_df.repartition(npartitions = 12)
-        print("Example3")
-        print(save_df.loc[0].compute())
-        computed_dataframe = save_df.copy()
+        # print("Example3")
+        # print(save_df.loc[0].compute())
+
         save_df = save_df.apply(lambda x: save_regional_aggregation(x, dest, model_id, run_id, time_res, region_level=regions_cols[level]),
                       axis=1, meta=(None, 'object'))
         save_df.compute()
