@@ -235,3 +235,37 @@ def extract_region_columns(df):
         result.remove('country')
         result.insert(0, 'country')
     return result
+
+# Save regional timeseries data to csv
+def save_regional_timeseries(df, dest, model_id, run_id, time_res, timeseries_agg_columns, admin_level):
+    admin = ['country', 'admin1', 'admin2', 'admin3']
+    admin_string = admin[admin_level]
+    bucket = dest['bucket']
+    feature = df['feature'].values[0]
+    region_id = df['region_id'].values[0]
+    df = df[['timestamp'] + timeseries_agg_columns]
+    df.to_csv(f's3://{bucket}/{model_id}/{run_id}/{time_res}/{feature}/regional/{admin_string}/timeseries/{region_id}.csv',
+        storage_options=get_storage_options(dest))
+
+# Compute timeseries by region
+def compute_timeseries_by_region(temporal_df, dest, model_id, run_id, time_res, admin_level):
+    timeseries_df = temporal_df.copy()
+
+    regions_cols = extract_region_columns(timeseries_df)
+    level = admin_level
+
+    timeseries_df['region_id'] = join_region_columns(timeseries_df, level)
+    timeseries_aggs = ['min', 'max', 'sum', 'mean', 'count']
+    timeseries_lookup = {
+        ('t_sum', 'min'): 's_min_t_sum', ('t_sum', 'max'): 's_max_t_sum', ('t_sum', 'sum'): 's_sum_t_sum', ('t_sum', 'mean'): 's_mean_t_sum',
+        ('t_mean', 'min'): 's_min_t_mean', ('t_mean', 'max'): 's_max_t_mean', ('t_mean', 'sum'): 's_sum_t_mean', ('t_mean', 'mean'): 's_mean_t_mean', 
+        ('t_mean', 'count'): 's_count_t_mean', ('t_sum', 'count'): 's_count'
+    }
+    timeseries_agg_columns = ['s_min_t_sum', 's_max_t_sum', 's_sum_t_sum', 's_mean_t_sum', 's_min_t_mean', 's_max_t_mean', 's_sum_t_mean', 's_mean_t_mean', 's_count']
+
+    timeseries_df = timeseries_df.groupby(['feature', 'region_id', 'timestamp']).agg({ 't_sum' : timeseries_aggs, 't_mean' : timeseries_aggs })
+    timeseries_df.columns = timeseries_df.columns.to_flat_index()
+    timeseries_df = timeseries_df.rename(columns=timeseries_lookup).reset_index()
+    timeseries_df = timeseries_df.repartition(npartitions = 12).groupby(['feature', 'region_id']).apply(
+        lambda x: save_regional_timeseries(x, dest, model_id, run_id, time_res, timeseries_agg_columns, level), meta=(None, 'object'))
+    timeseries_df.compute()
