@@ -248,7 +248,8 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
 def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id) -> [RegionalAggregation]:
     # Copy input df so that original df doesn't get mutated
     print("Example1")
-    print(input_df.loc[0].compute())
+    row = input_df.loc[0].compute()
+    print(row)
     df = input_df.copy()
     # Ranme columns
     df.columns = df.columns.str.replace('t_sum', 's_sum_t_sum').str.replace('t_mean', 's_sum_t_mean')
@@ -256,13 +257,22 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id) -> 
     df = df.reset_index()
 
     regions_cols = extract_region_columns(df)
+    print(regions_cols)
 
     # Region aggregation at the highest admin level
     df = df[['feature', 'timestamp', 's_sum_t_sum', 's_sum_t_mean', 's_count'] + regions_cols] \
         .groupby(['feature', 'timestamp'] + regions_cols) \
         .agg(['sum'])
+    df.compute()
     print("Example2")
-    print(df.loc[0].compute())
+    row = df.loc[0].compute()
+    print(row)
+    print("Printing type")
+    print(row)
+    # print(type(df.loc[0]['admin2']))
+    # for index, row in df.loc[0].iterrows():
+    #     print(type(row))
+    print("End example 2")
     df.columns = df.columns.droplevel(1)
     df = df.reset_index()
     # persist the result in memory at this point since this df is going to be used multiple times to compute for different regional levels
