@@ -14,7 +14,7 @@ from flows.common import deg2num, ancestor_tiles, filter_by_min_zoom, \
     tile_coord, save_tile, save_timeseries, \
     stats_to_json, to_proto, to_normalized_time, \
     extract_region_columns, join_region_columns, save_regional_aggregation, \
-    output_values_to_json_array, raw_data_to_json
+    output_values_to_json_array, raw_data_to_json, RegionalAggregation
 
 
 
@@ -187,9 +187,24 @@ def subtile_aggregation(df, should_run):
     return subtile_df
 
 @task
-def compute_stats(df, dest, time_res, model_id, run_id):
+def compute_stats(df, dest, time_res, model_id, run_id, filename):
+    print("Compute stats")
+    print(type(df))
+    assist_compute_stats(df, dest, time_res, model_id, run_id, filename)
+
+def assist_compute_stats(df, dest, time_res, model_id, run_id, filename):
     #Compute mean and get new dataframe with mean columns added
+    print("Assist compute stats")
+    print(type(df))
+    print(df.dtypes)
+    print(df)
+    for index, row in df.iterrows():
+        if str(type(row["s_sum_t_sum"])) == "<class 'list'>":
+            print(index)
+            print(row)
+    df = df.astype({'s_sum_t_sum': 'float64', 's_sum_t_mean': 'float64', 's_count': 'float64'})
     stats_df = df.assign(s_mean_t_sum=df['s_sum_t_sum'] / df['s_count'], s_mean_t_mean=df['s_sum_t_mean'] / df['s_count'])
+    print("Passes")
     #Stats aggregation
     stats_aggs = ['min', 'max']
     stats_lookup = {
@@ -199,15 +214,16 @@ def compute_stats(df, dest, time_res, model_id, run_id):
         ('s_mean_t_mean', 'min'): 'min_s_mean_t_mean', ('s_mean_t_mean', 'max'): 'max_s_mean_t_mean'
     }
     stats_agg_columns = ['min_s_sum_t_sum', 'max_s_sum_t_sum', 'min_s_mean_t_sum', 'max_s_mean_t_sum',
-                        'min_s_sum_t_mean', 'max_s_sum_t_mean', 'min_s_mean_t_mean', 'max_s_mean_t_mean']
+                         'min_s_sum_t_mean', 'max_s_sum_t_mean', 'min_s_mean_t_mean', 'max_s_mean_t_mean']
 
     stats_df = stats_df.groupby(['feature']).agg({ 's_sum_t_sum' : stats_aggs, 's_mean_t_sum' : stats_aggs, 's_sum_t_mean' : stats_aggs, 's_mean_t_mean' : stats_aggs })
     stats_df.columns = stats_df.columns.to_flat_index()
     stats_df = stats_df.rename(columns=stats_lookup).reset_index()
     stats_df = stats_df.groupby(['feature']).apply(
-        lambda x: stats_to_json(x[stats_agg_columns], dest, model_id, run_id, x['feature'].values[0], time_res),
+        lambda x: stats_to_json(x[stats_agg_columns], dest, model_id, run_id, x['feature'].values[0], time_res, filename),
         meta=(None, 'object'))
     stats_df.compute()
+    print("Passes2")
 
 @task
 def compute_tiling(df, dest, time_res, model_id, run_id):
@@ -227,9 +243,12 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
         .apply(lambda x: save_tile(to_proto(x), dest, model_id, run_id, x.feature, time_res, x.timestamp), axis=1, meta=(None, 'object'))  # convert each row to protobuf and save
     tiling_df.compute()
 
-@task
-def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
+#TODO: Better nout
+@task(nout=4)
+def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id) -> [RegionalAggregation]:
     # Copy input df so that original df doesn't get mutated
+    print("Example1")
+    print(input_df.loc[0].compute())
     df = input_df.copy()
     # Ranme columns
     df.columns = df.columns.str.replace('t_sum', 's_sum_t_sum').str.replace('t_mean', 's_sum_t_mean')
@@ -242,12 +261,15 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
     df = df[['feature', 'timestamp', 's_sum_t_sum', 's_sum_t_mean', 's_count'] + regions_cols] \
         .groupby(['feature', 'timestamp'] + regions_cols) \
         .agg(['sum'])
+    print("Example2")
+    print(df.loc[0].compute())
     df.columns = df.columns.droplevel(1)
     df = df.reset_index()
     # persist the result in memory at this point since this df is going to be used multiple times to compute for different regional levels
     df = df.persist()
 
     # Compute aggregation and save for all regional levels
+    regional_aggregations = []
     for level in range(len(regions_cols)):
         save_df = df.copy()
         # Merge region columns to single region_id column. eg. ['Ethiopia', 'Afar'] -> ['Ethiopia_Afar']
@@ -261,9 +283,16 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
         # Just perform repartition to make sure save io operation runs in parallel since each writing operation is expensive and blocks
         # Set npartitions to same as # of available workers/threads. Increasing partition number beyond the number of the workers doesn't seem to give more performance benefits.
         save_df = save_df.repartition(npartitions = 12)
+        print("Example3")
+        print(save_df.loc[0].compute())
+        computed_dataframe = save_df.copy()
         save_df = save_df.apply(lambda x: save_regional_aggregation(x, dest, model_id, run_id, time_res, region_level=regions_cols[level]),
                       axis=1, meta=(None, 'object'))
         save_df.compute()
+        print("Computed dataframe")
+        print(type(computed_dataframe))
+        regional_aggregations.append(RegionalAggregation(computed_dataframe, level))
+    return regional_aggregations
 
 @task
 def save_raw_data(df, dest, time_res, model_id, run_id, should_run):
@@ -304,6 +333,14 @@ def update_metadata(elastic_id, summary_values, elastic_url, elastic_index):
     r = requests.post(f'{elastic_url}/{elastic_index}/_update/{elastic_id}', json = data)
     print(r.text)
     r.raise_for_status()
+
+@task
+def compute_regional_aggregation_stats(regional_aggregations : [RegionalAggregation], timeframe : str) -> None:
+    print("Regional aggregations")
+    print(regional_aggregations)
+    def stats(regional_aggregation):
+        return assist_compute_stats(regional_aggregation.dataframe, dest, timeframe, model_id, run_id, f'regional_level_{regional_aggregation.level}_stats')
+    [stats(regional_aggregation) for regional_aggregation in regional_aggregations]
 
 ###########################################################################
 
@@ -380,19 +417,23 @@ with Flow('datacube-ingest-v0.1') as flow:
     # ==== Run aggregations based on monthly time resolution =====
     monthly_data = temporal_aggregation(df, 'month', compute_monthly)
     month_ts_done = compute_timeseries(monthly_data, dest, 'month', model_id, run_id)
-    compute_regional_aggregation(monthly_data, dest, 'month', model_id, run_id)
+    monthly_regional_aggregations = compute_regional_aggregation(monthly_data, dest, 'month', model_id, run_id)
+    print("Regional Aggregations")
+    print(monthly_regional_aggregations)
 
     monthly_spatial_data = subtile_aggregation(monthly_data, compute_tiles, upstream_tasks=[month_ts_done])
-    month_stats_done = compute_stats(monthly_spatial_data, dest, 'month', model_id, run_id)
+    compute_regional_aggregation_stats(monthly_regional_aggregations, 'month')
+    month_stats_done = compute_stats(monthly_spatial_data, dest, 'month', model_id, run_id, "stats")
     month_done = compute_tiling(monthly_spatial_data, dest, 'month', model_id, run_id, upstream_tasks=[month_stats_done])
 
     # ==== Run aggregations based on annual time resolution =====
     annual_data = temporal_aggregation(df, 'year', compute_annual, upstream_tasks=[month_done])
     year_ts_done = compute_timeseries(annual_data, dest, 'year', model_id, run_id)
-    compute_regional_aggregation(annual_data, dest, 'year', model_id, run_id)
+    annual_regional_aggregations = compute_regional_aggregation(annual_data, dest, 'year', model_id, run_id)
+    compute_regional_aggregation_stats(annual_regional_aggregations, 'year')
 
     annual_spatial_data = subtile_aggregation(annual_data, compute_tiles, upstream_tasks=[year_ts_done])
-    year_stats_done = compute_stats(annual_spatial_data, dest, 'year', model_id, run_id)
+    year_stats_done = compute_stats(annual_spatial_data, dest, 'year', model_id, run_id, "stats")
     year_done = compute_tiling(annual_spatial_data, dest, 'year', model_id, run_id, upstream_tasks=[year_stats_done])
 
     # ==== Generate a single aggregate value per feature =====
