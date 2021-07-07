@@ -249,6 +249,7 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id) -> 
     # Copy input df so that original df doesn't get mutated
     print("Example1")
     row = input_df.loc[0].compute()
+    print(type(row))
     print(row)
     df = input_df.copy()
     # Ranme columns
@@ -264,6 +265,7 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id) -> 
         .groupby(['feature', 'timestamp'] + regions_cols) \
         .agg(['sum'])
     df.compute()
+    print("Example2")
     print("Example2")
     row = df.loc[0].compute()
     print(row)
