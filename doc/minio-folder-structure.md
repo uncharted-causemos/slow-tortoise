@@ -13,8 +13,7 @@
         \- regional
           \- {country | admin1 | admin2 | admin3}
             \- timeseries
-              \- {region id}
-                \- {agg-func}.json: [{“timestamp”: 1200, “value”: 5}, ...]
+              \- {region id}.csv  [{“timestamp”: 1200, {agg-func-1}: 5, {agg-func-2}: 2 ...}, ...]
             \- aggs
               \- {timestamp}
                 \- {agg-func}.json: [{“id”: {region-id}, “value”: 3}, ...]
