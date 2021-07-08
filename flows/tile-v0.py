@@ -111,11 +111,10 @@ def download_data(source, data_paths, is_indicator):
     return df
 
 @task(log_stdout=True)
-def configure_pipeline(dest, indicator_bucket, model_bucket, model_id, run_id, compute_tiles, is_indicator) -> Tuple[dict, str, str, bool, bool, bool, bool, bool]:
+def configure_pipeline(dest, indicator_bucket, model_bucket, compute_tiles, is_indicator) -> Tuple[dict, str, bool, bool, bool, bool, bool]:
     if is_indicator:
         dest['bucket'] = indicator_bucket
         elastic_index = ELASTIC_INDICATOR_INDEX
-        elastic_id = model_id
         compute_raw = True
         compute_monthly = True
         compute_annual = True
@@ -124,13 +123,12 @@ def configure_pipeline(dest, indicator_bucket, model_bucket, model_id, run_id, c
     else:
         dest['bucket'] = model_bucket
         elastic_index = ELASTIC_MODEL_RUN_INDEX
-        elastic_id = run_id
         compute_raw = False
         compute_monthly = True
         compute_annual = True
         compute_summary = True
 
-    return (dest, elastic_index, elastic_id, compute_raw, compute_monthly, compute_annual, compute_summary, compute_tiles)
+    return (dest, elastic_index, compute_raw, compute_monthly, compute_annual, compute_summary, compute_tiles)
 
 @task(skip_on_upstream_skip=False)
 def temporal_aggregation(df, time_res, should_run):
@@ -294,7 +292,7 @@ def compute_output_summary(df):
     return summary
 
 @task(skip_on_upstream_skip=False, log_stdout=True)
-def update_metadata(elastic_id, summary_values, elastic_url, elastic_index):
+def update_metadata(doc_ids, summary_values, elastic_url, elastic_index):
     data = {
         'doc' : {
             'status': 'READY'
@@ -303,9 +301,10 @@ def update_metadata(elastic_id, summary_values, elastic_url, elastic_index):
     if summary_values is not None:
         data['doc']['output_agg_values'] = summary_values
 
-    r = requests.post(f'{elastic_url}/{elastic_index}/_update/{elastic_id}', json = data)
-    print(r.text)
-    r.raise_for_status()
+    for doc_id in doc_ids:
+        r = requests.post(f'{elastic_url}/{elastic_index}/_update/{doc_id}', json = data)
+        print(r.text)
+        r.raise_for_status()
 
 @task(log_stdout=True)
 def remove_null_region_columns(df):
@@ -344,6 +343,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     # Parameters
     model_id = Parameter('model_id', default='geo-test-data')
     run_id = Parameter('run_id', default='test-run')
+    doc_ids = Parameter('data_paths', default=[])
     data_paths = Parameter('data_paths', default=['s3://test/geo-test-data.parquet'])
     compute_tiles = Parameter('compute_tiles', default=False)
     is_indicator = Parameter('is_indicator', default=False)
@@ -375,7 +375,6 @@ with Flow('datacube-ingest-v0.1') as flow:
     (
         dest,
         elastic_index,
-        elastic_id,
         compute_raw,
         compute_monthly,
         compute_annual,
@@ -412,7 +411,7 @@ with Flow('datacube-ingest-v0.1') as flow:
 
     # ==== Update document in ES setting the status to READY =====
     if ELASTIC_URL:
-        update_metadata(elastic_id, summary_values, elastic_url, elastic_index)
+        update_metadata(doc_ids, summary_values, elastic_url, elastic_index)
 
     ## TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful.
     ## Then same data can be used for producing tiles and also used for doing regional aggregation and other computation in other tasks.
