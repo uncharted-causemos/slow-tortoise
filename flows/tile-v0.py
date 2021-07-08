@@ -1,5 +1,5 @@
 from dask import delayed
-from typing import Tuple
+from typing import Tuple, List
 import dask.dataframe as dd
 import dask.bytes as db
 import pandas as pd
@@ -231,9 +231,8 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
         .apply(lambda x: save_tile(to_proto(x), dest, model_id, run_id, x.feature, time_res, x.timestamp), axis=1, meta=(None, 'object'))  # convert each row to protobuf and save
     tiling_df.compute()
 
-#TODO: Better nout
-@task(nout=4)
-def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id) -> [RegionalAggregation]:
+@task
+def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id) -> List[RegionalAggregation]:
     # Copy input df so that original df doesn't get mutated
     df = input_df.copy()
     # Ranme columns
