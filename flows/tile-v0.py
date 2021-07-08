@@ -347,7 +347,7 @@ def update_metadata(elastic_id, summary_values, elastic_url, elastic_index):
     r.raise_for_status()
 
 @task
-def compute_regional_aggregation_stats(regional_aggregations : [RegionalAggregation], timeframe : str) -> None:
+def compute_regional_aggregation_stats(regional_aggregations : [RegionalAggregation], dest, timeframe, model_id, run_id) -> None:
     print("Regional aggregations")
     print(regional_aggregations)
     def stats(regional_aggregation):
@@ -434,7 +434,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     print(monthly_regional_aggregations)
 
     monthly_spatial_data = subtile_aggregation(monthly_data, compute_tiles, upstream_tasks=[month_ts_done])
-    compute_regional_aggregation_stats(monthly_regional_aggregations, 'month')
+    compute_regional_aggregation_stats(monthly_regional_aggregations, dest, 'month', model_id, run_id)
     month_stats_done = compute_stats(monthly_spatial_data, dest, 'month', model_id, run_id, "stats")
     month_done = compute_tiling(monthly_spatial_data, dest, 'month', model_id, run_id, upstream_tasks=[month_stats_done])
 
@@ -442,7 +442,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     annual_data = temporal_aggregation(df, 'year', compute_annual, upstream_tasks=[month_done])
     year_ts_done = compute_timeseries(annual_data, dest, 'year', model_id, run_id)
     annual_regional_aggregations = compute_regional_aggregation(annual_data, dest, 'year', model_id, run_id)
-    compute_regional_aggregation_stats(annual_regional_aggregations, 'year')
+    compute_regional_aggregation_stats(annual_regional_aggregations, dest, 'year', model_id, run_id)
 
     annual_spatial_data = subtile_aggregation(annual_data, compute_tiles, upstream_tasks=[year_ts_done])
     year_stats_done = compute_stats(annual_spatial_data, dest, 'year', model_id, run_id, "stats")
