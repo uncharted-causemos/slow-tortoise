@@ -406,7 +406,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     # ==== Run aggregations based on annual time resolution =====
     annual_data = temporal_aggregation(df, 'year', compute_annual, upstream_tasks=[month_done, month_ts_done])
     year_ts_done = compute_timeseries(annual_data, dest, 'year', model_id, run_id)
-    compute_regional_timeseries(monthly_data, dest, model_id, run_id, 'year')
+    compute_regional_timeseries(annual_data, dest, model_id, run_id, 'year')
     compute_regional_aggregation(annual_data, dest, 'year', model_id, run_id)
 
     annual_spatial_data = subtile_aggregation(annual_data, compute_tiles, upstream_tasks=[year_ts_done])
