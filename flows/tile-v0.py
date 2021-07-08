@@ -49,7 +49,7 @@ S3_DEST_URL = os.getenv("WM_S3_DEST_URL", "http://10.65.18.9:9000")
 S3_DEFAULT_INDICATOR_BUCKET = os.getenv("WM_S3_DEFAULT_INDICATOR_BUCKET", 'indicators')
 
 # default model s3 write bucket
-S3_DEFAULT_MODEL_BUCKET = os.getenv("WM_S3_DEFAULT_INDICATOR_BUCKET", 'models')
+S3_DEFAULT_MODEL_BUCKET = os.getenv("WM_S3_DEFAULT_MODEL_BUCKET", 'models')
 
 # This determines the number of bins(subtiles) per tile. Eg. Each tile has 4^6=4096 grid cells (subtiles) when LEVEL_DIFF is 6
 # Tile (z, x, y) will have a sutbile where its zoom level is z + LEVEL_DIFF
@@ -71,7 +71,7 @@ MAX_ZOOM = MAX_SUBTILE_PRECISION - LEVEL_DIFF
 ELASTIC_MODEL_RUN_INDEX = 'data-model-run'
 ELASTIC_INDICATOR_INDEX = 'data-datacube'
 
-@task
+@task(log_stdout=True)
 def download_data(source, data_paths, is_indicator):
     df = None
     # if source is from s3 bucket
@@ -110,7 +110,7 @@ def download_data(source, data_paths, is_indicator):
     df.dtypes
     return df
 
-@task
+@task(log_stdout=True)
 def configure_pipeline(dest, indicator_bucket, model_bucket, model_id, run_id, compute_tiles, is_indicator) -> Tuple[dict, str, str, bool, bool, bool, bool, bool]:
     if is_indicator:
         dest['bucket'] = indicator_bucket
@@ -139,16 +139,18 @@ def temporal_aggregation(df, time_res, should_run):
 
     columns = df.columns.tolist()
     columns.remove('value')
+
     # Monthly temporal aggregation (compute for both sum and mean)
-    t = dd.to_datetime(df['timestamp'], unit='s').apply(lambda x: to_normalized_time(x, time_res), meta=(None, 'int'))
+    t = dd.to_datetime(df['timestamp'], unit='ms').apply(lambda x: to_normalized_time(x, time_res), meta=(None, 'int'))
     temporal_df = df.assign(timestamp=t) \
                     .groupby(columns)['value'].agg(['sum', 'mean'])
+
     # Rename agg column names
     temporal_df.columns = temporal_df.columns.str.replace('sum', 't_sum').str.replace('mean', 't_mean')
     temporal_df = temporal_df.reset_index()
     return temporal_df
 
-@task
+@task(log_stdout=True)
 def compute_timeseries(df, dest, time_res, model_id, run_id):
     # Timeseries aggregation
     timeseries_aggs = ['min', 'max', 'sum', 'mean']
@@ -166,7 +168,7 @@ def compute_timeseries(df, dest, time_res, model_id, run_id):
         meta=(None, 'object'))
     timeseries_df.compute()
 
-@task
+@task(log_stdout=True)
 def subtile_aggregation(df, should_run):
     if should_run is False:
         raise SKIP('Tiling was not requested')
@@ -186,7 +188,7 @@ def subtile_aggregation(df, should_run):
     subtile_df = subtile_df.rename(columns=spatial_lookup).drop(columns='s_count_t_sum').reset_index()
     return subtile_df
 
-@task
+@task(log_stdout=True)
 def compute_stats(df, dest, time_res, model_id, run_id, filename):
     assist_compute_stats(df, dest, time_res, model_id, run_id, filename)
 
@@ -213,7 +215,7 @@ def assist_compute_stats(df, dest, time_res, model_id, run_id, filename):
         meta=(None, 'object'))
     stats_df.compute()
 
-@task
+@task(log_stdout=True)
 def compute_tiling(df, dest, time_res, model_id, run_id):
     # Get all acestor subtiles and explode
     # TODO: Instead of exploding, try reducing down by processing from higest zoom levels to lowest zoom levels one by one level.
@@ -231,7 +233,7 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
         .apply(lambda x: save_tile(to_proto(x), dest, model_id, run_id, x.feature, time_res, x.timestamp), axis=1, meta=(None, 'object'))  # convert each row to protobuf and save
     tiling_df.compute()
 
-@task
+@task(log_stdout=True)
 def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id) -> List[RegionalAggregation]:
     # Copy input df so that original df doesn't get mutated
     df = input_df.copy()
@@ -259,9 +261,9 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id) -> 
         save_df['region_id'] = join_region_columns(save_df, level)
 
         computed_dataframe = save_df.copy()
-        # groupby feature and timestamp
-        save_df = save_df[['feature', 'timestamp', 'region_id', 's_sum_t_sum', 's_sum_t_mean', 's_count']] \
-            .groupby(['feature', 'timestamp']).agg(list)
+        desired_columns = ['feature', 'timestamp', 'region_id', 's_sum_t_sum', 's_sum_t_mean', 's_count']
+        save_df = save_df[desired_columns].groupby(['feature', 'timestamp']).agg(list)
+
         save_df = save_df.reset_index()
         # At this point data is already reduced to reasonably small size due to prior admin aggregation.
         # Just perform repartition to make sure save io operation runs in parallel since each writing operation is expensive and blocks
@@ -273,7 +275,7 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id) -> 
         regional_aggregations.append(RegionalAggregation(computed_dataframe, level))
     return regional_aggregations
 
-@task
+@task(log_stdout=True)
 def save_raw_data(df, dest, time_res, model_id, run_id, should_run):
     if should_run is False:
         raise SKIP('Saving raw data was not requested')
@@ -285,7 +287,7 @@ def save_raw_data(df, dest, time_res, model_id, run_id, should_run):
         meta=(None, 'object'))
     raw_df.compute()
 
-@task
+@task(log_stdout=True)
 def compute_output_summary(df):
     # Timeseries aggregation
     timeseries_aggs = ['mean']
@@ -318,6 +320,13 @@ def compute_regional_aggregation_stats(regional_aggregations : [RegionalAggregat
     def write_stats(regional_aggregation):
         return assist_compute_stats(regional_aggregation.dataframe, dest, timeframe, model_id, run_id, f'regional_level_{regional_aggregation.level}_stats')
     [write_stats(regional_aggregation) for regional_aggregation in regional_aggregations]
+
+@task(log_stdout=True)
+def remove_null_region_columns(df):
+    region_cols = extract_region_columns(df)
+    cols_to_drop = set(df.columns[df.isnull().all()])
+    region_cols_to_drop = list(cols_to_drop.intersection(region_cols))
+    return df.drop(columns=region_cols_to_drop)
 
 ###########################################################################
 
@@ -374,7 +383,7 @@ with Flow('datacube-ingest-v0.1') as flow:
         'secret': 'foobarbaz'
     })
 
-    df = download_data(source, data_paths, is_indicator)
+    raw_df = download_data(source, data_paths, is_indicator)
 
     # ==== Set parameters that determine which tasks should run based on the type of data we're ingesting ====
     (
@@ -389,7 +398,9 @@ with Flow('datacube-ingest-v0.1') as flow:
     ) = configure_pipeline(dest, indicator_bucket, model_bucket, model_id, run_id, compute_tiles, is_indicator)
 
     # ==== Save raw data =====
-    save_raw_data(df, dest, 'raw', model_id, 'indicator', compute_raw)
+    save_raw_data(raw_df, dest, 'raw', model_id, 'indicator', compute_raw)
+
+    df = remove_null_region_columns(raw_df)
 
     # ==== Run aggregations based on monthly time resolution =====
     monthly_data = temporal_aggregation(df, 'month', compute_monthly)
@@ -402,7 +413,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     month_done = compute_tiling(monthly_spatial_data, dest, 'month', model_id, run_id, upstream_tasks=[month_stats_done])
 
     # ==== Run aggregations based on annual time resolution =====
-    annual_data = temporal_aggregation(df, 'year', compute_annual, upstream_tasks=[month_done])
+    annual_data = temporal_aggregation(df, 'year', compute_annual, upstream_tasks=[month_done, month_ts_done])
     year_ts_done = compute_timeseries(annual_data, dest, 'year', model_id, run_id)
     annual_regional_aggregations = compute_regional_aggregation(annual_data, dest, 'year', model_id, run_id)
     compute_regional_aggregation_stats(annual_regional_aggregations, dest, 'year', model_id, run_id)
@@ -412,7 +423,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     year_done = compute_tiling(annual_spatial_data, dest, 'year', model_id, run_id, upstream_tasks=[year_stats_done])
 
     # ==== Generate a single aggregate value per feature =====
-    summary_data = temporal_aggregation(df, 'all', compute_summary, upstream_tasks=[year_done])
+    summary_data = temporal_aggregation(df, 'all', compute_summary, upstream_tasks=[year_done, year_ts_done])
     summary_values = compute_output_summary(summary_data)
 
     # ==== Update document in ES setting the status to READY =====
