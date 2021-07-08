@@ -188,23 +188,12 @@ def subtile_aggregation(df, should_run):
 
 @task
 def compute_stats(df, dest, time_res, model_id, run_id, filename):
-    print("Compute stats")
-    print(type(df))
     assist_compute_stats(df, dest, time_res, model_id, run_id, filename)
 
 def assist_compute_stats(df, dest, time_res, model_id, run_id, filename):
     #Compute mean and get new dataframe with mean columns added
-    print("Assist compute stats")
-    print(type(df))
-    print(df.dtypes)
-    print(df)
-    for index, row in df.iterrows():
-        if str(type(row["s_sum_t_sum"])) == "<class 'list'>":
-            print(index)
-            print(row)
     df = df.astype({'s_sum_t_sum': 'float64', 's_sum_t_mean': 'float64', 's_count': 'float64'})
     stats_df = df.assign(s_mean_t_sum=df['s_sum_t_sum'] / df['s_count'], s_mean_t_mean=df['s_sum_t_mean'] / df['s_count'])
-    print("Passes")
     #Stats aggregation
     stats_aggs = ['min', 'max']
     stats_lookup = {
@@ -223,7 +212,6 @@ def assist_compute_stats(df, dest, time_res, model_id, run_id, filename):
         lambda x: stats_to_json(x[stats_agg_columns], dest, model_id, run_id, x['feature'].values[0], time_res, filename),
         meta=(None, 'object'))
     stats_df.compute()
-    print("Passes2")
 
 @task
 def compute_tiling(df, dest, time_res, model_id, run_id):
@@ -247,10 +235,6 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
 @task(nout=4)
 def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id) -> [RegionalAggregation]:
     # Copy input df so that original df doesn't get mutated
-    print("Example1")
-    # row = input_df.loc[0]
-    # print(type(row))
-    # print(row)
     df = input_df.copy()
     # Ranme columns
     df.columns = df.columns.str.replace('t_sum', 's_sum_t_sum').str.replace('t_mean', 's_sum_t_mean')
@@ -258,22 +242,11 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id) -> 
     df = df.reset_index()
 
     regions_cols = extract_region_columns(df)
-    print(regions_cols)
 
     # Region aggregation at the highest admin level
     df = df[['feature', 'timestamp', 's_sum_t_sum', 's_sum_t_mean', 's_count'] + regions_cols] \
         .groupby(['feature', 'timestamp'] + regions_cols) \
         .agg(['sum'])
-    # print("Example2")
-    # print(df.loc[0].compute())
-    # row = df.loc[0].compute()
-    # print(row)
-    # print("Printing type")
-    # print(row)
-    # print(type(df.loc[0]['admin2']))
-    # for index, row in df.loc[0].iterrows():
-    #     print(type(row))
-    print("End example 2")
     df.columns = df.columns.droplevel(1)
     df = df.reset_index()
     # persist the result in memory at this point since this df is going to be used multiple times to compute for different regional levels
@@ -295,14 +268,10 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id) -> 
         # Just perform repartition to make sure save io operation runs in parallel since each writing operation is expensive and blocks
         # Set npartitions to same as # of available workers/threads. Increasing partition number beyond the number of the workers doesn't seem to give more performance benefits.
         save_df = save_df.repartition(npartitions = 12)
-        # print("Example3")
-        # print(save_df.loc[0].compute())
 
         save_df = save_df.apply(lambda x: save_regional_aggregation(x, dest, model_id, run_id, time_res, region_level=regions_cols[level]),
                       axis=1, meta=(None, 'object'))
         save_df.compute()
-        print("Computed dataframe")
-        print(type(computed_dataframe))
         regional_aggregations.append(RegionalAggregation(computed_dataframe, level))
     return regional_aggregations
 
@@ -348,8 +317,6 @@ def update_metadata(elastic_id, summary_values, elastic_url, elastic_index):
 
 @task
 def compute_regional_aggregation_stats(regional_aggregations : [RegionalAggregation], dest, timeframe, model_id, run_id) -> None:
-    print("Regional aggregations")
-    print(regional_aggregations)
     def stats(regional_aggregation):
         return assist_compute_stats(regional_aggregation.dataframe, dest, timeframe, model_id, run_id, f'regional_level_{regional_aggregation.level}_stats')
     [stats(regional_aggregation) for regional_aggregation in regional_aggregations]
@@ -430,8 +397,6 @@ with Flow('datacube-ingest-v0.1') as flow:
     monthly_data = temporal_aggregation(df, 'month', compute_monthly)
     month_ts_done = compute_timeseries(monthly_data, dest, 'month', model_id, run_id)
     monthly_regional_aggregations = compute_regional_aggregation(monthly_data, dest, 'month', model_id, run_id)
-    print("Regional Aggregations")
-    print(monthly_regional_aggregations)
 
     monthly_spatial_data = subtile_aggregation(monthly_data, compute_tiles, upstream_tasks=[month_ts_done])
     compute_regional_aggregation_stats(monthly_regional_aggregations, dest, 'month', model_id, run_id)
