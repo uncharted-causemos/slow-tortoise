@@ -267,7 +267,6 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id) -> 
         # Just perform repartition to make sure save io operation runs in parallel since each writing operation is expensive and blocks
         # Set npartitions to same as # of available workers/threads. Increasing partition number beyond the number of the workers doesn't seem to give more performance benefits.
         save_df = save_df.repartition(npartitions = 12)
-
         save_df = save_df.apply(lambda x: save_regional_aggregation(x, dest, model_id, run_id, time_res, region_level=regions_cols[level]),
                       axis=1, meta=(None, 'object'))
         save_df.compute()
@@ -315,10 +314,10 @@ def update_metadata(elastic_id, summary_values, elastic_url, elastic_index):
     r.raise_for_status()
 
 @task
-def compute_regional_aggregation_stats(regional_aggregations : [RegionalAggregation], dest, timeframe, model_id, run_id) -> None:
-    def stats(regional_aggregation):
+def compute_regional_aggregation_stats(regional_aggregations : [RegionalAggregation], dest, timeframe, model_id, run_id):
+    def write_stats(regional_aggregation):
         return assist_compute_stats(regional_aggregation.dataframe, dest, timeframe, model_id, run_id, f'regional_level_{regional_aggregation.level}_stats')
-    [stats(regional_aggregation) for regional_aggregation in regional_aggregations]
+    [write_stats(regional_aggregation) for regional_aggregation in regional_aggregations]
 
 ###########################################################################
 
