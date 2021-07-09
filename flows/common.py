@@ -245,7 +245,7 @@ def save_regional_timeseries(df, dest, model_id, run_id, time_res, timeseries_ag
     region_id = df['region_id'].values[0]
     df = df[['timestamp'] + timeseries_agg_columns]
     df.to_csv(f's3://{bucket}/{model_id}/{run_id}/{time_res}/{feature}/regional/{region_level}/timeseries/{region_id}.csv',
-        storage_options=get_storage_options(dest))
+        storage_options=get_storage_options(dest), index=False)
 
 # Compute timeseries by region
 def compute_timeseries_by_region(temporal_df, dest, model_id, run_id, time_res, region_level):
