@@ -269,8 +269,9 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
 
 @task(log_stdout=True)
 def compute_regional_timeseries(df, dest, model_id, run_id, time_res):
-    for admin_level in range(4):
-        compute_timeseries_by_region(df, dest, model_id, run_id, time_res, admin_level)
+    regions_cols = extract_region_columns(df)
+    for region_level in regions_cols:
+        compute_timeseries_by_region(df, dest, model_id, run_id, time_res, region_level)
 
 @task(log_stdout=True)
 def save_raw_data(df, dest, time_res, model_id, run_id, should_run):
