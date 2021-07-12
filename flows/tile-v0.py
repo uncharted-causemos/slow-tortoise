@@ -1,5 +1,5 @@
 from dask import delayed
-from typing import Tuple
+from typing import Tuple, List
 import dask.dataframe as dd
 import dask.bytes as db
 import pandas as pd
@@ -14,7 +14,8 @@ from flows.common import deg2num, ancestor_tiles, filter_by_min_zoom, \
     tile_coord, save_tile, save_timeseries, \
     stats_to_json, to_proto, to_normalized_time, \
     extract_region_columns, join_region_columns, save_regional_aggregation, \
-    output_values_to_json_array, raw_data_to_json, compute_timeseries_by_region
+    output_values_to_json_array, raw_data_to_json, compute_timeseries_by_region, \
+    RegionalAggregation
 
 
 
@@ -111,11 +112,10 @@ def download_data(source, data_paths, is_indicator):
     return df
 
 @task(log_stdout=True)
-def configure_pipeline(dest, indicator_bucket, model_bucket, model_id, run_id, compute_tiles, is_indicator) -> Tuple[dict, str, str, bool, bool, bool, bool, bool]:
+def configure_pipeline(dest, indicator_bucket, model_bucket, compute_tiles, is_indicator) -> Tuple[dict, str, bool, bool, bool, bool, bool]:
     if is_indicator:
         dest['bucket'] = indicator_bucket
         elastic_index = ELASTIC_INDICATOR_INDEX
-        elastic_id = model_id
         compute_raw = True
         compute_monthly = True
         compute_annual = True
@@ -124,13 +124,12 @@ def configure_pipeline(dest, indicator_bucket, model_bucket, model_id, run_id, c
     else:
         dest['bucket'] = model_bucket
         elastic_index = ELASTIC_MODEL_RUN_INDEX
-        elastic_id = run_id
         compute_raw = False
         compute_monthly = True
         compute_annual = True
         compute_summary = True
 
-    return (dest, elastic_index, elastic_id, compute_raw, compute_monthly, compute_annual, compute_summary, compute_tiles)
+    return (dest, elastic_index, compute_raw, compute_monthly, compute_annual, compute_summary, compute_tiles)
 
 @task(skip_on_upstream_skip=False)
 def temporal_aggregation(df, time_res, should_run):
@@ -189,7 +188,10 @@ def subtile_aggregation(df, should_run):
     return subtile_df
 
 @task(log_stdout=True)
-def compute_stats(df, dest, time_res, model_id, run_id):
+def compute_stats(df, dest, time_res, model_id, run_id, filename):
+    assist_compute_stats(df, dest, time_res, model_id, run_id, filename)
+
+def assist_compute_stats(df, dest, time_res, model_id, run_id, filename):
     #Compute mean and get new dataframe with mean columns added
     stats_df = df.assign(s_mean_t_sum=df['s_sum_t_sum'] / df['s_count'], s_mean_t_mean=df['s_sum_t_mean'] / df['s_count'])
     #Stats aggregation
@@ -201,13 +203,13 @@ def compute_stats(df, dest, time_res, model_id, run_id):
         ('s_mean_t_mean', 'min'): 'min_s_mean_t_mean', ('s_mean_t_mean', 'max'): 'max_s_mean_t_mean'
     }
     stats_agg_columns = ['min_s_sum_t_sum', 'max_s_sum_t_sum', 'min_s_mean_t_sum', 'max_s_mean_t_sum',
-                        'min_s_sum_t_mean', 'max_s_sum_t_mean', 'min_s_mean_t_mean', 'max_s_mean_t_mean']
+                         'min_s_sum_t_mean', 'max_s_sum_t_mean', 'min_s_mean_t_mean', 'max_s_mean_t_mean']
 
     stats_df = stats_df.groupby(['feature']).agg({ 's_sum_t_sum' : stats_aggs, 's_mean_t_sum' : stats_aggs, 's_sum_t_mean' : stats_aggs, 's_mean_t_mean' : stats_aggs })
     stats_df.columns = stats_df.columns.to_flat_index()
     stats_df = stats_df.rename(columns=stats_lookup).reset_index()
     stats_df = stats_df.groupby(['feature']).apply(
-        lambda x: stats_to_json(x[stats_agg_columns], dest, model_id, run_id, x['feature'].values[0], time_res),
+        lambda x: stats_to_json(x[stats_agg_columns], dest, model_id, run_id, x['feature'].values[0], time_res, filename),
         meta=(None, 'object'))
     stats_df.compute()
 
@@ -230,7 +232,7 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
     tiling_df.compute()
 
 @task(log_stdout=True)
-def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
+def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id) -> List[RegionalAggregation]:
     # Copy input df so that original df doesn't get mutated
     df = input_df.copy()
     # Ranme columns
@@ -250,11 +252,13 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
     df = df.persist()
 
     # Compute aggregation and save for all regional levels
+    regional_aggregations = []
     for level in range(len(regions_cols)):
         save_df = df.copy()
         # Merge region columns to single region_id column. eg. ['Ethiopia', 'Afar'] -> ['Ethiopia_Afar']
         save_df['region_id'] = join_region_columns(save_df, level)
 
+        computed_dataframe = save_df.copy()
         desired_columns = ['feature', 'timestamp', 'region_id', 's_sum_t_sum', 's_sum_t_mean', 's_count']
         save_df = save_df[desired_columns].groupby(['feature', 'timestamp']).agg(list)
 
@@ -266,6 +270,8 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
         save_df = save_df.apply(lambda x: save_regional_aggregation(x, dest, model_id, run_id, time_res, region_level=regions_cols[level]),
                       axis=1, meta=(None, 'object'))
         save_df.compute()
+        regional_aggregations.append(RegionalAggregation(computed_dataframe, level))
+    return regional_aggregations
 
 @task(log_stdout=True)
 def compute_regional_timeseries(df, dest, model_id, run_id, time_res):
@@ -300,7 +306,7 @@ def compute_output_summary(df):
     return summary
 
 @task(skip_on_upstream_skip=False, log_stdout=True)
-def update_metadata(elastic_id, summary_values, elastic_url, elastic_index):
+def update_metadata(doc_ids, summary_values, elastic_url, elastic_index):
     data = {
         'doc' : {
             'status': 'READY'
@@ -309,9 +315,15 @@ def update_metadata(elastic_id, summary_values, elastic_url, elastic_index):
     if summary_values is not None:
         data['doc']['output_agg_values'] = summary_values
 
-    r = requests.post(f'{elastic_url}/{elastic_index}/_update/{elastic_id}', json = data)
-    print(r.text)
-    r.raise_for_status()
+    for doc_id in doc_ids:
+        r = requests.post(f'{elastic_url}/{elastic_index}/_update/{doc_id}', json = data)
+        print(r.text)
+        r.raise_for_status()
+
+@task
+def compute_regional_aggregation_stats(regional_aggregations : [RegionalAggregation], dest, timeframe, model_id, run_id):
+    for regional_aggregation in regional_aggregations:
+        assist_compute_stats(regional_aggregation.dataframe, dest, timeframe, model_id, run_id, f'regional_level_{regional_aggregation.level}_stats')
 
 @task(log_stdout=True)
 def remove_null_region_columns(df):
@@ -350,6 +362,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     # Parameters
     model_id = Parameter('model_id', default='geo-test-data')
     run_id = Parameter('run_id', default='test-run')
+    doc_ids = Parameter('data_paths', default=[])
     data_paths = Parameter('data_paths', default=['s3://test/geo-test-data.parquet'])
     compute_tiles = Parameter('compute_tiles', default=False)
     is_indicator = Parameter('is_indicator', default=False)
@@ -381,13 +394,12 @@ with Flow('datacube-ingest-v0.1') as flow:
     (
         dest,
         elastic_index,
-        elastic_id,
         compute_raw,
         compute_monthly,
         compute_annual,
         compute_summary,
         compute_tiles,
-    ) = configure_pipeline(dest, indicator_bucket, model_bucket, model_id, run_id, compute_tiles, is_indicator)
+    ) = configure_pipeline(dest, indicator_bucket, model_bucket, compute_tiles, is_indicator)
 
     # ==== Save raw data =====
     save_raw_data(raw_df, dest, 'raw', model_id, 'indicator', compute_raw)
@@ -398,20 +410,22 @@ with Flow('datacube-ingest-v0.1') as flow:
     monthly_data = temporal_aggregation(df, 'month', compute_monthly)
     month_ts_done = compute_timeseries(monthly_data, dest, 'month', model_id, run_id)
     compute_regional_timeseries(monthly_data, dest, model_id, run_id, 'month')
-    compute_regional_aggregation(monthly_data, dest, 'month', model_id, run_id)
+    monthly_regional_aggregations = compute_regional_aggregation(monthly_data, dest, 'month', model_id, run_id)
+    compute_regional_aggregation_stats(monthly_regional_aggregations, dest, 'month', model_id, run_id)
 
     monthly_spatial_data = subtile_aggregation(monthly_data, compute_tiles, upstream_tasks=[month_ts_done])
-    month_stats_done = compute_stats(monthly_spatial_data, dest, 'month', model_id, run_id)
+    month_stats_done = compute_stats(monthly_spatial_data, dest, 'month', model_id, run_id, "stats")
     month_done = compute_tiling(monthly_spatial_data, dest, 'month', model_id, run_id, upstream_tasks=[month_stats_done])
 
     # ==== Run aggregations based on annual time resolution =====
     annual_data = temporal_aggregation(df, 'year', compute_annual, upstream_tasks=[month_done, month_ts_done])
     year_ts_done = compute_timeseries(annual_data, dest, 'year', model_id, run_id)
     compute_regional_timeseries(annual_data, dest, model_id, run_id, 'year')
-    compute_regional_aggregation(annual_data, dest, 'year', model_id, run_id)
+    annual_regional_aggregations = compute_regional_aggregation(annual_data, dest, 'year', model_id, run_id)
+    compute_regional_aggregation_stats(annual_regional_aggregations, dest, 'year', model_id, run_id)
 
     annual_spatial_data = subtile_aggregation(annual_data, compute_tiles, upstream_tasks=[year_ts_done])
-    year_stats_done = compute_stats(annual_spatial_data, dest, 'year', model_id, run_id)
+    year_stats_done = compute_stats(annual_spatial_data, dest, 'year', model_id, run_id, "stats")
     year_done = compute_tiling(annual_spatial_data, dest, 'year', model_id, run_id, upstream_tasks=[year_stats_done])
 
     # ==== Generate a single aggregate value per feature =====
@@ -420,7 +434,7 @@ with Flow('datacube-ingest-v0.1') as flow:
 
     # ==== Update document in ES setting the status to READY =====
     if ELASTIC_URL:
-        update_metadata(elastic_id, summary_values, elastic_url, elastic_index)
+        update_metadata(doc_ids, summary_values, elastic_url, elastic_index)
 
     ## TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful.
     ## Then same data can be used for producing tiles and also used for doing regional aggregation and other computation in other tasks.
