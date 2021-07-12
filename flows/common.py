@@ -124,9 +124,9 @@ def output_values_to_json_array(df, column):
     return json.loads(json_str)
 
 # save stats as a json file
-def stats_to_json(x, dest, model_id, run_id, feature, time_res):
+def stats_to_json(x, dest, model_id, run_id, feature, time_res, filename):
     bucket = dest['bucket']
-    x.to_json(f's3://{bucket}/{model_id}/{run_id}/{time_res}/{feature}/stats/stats.json',
+    x.to_json(f's3://{bucket}/{model_id}/{run_id}/{time_res}/{feature}/stats/{filename}.json',
         orient='index',
         storage_options=get_storage_options(dest))
 
@@ -235,3 +235,8 @@ def extract_region_columns(df):
         result.remove('country')
         result.insert(0, 'country')
     return result
+
+class RegionalAggregation:
+    def __init__(self, dataframe, level):
+        self.dataframe = dataframe
+        self.level = level
