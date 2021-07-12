@@ -194,7 +194,6 @@ def compute_stats(df, dest, time_res, model_id, run_id, filename):
 
 def assist_compute_stats(df, dest, time_res, model_id, run_id, filename):
     #Compute mean and get new dataframe with mean columns added
-    df = df.astype({'s_sum_t_sum': 'float64', 's_sum_t_mean': 'float64', 's_count': 'float64'})
     stats_df = df.assign(s_mean_t_sum=df['s_sum_t_sum'] / df['s_count'], s_mean_t_mean=df['s_sum_t_mean'] / df['s_count'])
     #Stats aggregation
     stats_aggs = ['min', 'max']
@@ -317,9 +316,8 @@ def update_metadata(elastic_id, summary_values, elastic_url, elastic_index):
 
 @task
 def compute_regional_aggregation_stats(regional_aggregations : [RegionalAggregation], dest, timeframe, model_id, run_id):
-    def write_stats(regional_aggregation):
-        return assist_compute_stats(regional_aggregation.dataframe, dest, timeframe, model_id, run_id, f'regional_level_{regional_aggregation.level}_stats')
-    [write_stats(regional_aggregation) for regional_aggregation in regional_aggregations]
+    for regional_aggregation in regional_aggregations:
+        assist_compute_stats(regional_aggregation.dataframe, dest, timeframe, model_id, run_id, f'regional_level_{regional_aggregation.level}_stats')
 
 @task(log_stdout=True)
 def remove_null_region_columns(df):
@@ -406,9 +404,9 @@ with Flow('datacube-ingest-v0.1') as flow:
     monthly_data = temporal_aggregation(df, 'month', compute_monthly)
     month_ts_done = compute_timeseries(monthly_data, dest, 'month', model_id, run_id)
     monthly_regional_aggregations = compute_regional_aggregation(monthly_data, dest, 'month', model_id, run_id)
+    compute_regional_aggregation_stats(monthly_regional_aggregations, dest, 'month', model_id, run_id)
 
     monthly_spatial_data = subtile_aggregation(monthly_data, compute_tiles, upstream_tasks=[month_ts_done])
-    compute_regional_aggregation_stats(monthly_regional_aggregations, dest, 'month', model_id, run_id)
     month_stats_done = compute_stats(monthly_spatial_data, dest, 'month', model_id, run_id, "stats")
     month_done = compute_tiling(monthly_spatial_data, dest, 'month', model_id, run_id, upstream_tasks=[month_stats_done])
 
