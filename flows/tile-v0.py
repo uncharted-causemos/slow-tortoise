@@ -392,7 +392,7 @@ with Flow('datacube-ingest-v0.1') as flow:
         compute_annual,
         compute_summary,
         compute_tiles,
-    ) = configure_pipeline(dest, indicator_bucket, model_bucket, model_id, run_id, compute_tiles, is_indicator)
+    ) = configure_pipeline(dest, indicator_bucket, model_bucket, compute_tiles, is_indicator)
 
     # ==== Save raw data =====
     save_raw_data(raw_df, dest, 'raw', model_id, 'indicator', compute_raw)
