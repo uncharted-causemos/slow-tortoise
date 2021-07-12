@@ -14,7 +14,8 @@ from flows.common import deg2num, ancestor_tiles, filter_by_min_zoom, \
     tile_coord, save_tile, save_timeseries, \
     stats_to_json, to_proto, to_normalized_time, \
     extract_region_columns, join_region_columns, save_regional_aggregation, \
-    output_values_to_json_array, raw_data_to_json, RegionalAggregation
+    output_values_to_json_array, raw_data_to_json, compute_timeseries_by_region, \
+    RegionalAggregation
 
 
 
@@ -273,6 +274,12 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id) -> 
     return regional_aggregations
 
 @task(log_stdout=True)
+def compute_regional_timeseries(df, dest, model_id, run_id, time_res):
+    regions_cols = extract_region_columns(df)
+    for region_level in regions_cols:
+        compute_timeseries_by_region(df, dest, model_id, run_id, time_res, region_level)
+
+@task(log_stdout=True)
 def save_raw_data(df, dest, time_res, model_id, run_id, should_run):
     if should_run is False:
         raise SKIP('Saving raw data was not requested')
@@ -402,6 +409,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     # ==== Run aggregations based on monthly time resolution =====
     monthly_data = temporal_aggregation(df, 'month', compute_monthly)
     month_ts_done = compute_timeseries(monthly_data, dest, 'month', model_id, run_id)
+    compute_regional_timeseries(monthly_data, dest, model_id, run_id, 'month')
     monthly_regional_aggregations = compute_regional_aggregation(monthly_data, dest, 'month', model_id, run_id)
     compute_regional_aggregation_stats(monthly_regional_aggregations, dest, 'month', model_id, run_id)
 
@@ -412,6 +420,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     # ==== Run aggregations based on annual time resolution =====
     annual_data = temporal_aggregation(df, 'year', compute_annual, upstream_tasks=[month_done, month_ts_done])
     year_ts_done = compute_timeseries(annual_data, dest, 'year', model_id, run_id)
+    compute_regional_timeseries(annual_data, dest, model_id, run_id, 'year')
     annual_regional_aggregations = compute_regional_aggregation(annual_data, dest, 'year', model_id, run_id)
     compute_regional_aggregation_stats(annual_regional_aggregations, dest, 'year', model_id, run_id)
 
