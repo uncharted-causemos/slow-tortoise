@@ -266,6 +266,6 @@ def compute_timeseries_by_region(temporal_df, dest, model_id, run_id, time_res, 
         lambda x: save_regional_timeseries(x, dest, model_id, run_id, time_res, timeseries_agg_columns, region_level), meta=(None, 'object'))
     timeseries_df.compute()
 class RegionalAggregation:
-    def __init__(self, dataframe, level):
+    def __init__(self, dataframe, region_granularity):
         self.dataframe = dataframe
-        self.level = level
+        self.region_granularity = region_granularity

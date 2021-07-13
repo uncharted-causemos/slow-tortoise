@@ -270,7 +270,7 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id) -> 
         save_df = save_df.apply(lambda x: save_regional_aggregation(x, dest, model_id, run_id, time_res, region_level=regions_cols[level]),
                       axis=1, meta=(None, 'object'))
         save_df.compute()
-        regional_aggregations.append(RegionalAggregation(computed_dataframe, level))
+        regional_aggregations.append(RegionalAggregation(computed_dataframe, regions_cols[level]))
     return regional_aggregations
 
 @task(log_stdout=True)
@@ -323,7 +323,7 @@ def update_metadata(doc_ids, summary_values, elastic_url, elastic_index):
 @task
 def compute_regional_aggregation_stats(regional_aggregations : [RegionalAggregation], dest, timeframe, model_id, run_id):
     for regional_aggregation in regional_aggregations:
-        assist_compute_stats(regional_aggregation.dataframe, dest, timeframe, model_id, run_id, f'regional_level_{regional_aggregation.level}_stats')
+        assist_compute_stats(regional_aggregation.dataframe, dest, timeframe, model_id, run_id, f'regional/{regional_aggregation.region_granularity}')
 
 @task(log_stdout=True)
 def remove_null_region_columns(df):
