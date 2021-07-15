@@ -1,0 +1,91 @@
+# test runs test and lint jobs
+# prepare sets the environment variables that can be passed to the other jobs (eg. build, deploy)
+# build builds wm-request-queue docker image and push it to the registry.
+#      `latest` docker tag will be used for commits on main when the commit is not tagged
+# deploy deploys the app to the openstack when there's new tag
+stages:
+  - test
+  - lint
+  # - prepare
+  # - build
+
+.test_common:
+  stage: test
+  only:
+    - main
+    - ci-integration
+    - merge_requests
+  image: docker-hub.uncharted.software/python:3.8
+  before_script:
+    # install formatters
+    - echo "machine gitlab.uncharted.software login ${GITLAB_LOGIN} password ${GITLAB_TOKEN}" > ~/.netrc
+    - pip install mypy
+    - pip install black
+    - pip install pytest
+
+lint:
+  extends: .test_common
+  script:
+    - python -m mypy flows/*.py
+    - black --check flows/*.py
+
+test:
+  extends: .test_common
+  script:
+    - pytest flows/test/*.py
+
+# Jobs don't share it's local env variables. So Setup up variables you want to share and save it to a file.
+# The file can be passed to other jobs as an artifacts
+# environment:
+#   stage: prepare
+#   only:
+#     - main
+#     - tags
+#   image: docker-hub.uncharted.software/alpine
+#   artifacts:
+#     paths:
+#       - ci.env
+#     expire_in: 1 week
+#   before_script:
+#   script:
+#     - echo "--- Preparing environment vars ---"
+#     - >
+#       case ${CI_COMMIT_REF_NAME} in
+
+#         "${CI_COMMIT_TAG}") export DOCKER_TAG="${CI_COMMIT_TAG}" ;;
+
+#         main) export DOCKER_TAG="latest" ;;
+
+#         *) echo "Unknown build ref $CI_COMMIT_REF_NAME"; exit 1 ;;
+
+#       esac
+#     - 'echo "DOCKER_TAG: ${DOCKER_TAG}"'
+#     # prepare should fail if the docker tag version is empty
+#     - if [ -z "${DOCKER_TAG}" ]; then exit 1; fi
+#     - echo "DOCKER_TAG=${DOCKER_TAG}" > ci.env
+
+# build:
+#   stage: build
+#   only:
+#     - main
+#     - tags
+#   dependencies:
+#     - environment
+#   image: docker-hub.uncharted.software/docker:latest
+#   services:
+#     - name: docker-hub.uncharted.software/docker:dind
+#       alias: docker
+#   variables:
+#     DOCKER_DRIVER: overlay2
+#   before_script:
+#     - docker info
+#     # Set env vars passed from prepare stage
+#     - export $(grep -v '^#' ci.env | xargs)
+#   script:
+#     - echo "--- Building wm-request-queue docker image ---"
+#     - echo VERSION=${DOCKER_TAG}
+
+#     # Build and push the docker image
+#     - docker build --build-arg GITLAB_LOGIN=${GITLAB_LOGIN} --build-arg GITLAB_TOKEN=${GITLAB_TOKEN} -t docker.uncharted.software/worldmodeler/wm-request-queue:${DOCKER_TAG} .
+#     - docker push docker.uncharted.software/worldmodeler/wm-request-queue:${DOCKER_TAG}
+
