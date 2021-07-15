@@ -5,7 +5,7 @@
 # deploy deploys the app to the openstack when there's new tag
 stages:
   - test
-  - lint
+  # - lint
   # - prepare
   # - build
 
@@ -17,22 +17,25 @@ stages:
     - merge_requests
   image: docker-hub.uncharted.software/python:3.8
   before_script:
-    # install formatters
     - echo "machine gitlab.uncharted.software login ${GITLAB_LOGIN} password ${GITLAB_TOKEN}" > ~/.netrc
-    - pip install mypy
+    # install formatters
     - pip install black
     - pip install pytest
+    - pip install mypy
+    - pip install -e .
 
 lint:
   extends: .test_common
   script:
-    - python -m mypy flows/*.py
-    - black --check flows/*.py
+    echo "" > /dev/null
+    #- turn on when ready
+    #- black --check flows
+    #- python -m mypy flows
 
 test:
   extends: .test_common
   script:
-    - pytest flows/test/*.py
+    - pytest tests
 
 # Jobs don't share it's local env variables. So Setup up variables you want to share and save it to a file.
 # The file can be passed to other jobs as an artifacts
