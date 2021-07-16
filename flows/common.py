@@ -3,8 +3,10 @@ import pandas as pd
 import math
 import boto3
 import json
+import logging
 import sys
 import os
+import pathlib
 
 from flows import tiles_pb2
 
@@ -75,48 +77,87 @@ def project(subtilecoord, tilecoord):
 
     return int(bin_index)
 
-# save proto tile file
-def save_tile(tile, dest, model_id, run_id, feature, time_res, timestamp):
+
+# writes to S3 using the boto client
+def write_to_s3(body, path, dest):
     # Create s3 client only if it hasn't been created in current worker
     # since initalizing the client is expensive. Make sure we only initialize it once per worker
     global s3
-    if 's3' not in globals():
+    if "s3" not in globals():
         s3 = boto3.session.Session().client(
-            's3',
-            endpoint_url=dest['endpoint_url'],
-            region_name=dest['region_name'],
-            aws_access_key_id=dest['key'],
-            aws_secret_access_key=dest['secret']
+            "s3",
+            endpoint_url=dest["endpoint_url"],
+            region_name=dest["region_name"],
+            aws_access_key_id=dest["key"],
+            aws_secret_access_key=dest["secret"],
         )
 
+    try:
+        s3.put_object(Body=body, Bucket=dest["bucket"], Key=path)
+    except Exception as e:
+        logging.error(f"failed to write bucket: {dest['bucket']} key: {path}")
+        logging.error(e)
+
+
+# no-op on write to help with debugging/profiling
+def write_to_null(body, path, dest):
+    pass
+
+
+# write to local file system (mostly to support tests)
+def write_to_file(body, path, dest):
+    # prepend the bucket name to the path
+    bucket_path = os.path.join(dest["bucket"], path)
+    dirname = os.path.dirname(bucket_path)
+    # create the directory structre if it doesn't exist
+    if not os.path.exists(dirname):
+        pathlib.Path(dirname).mkdir(parents=True, exist_ok=True)
+    # write the file
+    with open(bucket_path, "w+") as outfile:
+        outfile.write(body)
+    outfile.close()
+
+
+# save proto tile file
+def save_tile(tile, dest, model_id, run_id, feature, time_res, timestamp, writer):
     z = tile.coord.z
     x = tile.coord.x
     y = tile.coord.y
 
-    path = f'{model_id}/{run_id}/{time_res}/{feature}/tiles/{timestamp}-{z}-{x}-{y}.tile'
-    s3.put_object(Body=tile.SerializeToString(), Bucket=dest['bucket'], Key=path)
+    path = (
+        f"{model_id}/{run_id}/{time_res}/{feature}/tiles/{timestamp}-{z}-{x}-{y}.tile"
+    )
+    body = tile.SerializeToString()
+    writer(str(body), path, dest)
+
     return tile
 
+
 # save timeseries as json
-def save_timeseries(df, dest, model_id, run_id, time_res, timeseries_agg_columns):
+def save_timeseries(
+    df, dest, model_id, run_id, time_res, timeseries_agg_columns, writer
+):
     for col in timeseries_agg_columns:
-        timeseries_to_json(df[['timestamp', col]], dest, model_id, run_id, df['feature'].values[0], time_res, col)
+        timeseries_to_json(df[["timestamp", col]], dest, model_id, run_id, df["feature"].values[0], time_res, col, writer)
 
 # write timeseries to json in S3
-def timeseries_to_json(df, dest, model_id, run_id, feature, time_res, column):
-    bucket = dest['bucket']
+def timeseries_to_json(df, dest, model_id, run_id, feature, time_res, column, writer):
     col_map = {}
-    col_map[column] = 'value'
-    df.rename(columns=col_map, inplace=False).to_json(f's3://{bucket}/{model_id}/{run_id}/{time_res}/{feature}/timeseries/{column}.json',
-        orient='records',
-        storage_options=get_storage_options(dest))
+    col_map[column] = "value"
+
+    # Save the result to s3
+    body = json.dumps(
+        df.rename(columns=col_map, inplace=False).to_json(orient="records")
+    )
+    path = f"{model_id}/{run_id}/{time_res}/{feature}/timeseries/{column}.json"
+    writer(body, path, dest)
 
 # write raw data to json file in S3
-def raw_data_to_json(df, dest, model_id, run_id, time_res, feature):
-    bucket = dest['bucket']
-    df.to_json(f's3://{bucket}/{model_id}/{run_id}/{time_res}/{feature}/raw/raw.json',
-        orient='records',
-        storage_options=get_storage_options(dest))
+def raw_data_to_json(df, dest, model_id, run_id, time_res, feature, writer):
+    body = json.dumps(df.to_json(orient="records"))
+    path = f"{model_id}/{run_id}/{time_res}/{feature}/raw/raw.json"
+    writer(body, path, dest)
+
 
 # save output values to json array
 def output_values_to_json_array(df, column):
@@ -127,11 +168,11 @@ def output_values_to_json_array(df, column):
     return json.loads(json_str)
 
 # save stats as a json file
-def stats_to_json(x, dest, model_id, run_id, feature, time_res, filename):
-    bucket = dest['bucket']
-    x.to_json(f's3://{bucket}/{model_id}/{run_id}/{time_res}/{feature}/stats/{filename}.json',
-        orient='index',
-        storage_options=get_storage_options(dest))
+def stats_to_json(x, dest, model_id, run_id, feature, time_res, filename, writer):
+    path = f"{model_id}/{run_id}/{time_res}/{feature}/stats/{filename}.json"
+    body = json.dumps(x.to_json(orient="index"))
+    writer(body, path, dest)
+
 
 # transform given row to tile protobuf
 def to_proto(row):
@@ -188,7 +229,8 @@ def join_region_columns(df, level=3, deli='__'):
     else:
         return df['country']
 
-def save_regional_aggregation(x, dest, model_id, run_id, time_res, region_level='admin3'):
+
+def save_regional_aggregation(x, dest, model_id, run_id, time_res, writer, region_level="admin3"):
     feature = x.feature
     timestamp = x.timestamp
 
@@ -216,16 +258,19 @@ def save_regional_aggregation(x, dest, model_id, run_id, time_res, region_level=
         result['s_sum_t_sum'].append({ 'id': key, 'value': region_agg[key]['s_sum_t_sum']})
         result['s_mean_t_sum'].append({ 'id': key, 'value': region_agg[key]['s_mean_t_sum']})
     # Save the result to s3
-    save_regional_aggregation_to_s3(result, dest, model_id, run_id, time_res, region_level, feature, timestamp)
+    save_regional_aggregation_to_s3(result, dest, model_id, run_id, time_res, region_level, feature, timestamp, writer)
     return result
 
-def save_regional_aggregation_to_s3(agg_result, dest, model_id, run_id, time_res, region_level, feature, timestamp):
-    bucket = dest['bucket']
+
+def save_regional_aggregation_to_s3(agg_result, dest, model_id, run_id, time_res, region_level, feature, timestamp, writer):
     for key in agg_result:
         save_df = pd.DataFrame(agg_result[key])
-        save_df.to_json(f's3://{bucket}/{model_id}/{run_id}/{time_res}/{feature}/regional/{region_level}/aggs/{timestamp}/{key}.json',
-                        orient='records',
-                        storage_options=get_storage_options(dest))
+
+        path = f"{model_id}/{run_id}/{time_res}/{feature}/regional/{region_level}/aggs/{timestamp}/{key}.json"
+        body = json.dumps(save_df.to_json())
+
+        writer(body, path, dest)
+
 
 def extract_region_columns(df):
     columns = df.columns.to_list()
@@ -239,22 +284,24 @@ def extract_region_columns(df):
     return result
 
 # Save regional timeseries data to csv
-def save_regional_timeseries(df, dest, model_id, run_id, time_res, timeseries_agg_columns, region_level):
-    bucket = dest['bucket']
+def save_regional_timeseries(df, dest, model_id, run_id, time_res, timeseries_agg_columns, region_level, writer):
     feature = df['feature'].values[0]
     region_id = df['region_id'].values[0]
     df = df[['timestamp'] + timeseries_agg_columns]
-    df.to_csv(f's3://{bucket}/{model_id}/{run_id}/{time_res}/{feature}/regional/{region_level}/timeseries/{region_id}.csv',
-        storage_options=get_storage_options(dest), index=False)
+
+    path = f'{model_id}/{run_id}/{time_res}/{feature}/regional/{region_level}/timeseries/{region_id}.csv'
+    body = df.to_csv(index=False)
+    writer(body, path, dest)
+
 
 # Compute timeseries by region
-def compute_timeseries_by_region(temporal_df, dest, model_id, run_id, time_res, region_level):
+def compute_timeseries_by_region(temporal_df, dest, model_id, run_id, time_res, region_level, writer):
     timeseries_df = temporal_df.copy()
     timeseries_df['region_id'] = join_region_columns(timeseries_df, REGION_LEVELS.index(region_level))
     timeseries_aggs = ['min', 'max', 'sum', 'mean', 'count']
     timeseries_lookup = {
         ('t_sum', 'min'): 's_min_t_sum', ('t_sum', 'max'): 's_max_t_sum', ('t_sum', 'sum'): 's_sum_t_sum', ('t_sum', 'mean'): 's_mean_t_sum',
-        ('t_mean', 'min'): 's_min_t_mean', ('t_mean', 'max'): 's_max_t_mean', ('t_mean', 'sum'): 's_sum_t_mean', ('t_mean', 'mean'): 's_mean_t_mean', 
+        ('t_mean', 'min'): 's_min_t_mean', ('t_mean', 'max'): 's_max_t_mean', ('t_mean', 'sum'): 's_sum_t_mean', ('t_mean', 'mean'): 's_mean_t_mean',
         ('t_mean', 'count'): 's_count_t_mean', ('t_sum', 'count'): 's_count'
     }
     timeseries_agg_columns = ['s_min_t_sum', 's_max_t_sum', 's_sum_t_sum', 's_mean_t_sum', 's_min_t_mean', 's_max_t_mean', 's_sum_t_mean', 's_mean_t_mean', 's_count']
@@ -263,7 +310,7 @@ def compute_timeseries_by_region(temporal_df, dest, model_id, run_id, time_res, 
     timeseries_df.columns = timeseries_df.columns.to_flat_index()
     timeseries_df = timeseries_df.rename(columns=timeseries_lookup).reset_index()
     timeseries_df = timeseries_df.repartition(npartitions = 12).groupby(['feature', 'region_id']).apply(
-        lambda x: save_regional_timeseries(x, dest, model_id, run_id, time_res, timeseries_agg_columns, region_level), meta=(None, 'object'))
+        lambda x: save_regional_timeseries(x, dest, model_id, run_id, time_res, timeseries_agg_columns, region_level, writer), meta=(None, 'object'))
     timeseries_df.compute()
 class RegionalAggregation:
     def __init__(self, dataframe, region_granularity):

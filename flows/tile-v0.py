@@ -15,20 +15,31 @@ from flows.common import deg2num, ancestor_tiles, filter_by_min_zoom, \
     stats_to_json, to_proto, to_normalized_time, \
     extract_region_columns, join_region_columns, save_regional_aggregation, \
     output_values_to_json_array, raw_data_to_json, compute_timeseries_by_region, \
-    RegionalAggregation
+    RegionalAggregation, write_to_file, write_to_null, write_to_s3
 
 
+# Maps a write type to writing function
+WRITE_TYPES = {
+    "s3": write_to_s3, # write to an s3 bucket
+    "file": write_to_file, # write to the local file system
+    "none": write_to_null # skip write for debugging
+}
+
+TRUE_TOKENS = ("true", "1", "t")
 
 # address of the dask scheduler to connect to - set this to empty to spawn a local
 # dask cluster
 DASK_SCHEDULER = os.getenv("WM_DASK_SCHEDULER", "10.65.18.58:8786")
 
 # run the flow locally without the prefect agent and server
-LOCAL_RUN = os.getenv("WM_LOCAL", "False").lower() in ("true", "1", "t")
+LOCAL_RUN = os.getenv("WM_LOCAL", "False").lower() in TRUE_TOKENS
+
+# write to the local file system - mostly to support testing
+DEST_TYPE = os.getenv("WM_DEST_TYPE", "s3").lower()
 
 # indicate whether or not this flow should be pushed to the docker registry as part of its
 # registration process
-PUSH_IMAGE = os.getenv("WM_PUSH_IMAGE", "False").lower() in ("true", "1", "t")
+PUSH_IMAGE = os.getenv("WM_PUSH_IMAGE", "False").lower() in TRUE_TOKENS
 
 # Following env vars provide the defaults assigned to the prefect flow parameters.  The parameters
 # are normally set when a run is scheduled in the deployment environment, but when we do a local
@@ -163,7 +174,7 @@ def compute_timeseries(df, dest, time_res, model_id, run_id):
     timeseries_df.columns = timeseries_df.columns.to_flat_index()
     timeseries_df = timeseries_df.rename(columns=timeseries_lookup).reset_index()
     timeseries_df = timeseries_df.groupby(['feature']).apply(
-        lambda x: save_timeseries(x, dest, model_id, run_id, time_res, timeseries_agg_columns),
+        lambda x: save_timeseries(x, dest, model_id, run_id, time_res, timeseries_agg_columns, WRITE_TYPES[DEST_TYPE]),
         meta=(None, 'object'))
     timeseries_df.compute()
 
@@ -209,7 +220,7 @@ def assist_compute_stats(df, dest, time_res, model_id, run_id, filename):
     stats_df.columns = stats_df.columns.to_flat_index()
     stats_df = stats_df.rename(columns=stats_lookup).reset_index()
     stats_df = stats_df.groupby(['feature']).apply(
-        lambda x: stats_to_json(x[stats_agg_columns], dest, model_id, run_id, x['feature'].values[0], time_res, filename),
+        lambda x: stats_to_json(x[stats_agg_columns], dest, model_id, run_id, x['feature'].values[0], time_res, filename, WRITE_TYPES[DEST_TYPE]),
         meta=(None, 'object'))
     stats_df.compute()
 
@@ -228,7 +239,7 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
         .agg(list) \
         .reset_index() \
         .repartition(npartitions = 200) \
-        .apply(lambda x: save_tile(to_proto(x), dest, model_id, run_id, x.feature, time_res, x.timestamp), axis=1, meta=(None, 'object'))  # convert each row to protobuf and save
+        .apply(lambda x: save_tile(to_proto(x), dest, model_id, run_id, x.feature, time_res, x.timestamp, WRITE_TYPES[DEST_TYPE]), axis=1, meta=(None, 'object'))  # convert each row to protobuf and save
     tiling_df.compute()
 
 @task(log_stdout=True)
@@ -267,7 +278,7 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id) -> 
         # Just perform repartition to make sure save io operation runs in parallel since each writing operation is expensive and blocks
         # Set npartitions to same as # of available workers/threads. Increasing partition number beyond the number of the workers doesn't seem to give more performance benefits.
         save_df = save_df.repartition(npartitions = 12)
-        save_df = save_df.apply(lambda x: save_regional_aggregation(x, dest, model_id, run_id, time_res, region_level=regions_cols[level]),
+        save_df = save_df.apply(lambda x: save_regional_aggregation(x, dest, model_id, run_id, time_res, WRITE_TYPES[DEST_TYPE], region_level=regions_cols[level]),
                       axis=1, meta=(None, 'object'))
         save_df.compute()
         regional_aggregations.append(RegionalAggregation(computed_dataframe, regions_cols[level]))
@@ -277,7 +288,7 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id) -> 
 def compute_regional_timeseries(df, dest, model_id, run_id, time_res):
     regions_cols = extract_region_columns(df)
     for region_level in regions_cols:
-        compute_timeseries_by_region(df, dest, model_id, run_id, time_res, region_level)
+        compute_timeseries_by_region(df, dest, model_id, run_id, time_res, region_level, WRITE_TYPES[DEST_TYPE])
 
 @task(log_stdout=True)
 def save_raw_data(df, dest, time_res, model_id, run_id, should_run):
@@ -321,7 +332,7 @@ def update_metadata(doc_ids, summary_values, elastic_url, elastic_index):
         r.raise_for_status()
 
 @task
-def compute_regional_aggregation_stats(regional_aggregations : [RegionalAggregation], dest, timeframe, model_id, run_id):
+def compute_regional_aggregation_stats(regional_aggregations : List[RegionalAggregation], dest, timeframe, model_id, run_id):
     for regional_aggregation in regional_aggregations:
         assist_compute_stats(regional_aggregation.dataframe, dest, timeframe, model_id, run_id, f'regional/{regional_aggregation.region_granularity}')
 
@@ -380,6 +391,7 @@ with Flow('datacube-ingest-v0.1') as flow:
         'key': 'foobar',
         'secret': 'foobarbaz'
     })
+
 
     dest = Parameter('dest', default = {
         'endpoint_url': S3_DEST_URL,
