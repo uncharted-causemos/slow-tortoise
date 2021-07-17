@@ -265,7 +265,7 @@ def save_regional_aggregation_to_s3(agg_result, dest, model_id, run_id, time_res
         save_df = pd.DataFrame(agg_result[key])
 
         path = f"{model_id}/{run_id}/{time_res}/{feature}/regional/{region_level}/aggs/{timestamp}/{key}.json"
-        body = save_df.to_json()
+        body = save_df.to_json(orient="records")
 
         writer(body, path, dest)
 
