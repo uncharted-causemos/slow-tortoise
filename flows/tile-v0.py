@@ -373,7 +373,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     # Parameters
     model_id = Parameter('model_id', default='geo-test-data')
     run_id = Parameter('run_id', default='test-run')
-    doc_ids = Parameter('data_paths', default=[])
+    doc_ids = Parameter('doc_ids', default=[])
     data_paths = Parameter('data_paths', default=['s3://test/geo-test-data.parquet'])
     compute_tiles = Parameter('compute_tiles', default=False)
     is_indicator = Parameter('is_indicator', default=False)

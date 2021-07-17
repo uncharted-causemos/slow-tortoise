@@ -114,7 +114,7 @@ def write_to_file(body, path, dest):
         pathlib.Path(dirname).mkdir(parents=True, exist_ok=True)
     # write the file
     with open(bucket_path, "w+") as outfile:
-        outfile.write(body)
+        outfile.write(str(body))
     outfile.close()
 
 
@@ -128,7 +128,7 @@ def save_tile(tile, dest, model_id, run_id, feature, time_res, timestamp, writer
         f"{model_id}/{run_id}/{time_res}/{feature}/tiles/{timestamp}-{z}-{x}-{y}.tile"
     )
     body = tile.SerializeToString()
-    writer(str(body), path, dest)
+    writer(body, path, dest)
 
     return tile
 
@@ -146,15 +146,13 @@ def timeseries_to_json(df, dest, model_id, run_id, feature, time_res, column, wr
     col_map[column] = "value"
 
     # Save the result to s3
-    body = json.dumps(
-        df.rename(columns=col_map, inplace=False).to_json(orient="records")
-    )
+    body = df.rename(columns=col_map, inplace=False).to_json(orient="records")
     path = f"{model_id}/{run_id}/{time_res}/{feature}/timeseries/{column}.json"
     writer(body, path, dest)
 
 # write raw data to json file in S3
 def raw_data_to_json(df, dest, model_id, run_id, time_res, feature, writer):
-    body = json.dumps(df.to_json(orient="records"))
+    body = df.to_json(orient="records")
     path = f"{model_id}/{run_id}/{time_res}/{feature}/raw/raw.json"
     writer(body, path, dest)
 
@@ -170,7 +168,7 @@ def output_values_to_json_array(df, column):
 # save stats as a json file
 def stats_to_json(x, dest, model_id, run_id, feature, time_res, filename, writer):
     path = f"{model_id}/{run_id}/{time_res}/{feature}/stats/{filename}.json"
-    body = json.dumps(x.to_json(orient="index"))
+    body = x.to_json(orient="index")
     writer(body, path, dest)
 
 
@@ -267,7 +265,7 @@ def save_regional_aggregation_to_s3(agg_result, dest, model_id, run_id, time_res
         save_df = pd.DataFrame(agg_result[key])
 
         path = f"{model_id}/{run_id}/{time_res}/{feature}/regional/{region_level}/aggs/{timestamp}/{key}.json"
-        body = json.dumps(save_df.to_json())
+        body = save_df.to_json()
 
         writer(body, path, dest)
 
