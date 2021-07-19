@@ -115,7 +115,6 @@ def write_to_file(body, path, dest):
     # write the file
     with open(bucket_path, "w+") as outfile:
         outfile.write(str(body))
-    outfile.close()
 
 
 # save proto tile file
