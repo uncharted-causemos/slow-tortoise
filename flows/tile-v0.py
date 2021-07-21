@@ -1,5 +1,5 @@
 from dask import delayed
-from typing import Tuple, List
+from typing import Tuple
 import dask.dataframe as dd
 import dask.bytes as db
 import pandas as pd
@@ -15,20 +15,31 @@ from flows.common import run_temporal_aggregation, deg2num, ancestor_tiles, filt
     stats_to_json, to_proto, to_normalized_time, \
     extract_region_columns, join_region_columns, save_regional_aggregation, \
     output_values_to_json_array, raw_data_to_json, compute_timeseries_by_region, \
-    RegionalAggregation
+    write_to_file, write_to_null, write_to_s3
 
 
+# Maps a write type to writing function
+WRITE_TYPES = {
+    "s3": write_to_s3, # write to an s3 bucket
+    "file": write_to_file, # write to the local file system
+    "none": write_to_null # skip write for debugging
+}
+
+TRUE_TOKENS = ("true", "1", "t")
 
 # address of the dask scheduler to connect to - set this to empty to spawn a local
 # dask cluster
 DASK_SCHEDULER = os.getenv("WM_DASK_SCHEDULER", "10.65.18.58:8786")
 
 # run the flow locally without the prefect agent and server
-LOCAL_RUN = os.getenv("WM_LOCAL", "False").lower() in ("true", "1", "t")
+LOCAL_RUN = os.getenv("WM_LOCAL", "False").lower() in TRUE_TOKENS
+
+# write to the local file system - mostly to support testing
+DEST_TYPE = os.getenv("WM_DEST_TYPE", "s3").lower()
 
 # indicate whether or not this flow should be pushed to the docker registry as part of its
 # registration process
-PUSH_IMAGE = os.getenv("WM_PUSH_IMAGE", "False").lower() in ("true", "1", "t")
+PUSH_IMAGE = os.getenv("WM_PUSH_IMAGE", "False").lower() in TRUE_TOKENS
 
 # Following env vars provide the defaults assigned to the prefect flow parameters.  The parameters
 # are normally set when a run is scheduled in the deployment environment, but when we do a local
@@ -131,6 +142,26 @@ def configure_pipeline(dest, indicator_bucket, model_bucket, compute_tiles, is_i
 
     return (dest, elastic_index, compute_raw, compute_monthly, compute_annual, compute_summary, compute_tiles)
 
+@task(log_stdout=True)
+def save_raw_data(df, dest, time_res, model_id, run_id, should_run):
+    if should_run is False:
+        raise SKIP('Saving raw data was not requested')
+
+    raw_df = df.copy()
+    output_columns = ['timestamp', 'country', 'admin1', 'admin2', 'admin3', 'value']
+
+    raw_df = raw_df.groupby(['feature']).apply(
+        lambda x: raw_data_to_json(x[output_columns], dest, model_id, run_id, time_res, x['feature'].values[0], WRITE_TYPES[DEST_TYPE]),
+        meta=(None, 'object'))
+    raw_df.compute()
+
+@task(log_stdout=True)
+def remove_null_region_columns(df):
+    region_cols = extract_region_columns(df)
+    cols_to_drop = set(df.columns[df.isnull().all()])
+    region_cols_to_drop = list(cols_to_drop.intersection(region_cols))
+    return df.drop(columns=region_cols_to_drop)
+
 @task(skip_on_upstream_skip=False)
 def temporal_aggregation(df, time_res, should_run):
     if should_run is False:
@@ -151,7 +182,7 @@ def compute_timeseries(df, dest, time_res, model_id, run_id):
     timeseries_df.columns = timeseries_df.columns.to_flat_index()
     timeseries_df = timeseries_df.rename(columns=timeseries_lookup).reset_index()
     timeseries_df = timeseries_df.groupby(['feature']).apply(
-        lambda x: save_timeseries(x, dest, model_id, run_id, time_res, timeseries_agg_columns),
+        lambda x: save_timeseries(x, dest, model_id, run_id, time_res, timeseries_agg_columns, WRITE_TYPES[DEST_TYPE]),
         meta=(None, 'object'))
     timeseries_df.compute()
 
@@ -176,6 +207,77 @@ def subtile_aggregation(df, should_run):
     return subtile_df
 
 @task(log_stdout=True)
+def compute_tiling(df, dest, time_res, model_id, run_id):
+    stile = df.apply(lambda x: filter_by_min_zoom(ancestor_tiles(x.subtile), MIN_SUBTILE_PRECISION), axis=1, meta=(None, 'object'))
+    tiling_df = df.assign(subtile=stile)
+    tiling_df = tiling_df.explode('subtile').repartition(npartitions = 100)
+
+    # Assign main tile coord for each subtile
+    tiling_df['tile'] = tiling_df.apply(lambda x: tile_coord(x.subtile, LEVEL_DIFF), axis=1, meta=(None, 'object'))
+
+    tiling_df = tiling_df.groupby(['feature', 'timestamp', 'tile']) \
+        .agg(list) \
+        .reset_index() \
+        .repartition(npartitions = 200) \
+        .apply(lambda x: save_tile(to_proto(x), dest, model_id, run_id, x.feature, time_res, x.timestamp, WRITE_TYPES[DEST_TYPE]), axis=1, meta=(None, 'object'))  # convert each row to protobuf and save
+    tiling_df.compute()
+
+@task(log_stdout=True)
+def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
+    # Copy input df so that original df doesn't get mutated
+    df = input_df.copy()
+    # Ranme columns
+    df.columns = df.columns.str.replace('t_sum', 's_sum_t_sum').str.replace('t_mean', 's_sum_t_mean')
+    df['s_count'] = 1
+    df = df.reset_index()
+
+    regions_cols = extract_region_columns(df)
+
+    # Region aggregation at the highest admin level
+    df = df[['feature', 'timestamp', 's_sum_t_sum', 's_sum_t_mean', 's_count'] + regions_cols] \
+        .groupby(['feature', 'timestamp'] + regions_cols) \
+        .agg(['sum'])
+    df.columns = df.columns.droplevel(1)
+    df = df.reset_index()
+    # persist the result in memory at this point since this df is going to be used multiple times to compute for different regional levels
+    df = df.persist()
+
+    # Compute aggregation and save for all regional levels
+    for level in range(len(regions_cols)):
+        save_df = df.copy()
+        # Merge region columns to single region_id column. eg. ['Ethiopia', 'Afar'] -> ['Ethiopia_Afar']
+        save_df['region_id'] = join_region_columns(save_df, level)
+
+        desired_columns = ['feature', 'timestamp', 'region_id', 's_sum_t_sum', 's_sum_t_mean', 's_count']
+        save_df = save_df[desired_columns].groupby(['feature', 'timestamp']).agg(list)
+
+        save_df = save_df.reset_index()
+        # At this point data is already reduced to reasonably small size due to prior admin aggregation.
+        # Just perform repartition to make sure save io operation runs in parallel since each writing operation is expensive and blocks
+        # Set npartitions to same as # of available workers/threads. Increasing partition number beyond the number of the workers doesn't seem to give more performance benefits.
+        save_df = save_df.repartition(npartitions = 12)
+        save_df = save_df.apply(lambda x: save_regional_aggregation(x, dest, model_id, run_id, time_res, WRITE_TYPES[DEST_TYPE], region_level=regions_cols[level]),
+                      axis=1, meta=(None, 'object'))
+        save_df.compute()
+    return df
+
+@task
+def compute_regional_aggregation_stats(regional_df, dest, timeframe, model_id, run_id):
+    # Compute aggregation and save for all regional levels
+    regions_cols = extract_region_columns(regional_df)
+    for level in range(len(regions_cols)):
+        df = regional_df.copy()
+        # Merge region columns to single region_id column. eg. ['Ethiopia', 'Afar'] -> ['Ethiopia_Afar']
+        df['region_id'] = join_region_columns(df, level)
+        assist_compute_stats(df, dest, timeframe, model_id, run_id, f'regional/{regions_cols[level]}')
+
+@task(log_stdout=True)
+def compute_regional_timeseries(df, dest, model_id, run_id, time_res):
+    regions_cols = extract_region_columns(df)
+    for region_level in regions_cols:
+        compute_timeseries_by_region(df, dest, model_id, run_id, time_res, region_level, WRITE_TYPES[DEST_TYPE])
+
+@task(log_stdout=True)
 def compute_stats(df, dest, time_res, model_id, run_id, filename):
     assist_compute_stats(df, dest, time_res, model_id, run_id, filename)
 
@@ -197,85 +299,9 @@ def assist_compute_stats(df, dest, time_res, model_id, run_id, filename):
     stats_df.columns = stats_df.columns.to_flat_index()
     stats_df = stats_df.rename(columns=stats_lookup).reset_index()
     stats_df = stats_df.groupby(['feature']).apply(
-        lambda x: stats_to_json(x[stats_agg_columns], dest, model_id, run_id, x['feature'].values[0], time_res, filename),
+        lambda x: stats_to_json(x[stats_agg_columns], dest, model_id, run_id, x['feature'].values[0], time_res, filename, WRITE_TYPES[DEST_TYPE]),
         meta=(None, 'object'))
     stats_df.compute()
-
-@task(log_stdout=True)
-def compute_tiling(df, dest, time_res, model_id, run_id):
-    stile = df.apply(lambda x: filter_by_min_zoom(ancestor_tiles(x.subtile), MIN_SUBTILE_PRECISION), axis=1, meta=(None, 'object'))
-    tiling_df = df.assign(subtile=stile)
-    tiling_df = tiling_df.explode('subtile').repartition(npartitions = 100)
-
-    # Assign main tile coord for each subtile
-    tiling_df['tile'] = tiling_df.apply(lambda x: tile_coord(x.subtile, LEVEL_DIFF), axis=1, meta=(None, 'object'))
-
-    tiling_df = tiling_df.groupby(['feature', 'timestamp', 'tile']) \
-        .agg(list) \
-        .reset_index() \
-        .repartition(npartitions = 200) \
-        .apply(lambda x: save_tile(to_proto(x), dest, model_id, run_id, x.feature, time_res, x.timestamp), axis=1, meta=(None, 'object'))  # convert each row to protobuf and save
-    tiling_df.compute()
-
-@task(log_stdout=True)
-def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id) -> List[RegionalAggregation]:
-    # Copy input df so that original df doesn't get mutated
-    df = input_df.copy()
-    # Ranme columns
-    df.columns = df.columns.str.replace('t_sum', 's_sum_t_sum').str.replace('t_mean', 's_sum_t_mean')
-    df['s_count'] = 1
-    df = df.reset_index()
-
-    regions_cols = extract_region_columns(df)
-
-    # Region aggregation at the highest admin level
-    df = df[['feature', 'timestamp', 's_sum_t_sum', 's_sum_t_mean', 's_count'] + regions_cols] \
-        .groupby(['feature', 'timestamp'] + regions_cols) \
-        .agg(['sum'])
-    df.columns = df.columns.droplevel(1)
-    df = df.reset_index()
-    # persist the result in memory at this point since this df is going to be used multiple times to compute for different regional levels
-    df = df.persist()
-
-    # Compute aggregation and save for all regional levels
-    regional_aggregations = []
-    for level in range(len(regions_cols)):
-        save_df = df.copy()
-        # Merge region columns to single region_id column. eg. ['Ethiopia', 'Afar'] -> ['Ethiopia_Afar']
-        save_df['region_id'] = join_region_columns(save_df, level)
-
-        computed_dataframe = save_df.copy()
-        desired_columns = ['feature', 'timestamp', 'region_id', 's_sum_t_sum', 's_sum_t_mean', 's_count']
-        save_df = save_df[desired_columns].groupby(['feature', 'timestamp']).agg(list)
-
-        save_df = save_df.reset_index()
-        # At this point data is already reduced to reasonably small size due to prior admin aggregation.
-        # Just perform repartition to make sure save io operation runs in parallel since each writing operation is expensive and blocks
-        # Set npartitions to same as # of available workers/threads. Increasing partition number beyond the number of the workers doesn't seem to give more performance benefits.
-        save_df = save_df.repartition(npartitions = 12)
-        save_df = save_df.apply(lambda x: save_regional_aggregation(x, dest, model_id, run_id, time_res, region_level=regions_cols[level]),
-                      axis=1, meta=(None, 'object'))
-        save_df.compute()
-        regional_aggregations.append(RegionalAggregation(computed_dataframe, regions_cols[level]))
-    return regional_aggregations
-
-@task(log_stdout=True)
-def compute_regional_timeseries(df, dest, model_id, run_id, time_res):
-    regions_cols = extract_region_columns(df)
-    for region_level in regions_cols:
-        compute_timeseries_by_region(df, dest, model_id, run_id, time_res, region_level)
-
-@task(log_stdout=True)
-def save_raw_data(df, dest, time_res, model_id, run_id, should_run):
-    if should_run is False:
-        raise SKIP('Saving raw data was not requested')
-
-    output_columns = ['timestamp', 'country', 'admin1', 'admin2', 'admin3', 'value']
-
-    raw_df = df.groupby(['feature']).apply(
-        lambda x: raw_data_to_json(x[output_columns], dest, model_id, run_id, time_res, x['feature'].values[0]),
-        meta=(None, 'object'))
-    raw_df.compute()
 
 @task(log_stdout=True)
 def compute_output_summary(df):
@@ -305,18 +331,6 @@ def update_metadata(doc_ids, summary_values, elastic_url, elastic_index):
         r = requests.post(f'{elastic_url}/{elastic_index}/_update/{doc_id}', json = data)
         print(r.text)
         r.raise_for_status()
-
-@task
-def compute_regional_aggregation_stats(regional_aggregations : [RegionalAggregation], dest, timeframe, model_id, run_id):
-    for regional_aggregation in regional_aggregations:
-        assist_compute_stats(regional_aggregation.dataframe, dest, timeframe, model_id, run_id, f'regional/{regional_aggregation.region_granularity}')
-
-@task(log_stdout=True)
-def remove_null_region_columns(df):
-    region_cols = extract_region_columns(df)
-    cols_to_drop = set(df.columns[df.isnull().all()])
-    region_cols_to_drop = list(cols_to_drop.intersection(region_cols))
-    return df.drop(columns=region_cols_to_drop)
 
 ###########################################################################
 
@@ -348,7 +362,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     # Parameters
     model_id = Parameter('model_id', default='geo-test-data')
     run_id = Parameter('run_id', default='test-run')
-    doc_ids = Parameter('data_paths', default=[])
+    doc_ids = Parameter('doc_ids', default=[])
     data_paths = Parameter('data_paths', default=['s3://test/geo-test-data.parquet'])
     compute_tiles = Parameter('compute_tiles', default=False)
     is_indicator = Parameter('is_indicator', default=False)
@@ -366,6 +380,7 @@ with Flow('datacube-ingest-v0.1') as flow:
         'key': 'foobar',
         'secret': 'foobarbaz'
     })
+
 
     dest = Parameter('dest', default = {
         'endpoint_url': S3_DEST_URL,
@@ -396,8 +411,8 @@ with Flow('datacube-ingest-v0.1') as flow:
     monthly_data = temporal_aggregation(df, 'month', compute_monthly)
     month_ts_done = compute_timeseries(monthly_data, dest, 'month', model_id, run_id)
     compute_regional_timeseries(monthly_data, dest, model_id, run_id, 'month')
-    monthly_regional_aggregations = compute_regional_aggregation(monthly_data, dest, 'month', model_id, run_id)
-    compute_regional_aggregation_stats(monthly_regional_aggregations, dest, 'month', model_id, run_id)
+    monthly_regional_df = compute_regional_aggregation(monthly_data, dest, 'month', model_id, run_id)
+    compute_regional_aggregation_stats(monthly_regional_df, dest, 'month', model_id, run_id)
 
     monthly_spatial_data = subtile_aggregation(monthly_data, compute_tiles, upstream_tasks=[month_ts_done])
     month_stats_done = compute_stats(monthly_spatial_data, dest, 'month', model_id, run_id, "stats")
@@ -407,8 +422,8 @@ with Flow('datacube-ingest-v0.1') as flow:
     annual_data = temporal_aggregation(df, 'year', compute_annual, upstream_tasks=[month_done, month_ts_done])
     year_ts_done = compute_timeseries(annual_data, dest, 'year', model_id, run_id)
     compute_regional_timeseries(annual_data, dest, model_id, run_id, 'year')
-    annual_regional_aggregations = compute_regional_aggregation(annual_data, dest, 'year', model_id, run_id)
-    compute_regional_aggregation_stats(annual_regional_aggregations, dest, 'year', model_id, run_id)
+    annual_regional_df = compute_regional_aggregation(annual_data, dest, 'year', model_id, run_id)
+    compute_regional_aggregation_stats(annual_regional_df, dest, 'year', model_id, run_id)
 
     annual_spatial_data = subtile_aggregation(annual_data, compute_tiles, upstream_tasks=[year_ts_done])
     year_stats_done = compute_stats(annual_spatial_data, dest, 'year', model_id, run_id, "stats")
