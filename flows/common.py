@@ -309,7 +309,3 @@ def compute_timeseries_by_region(temporal_df, dest, model_id, run_id, time_res, 
     timeseries_df = timeseries_df.repartition(npartitions = 12).groupby(['feature', 'region_id']).apply(
         lambda x: save_regional_timeseries(x, dest, model_id, run_id, time_res, timeseries_agg_columns, region_level, writer), meta=(None, 'object'))
     timeseries_df.compute()
-class RegionalAggregation:
-    def __init__(self, dataframe, region_granularity):
-        self.dataframe = dataframe
-        self.region_granularity = region_granularity
