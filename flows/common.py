@@ -1,5 +1,6 @@
 import datetime
 import pandas as pd
+import dask.dataframe as dd
 import math
 import boto3
 import json
@@ -18,6 +19,21 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__))))
 import tiles_pb2
 
 REGION_LEVELS = ['country', 'admin1', 'admin2', 'admin3']
+
+# Run temporal aggregation on given provided dataframe
+def run_temporal_aggregation(df, time_res):
+    columns = df.columns.tolist()
+    columns.remove('value')
+
+    # Monthly temporal aggregation (compute for both sum and mean)
+    t = dd.to_datetime(df['timestamp'], unit='ms').apply(lambda x: to_normalized_time(x, time_res), meta=(None, 'int'))
+    temporal_df = df.assign(timestamp=t) \
+                    .groupby(columns)['value'].agg(['sum', 'mean'])
+
+    # Rename agg column names
+    temporal_df.columns = temporal_df.columns.str.replace('sum', 't_sum').str.replace('mean', 't_mean')
+    temporal_df = temporal_df.reset_index()
+    return temporal_df 
 
 # More details on tile calculations https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames
 # Convert lat, long to tile coord
