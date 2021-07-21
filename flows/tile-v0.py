@@ -203,8 +203,6 @@ def assist_compute_stats(df, dest, time_res, model_id, run_id, filename):
 
 @task(log_stdout=True)
 def compute_tiling(df, dest, time_res, model_id, run_id):
-    # Get all acestor subtiles and explode
-    # TODO: Instead of exploding, try reducing down by processing from higest zoom levels to lowest zoom levels one by one level.
     stile = df.apply(lambda x: filter_by_min_zoom(ancestor_tiles(x.subtile), MIN_SUBTILE_PRECISION), axis=1, meta=(None, 'object'))
     tiling_df = df.assign(subtile=stile)
     tiling_df = tiling_df.explode('subtile').repartition(npartitions = 100)
