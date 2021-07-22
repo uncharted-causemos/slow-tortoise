@@ -361,6 +361,7 @@ def record_region_hierarchy(df, dest, model_id, run_id):
             current_hierarchy_position = current_hierarchy_position[current_region]
         current_hierarchy_position[row[region_cols[-1]]] = None
     feature_to_json(hierarchy, dest, model_id, run_id, 'hierarchy')
+    df.compute()
 
 ###########################################################################
 
