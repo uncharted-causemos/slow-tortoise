@@ -15,7 +15,7 @@ from flows.common import run_temporal_aggregation, deg2num, ancestor_tiles, filt
     stats_to_json, to_proto, to_normalized_time, \
     extract_region_columns, join_region_columns, save_regional_aggregation, \
     output_values_to_json_array, raw_data_to_json, compute_timeseries_by_region, \
-    write_to_file, write_to_null, write_to_s3
+    write_to_file, write_to_null, write_to_s3, compute_subtile_stats
 
 
 # Maps a write type to writing function
@@ -279,7 +279,7 @@ def compute_regional_timeseries(df, dest, model_id, run_id, time_res):
 
 @task(log_stdout=True)
 def compute_stats(df, dest, time_res, model_id, run_id, filename):
-    assist_compute_stats(df, dest, time_res, model_id, run_id, filename)
+    compute_subtile_stats(df, dest, model_id, run_id, time_res, MIN_SUBTILE_PRECISION, WRITE_TYPES[DEST_TYPE])
 
 def assist_compute_stats(df, dest, time_res, model_id, run_id, filename):
     #Compute mean and get new dataframe with mean columns added
