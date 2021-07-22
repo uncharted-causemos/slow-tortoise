@@ -4,6 +4,7 @@ import dask.dataframe as dd
 import dask.bytes as db
 import pandas as pd
 import requests
+import boto3
 import os
 
 from prefect import task, Flow, Parameter
@@ -12,7 +13,7 @@ from prefect.storage import Docker
 from prefect.executors import DaskExecutor, LocalDaskExecutor
 from flows.common import deg2num, ancestor_tiles, filter_by_min_zoom, \
     tile_coord, save_tile, save_timeseries, \
-    stats_to_json, to_proto, to_normalized_time, \
+    stats_to_json, feature_to_json, to_proto, to_normalized_time, \
     extract_region_columns, join_region_columns, save_regional_aggregation, \
     output_values_to_json_array, raw_data_to_json, compute_timeseries_by_region, \
     write_to_file, write_to_null, write_to_s3
@@ -346,6 +347,21 @@ def update_metadata(doc_ids, summary_values, elastic_url, elastic_index):
         print(r.text)
         r.raise_for_status()
 
+@task(log_stdout=True)
+def record_region_hierarchy(df, dest, model_id, run_id):
+    region_cols = extract_region_columns(df)
+    hierarchy = {}
+    # This builds the hierarchy
+    for index, row in df.iterrows():
+        current_hierarchy_position = hierarchy
+        for region_id in range(len(region_cols) - 1):
+            current_region = row[region_cols[region_id]]
+            if current_region not in current_hierarchy_position:
+                current_hierarchy_position[current_region] = {}
+            current_hierarchy_position = current_hierarchy_position[current_region]
+        current_hierarchy_position[row[region_cols[-1]]] = None
+    feature_to_json(hierarchy, dest, model_id, run_id, 'hierarchy')
+
 ###########################################################################
 
 with Flow('datacube-ingest-v0.1') as flow:
@@ -420,6 +436,9 @@ with Flow('datacube-ingest-v0.1') as flow:
     save_raw_data(raw_df, dest, 'raw', model_id, 'indicator', compute_raw)
 
     df = remove_null_region_columns(raw_df)
+
+    # ==== Compute high level features for current run =====
+    record_region_hierarchy(df, dest, model_id, run_id)
 
     # ==== Run aggregations based on monthly time resolution =====
     monthly_data = temporal_aggregation(df, 'month', compute_monthly)

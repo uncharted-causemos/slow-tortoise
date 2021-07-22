@@ -171,6 +171,13 @@ def stats_to_json(x, dest, model_id, run_id, feature, time_res, filename, writer
     writer(body, path, dest)
 
 
+# save feature as a json file
+def feature_to_json(hierarchy, dest, model_id, run_id, feature):
+    bucket = dest['bucket']
+    s3 = boto3.resource('s3', aws_access_key_id=dest['key'], aws_secret_access_key=dest['secret'])
+    endpoint_url = f's3://{bucket}/{model_id}/{run_id}/raw/{feature}/{feature}.json'
+    s3.Object(bucket, endpoint_url).put(Body=str(json.dumps(hierarchy)))
+
 # transform given row to tile protobuf
 def to_proto(row):
     z, x, y = row.tile
