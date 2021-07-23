@@ -175,7 +175,7 @@ def stats_to_json(x, dest, model_id, run_id, feature, time_res, filename, writer
 def feature_to_json(hierarchy, dest, model_id, run_id, feature, writer):
     bucket = dest['bucket']
     path = f'{model_id}/{run_id}/raw/{feature}/{feature}.json'
-    body = str(json.dumps(hierarchy).encode('utf8'))
+    body = str(json.dumps(hierarchy))
     writer(body, path, dest)
 
 # transform given row to tile protobuf
