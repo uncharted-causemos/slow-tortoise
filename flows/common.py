@@ -176,7 +176,7 @@ def feature_to_json(hierarchy, dest, model_id, run_id, feature, writer):
     bucket = dest['bucket']
     path = f's3://{bucket}/{model_id}/{run_id}/raw/{feature}/{feature}.json'
     body = str(json.dumps(hierarchy).encode('utf8'))
-    write_to_s3(body, path, dest)
+    writer(body, path, dest)
 
 # transform given row to tile protobuf
 def to_proto(row):
