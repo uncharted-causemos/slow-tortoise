@@ -360,11 +360,11 @@ def record_region_hierarchy(df, dest, model_id, run_id):
         regions = []
         for region_id in range(len(region_cols) - 1):
             regions.append(row[region_cols[region_id]])
-            current_region = "_".join(regions)
+            current_region = "__".join(regions)
             if current_region not in current_hierarchy_position:
                 current_hierarchy_position[current_region] = {}
             current_hierarchy_position = current_hierarchy_position[current_region]
-        current_hierarchy_position[row[region_cols[-1]]] = None
+        current_hierarchy_position[f"{current_region}__{row[region_cols[-1]]}"] = None
     for feature in hierarchy:
         feature_to_json(hierarchy[feature], dest, model_id, run_id, feature, WRITE_TYPES[DEST_TYPE])
 
