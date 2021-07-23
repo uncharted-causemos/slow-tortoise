@@ -353,7 +353,10 @@ def record_region_hierarchy(df, dest, model_id, run_id):
     hierarchy = {}
     # This builds the hierarchy
     for index, row in df.iterrows():
-        current_hierarchy_position = hierarchy
+        feature = row['feature']
+        if feature not in hierarchy:
+            hierarchy[feature] = {}
+        current_hierarchy_position = hierarchy[feature]
         for region_id in range(len(region_cols) - 1):
             current_region = row[region_cols[region_id]]
             if current_region not in current_hierarchy_position:
@@ -361,7 +364,6 @@ def record_region_hierarchy(df, dest, model_id, run_id):
             current_hierarchy_position = current_hierarchy_position[current_region]
         current_hierarchy_position[row[region_cols[-1]]] = None
     feature_to_json(hierarchy, dest, model_id, run_id, 'hierarchy', WRITE_TYPES[DEST_TYPE])
-    df.compute()
 
 ###########################################################################
 
