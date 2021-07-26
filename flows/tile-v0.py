@@ -122,7 +122,7 @@ def download_data(source, data_paths, is_indicator):
     all_cols = df.columns.to_list()
     cols_to_drop = list(set(all_cols) - accepted_cols)
     print(f'All columns: {all_cols}. Dropping: {cols_to_drop}')
-    if cols_to_drop != None and len(cols_to_drop) > 0:
+    if len(cols_to_drop) > 0:
         df = df.drop(columns=cols_to_drop)
 
     # Ensure types

@@ -219,7 +219,7 @@ def get_storage_options(target):
 def join_region_columns(df, level=3, deli='__'):
     cols = df.columns.to_list()
     regions = []
-    for r in ['country', 'admin1', 'admin2', 'admin3']:
+    for r in REGION_LEVELS:
         if r in cols:
             regions.append(str(df[r]))
         else:
