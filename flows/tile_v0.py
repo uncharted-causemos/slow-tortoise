@@ -4,18 +4,19 @@ import dask.dataframe as dd
 import dask.bytes as db
 import pandas as pd
 import requests
+import boto3
 import os
 
 from prefect import task, Flow, Parameter
 from prefect.engine.signals import SKIP
 from prefect.storage import Docker
 from prefect.executors import DaskExecutor, LocalDaskExecutor
-from flows.common import deg2num, ancestor_tiles, filter_by_min_zoom, \
+from flows.common import run_temporal_aggregation, deg2num, ancestor_tiles, filter_by_min_zoom, \
     tile_coord, save_tile, save_timeseries, \
-    stats_to_json, to_proto, to_normalized_time, \
+    stats_to_json, feature_to_json, to_proto, to_normalized_time, \
     extract_region_columns, join_region_columns, save_regional_aggregation, \
     output_values_to_json_array, raw_data_to_json, compute_timeseries_by_region, \
-    write_to_file, write_to_null, write_to_s3
+    write_to_file, write_to_null, write_to_s3, compute_subtile_stats
 
 
 # Maps a write type to writing function
@@ -174,19 +175,7 @@ def remove_null_region_columns(df):
 def temporal_aggregation(df, time_res, should_run):
     if should_run is False:
         raise SKIP(f'Aggregating for resolution {time_res} was not requested')
-
-    columns = df.columns.tolist()
-    columns.remove('value')
-
-    # Monthly temporal aggregation (compute for both sum and mean)
-    t = dd.to_datetime(df['timestamp'], unit='ms').apply(lambda x: to_normalized_time(x, time_res), meta=(None, 'int'))
-    temporal_df = df.assign(timestamp=t) \
-                    .groupby(columns)['value'].agg(['sum', 'mean'])
-
-    # Rename agg column names
-    temporal_df.columns = temporal_df.columns.str.replace('sum', 't_sum').str.replace('mean', 't_mean')
-    temporal_df = temporal_df.reset_index()
-    return temporal_df
+    return run_temporal_aggregation(df, time_res)
 
 @task(log_stdout=True)
 def compute_timeseries(df, dest, time_res, model_id, run_id):
@@ -228,8 +217,6 @@ def subtile_aggregation(df, should_run):
 
 @task(log_stdout=True)
 def compute_tiling(df, dest, time_res, model_id, run_id):
-    # Get all acestor subtiles and explode
-    # TODO: Instead of exploding, try reducing down by processing from higest zoom levels to lowest zoom levels one by one level.
     stile = df.apply(lambda x: filter_by_min_zoom(ancestor_tiles(x.subtile), MIN_SUBTILE_PRECISION), axis=1, meta=(None, 'object'))
     tiling_df = df.assign(subtile=stile)
     tiling_df = tiling_df.explode('subtile').repartition(npartitions = 100)
@@ -303,7 +290,7 @@ def compute_regional_timeseries(df, dest, model_id, run_id, time_res):
 
 @task(log_stdout=True)
 def compute_stats(df, dest, time_res, model_id, run_id, filename):
-    assist_compute_stats(df, dest, time_res, model_id, run_id, filename)
+    compute_subtile_stats(df, dest, model_id, run_id, time_res, MIN_SUBTILE_PRECISION, WRITE_TYPES[DEST_TYPE])
 
 def assist_compute_stats(df, dest, time_res, model_id, run_id, filename):
     #Compute mean and get new dataframe with mean columns added
@@ -356,6 +343,27 @@ def update_metadata(doc_ids, summary_values, elastic_url, elastic_index):
         print(r.text)
         r.raise_for_status()
 
+@task(log_stdout=True)
+def record_region_hierarchy(df, dest, model_id, run_id):
+    region_cols = extract_region_columns(df)
+    hierarchy = {}
+    # This builds the hierarchy
+    for index, row in df.iterrows():
+        feature = row['feature']
+        if feature not in hierarchy:
+            hierarchy[feature] = {}
+        current_hierarchy_position = hierarchy[feature]
+        regions = []
+        for region_id in range(len(region_cols) - 1):
+            regions.append(row[region_cols[region_id]])
+            current_region = "__".join(regions)
+            if current_region not in current_hierarchy_position:
+                current_hierarchy_position[current_region] = {}
+            current_hierarchy_position = current_hierarchy_position[current_region]
+        current_hierarchy_position[f"{current_region}__{row[region_cols[-1]]}"] = None
+    for feature in hierarchy:
+        feature_to_json(hierarchy[feature], dest, model_id, run_id, feature, WRITE_TYPES[DEST_TYPE])
+
 ###########################################################################
 
 with Flow('datacube-ingest-v0.1') as flow:
@@ -379,7 +387,7 @@ with Flow('datacube-ingest-v0.1') as flow:
         image_name=image_name,
         local_image=True,
         stored_as_script=True,
-        path="/wm_data_pipeline/flows/tile-v0.py",
+        path="/wm_data_pipeline/flows/tile_v0.py",
         ignore_healthchecks=True,
     )
 
@@ -430,6 +438,9 @@ with Flow('datacube-ingest-v0.1') as flow:
     save_raw_data(raw_df, dest, 'raw', model_id, 'indicator', compute_raw)
 
     df = remove_null_region_columns(raw_df)
+
+    # ==== Compute high level features for current run =====
+    record_region_hierarchy(df, dest, model_id, run_id)
 
     # ==== Run aggregations based on monthly time resolution =====
     monthly_data = temporal_aggregation(df, 'month', compute_monthly)

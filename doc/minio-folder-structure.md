@@ -5,7 +5,8 @@
     \- {time_res}
       \- {feature}
         \- stats
-          \- stats.json: {“0”: {“min”: 2, “max”: 5}}
+          \- grid
+            \- {timestamp}.csv  | zoom | min_agg_func1 | max_agg_func1 | ...
         \- tiles
           \- {timestamp}-{zoom}-{x}-{y}.tile
         \- timeseries

@@ -1,5 +1,6 @@
 import datetime
 import pandas as pd
+import dask.dataframe as dd
 import math
 import boto3
 import json
@@ -20,6 +21,21 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__))))
 import tiles_pb2
 
 REGION_LEVELS = ['country', 'admin1', 'admin2', 'admin3']
+
+# Run temporal aggregation on given provided dataframe
+def run_temporal_aggregation(df, time_res):
+    columns = df.columns.tolist()
+    columns.remove('value')
+
+    # Monthly temporal aggregation (compute for both sum and mean)
+    t = dd.to_datetime(df['timestamp'], unit='ms').apply(lambda x: to_normalized_time(x, time_res), meta=(None, 'int'))
+    temporal_df = df.assign(timestamp=t) \
+                    .groupby(columns)['value'].agg(['sum', 'mean'])
+
+    # Rename agg column names
+    temporal_df.columns = temporal_df.columns.str.replace('sum', 't_sum').str.replace('mean', 't_mean')
+    temporal_df = temporal_df.reset_index()
+    return temporal_df 
 
 # More details on tile calculations https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames
 # Convert lat, long to tile coord
@@ -171,6 +187,13 @@ def stats_to_json(x, dest, model_id, run_id, feature, time_res, filename, writer
     writer(body, path, dest)
 
 
+# save feature as a json file
+def feature_to_json(hierarchy, dest, model_id, run_id, feature, writer):
+    bucket = dest['bucket']
+    path = f'{model_id}/{run_id}/raw/{feature}/hierarchy/hierarchy.json'
+    body = str(json.dumps(hierarchy))
+    writer(body, path, dest)
+
 # transform given row to tile protobuf
 def to_proto(row):
     z, x, y = row.tile
@@ -310,3 +333,44 @@ def compute_timeseries_by_region(temporal_df, dest, model_id, run_id, time_res, 
     timeseries_df = timeseries_df.repartition(npartitions = 12).groupby(['feature', 'region_id']).apply(
         lambda x: save_regional_timeseries(x, dest, model_id, run_id, time_res, timeseries_agg_columns, region_level, writer), meta=(None, 'object'))
     timeseries_df.compute()
+
+# Save subtile stats to csv
+def save_subtile_stats(df, dest, model_id, run_id, time_res, writer):
+    bucket = dest['bucket']
+    feature = df['feature'].values[0]
+    timestamp = df['timestamp'].values[0]
+    columns = df.columns.tolist()
+    columns.remove('feature')
+    columns.remove('timestamp')
+
+    path = f'{model_id}/{run_id}/{time_res}/{feature}/stats/grid/{timestamp}.csv'
+    body = df[columns].to_csv(index=False)
+    writer(body, path, dest)
+    
+
+# Compute min/max stats of subtiles (grid cells) at each zoom level
+def compute_subtile_stats(subtile_df, dest, model_id, run_id, time_res, min_precision, writer):
+    df = subtile_df.copy()
+    # Get a list of all acestor tiles at different zoom level for each subtile
+    tiles_series = df.apply(lambda x: filter_by_min_zoom(ancestor_tiles(x.subtile), min_precision), axis=1, meta=(None, 'object'))
+    df = df.assign(subtile=tiles_series)
+    # Explode data and duplicate data points for each zoom level (zoom level is defined by subtile coordinates)
+    df = df.explode('subtile').repartition(npartitions = 12)
+    # Group data points by unique subtile and sum their values and counts up
+    df = df.groupby(['feature', 'timestamp', 'subtile']).agg('sum')
+    df = df.reset_index()
+
+    # Compute mean from sum and count
+    df = df.assign(s_mean_t_sum=df['s_sum_t_sum'] / df['s_count'], s_mean_t_mean=df['s_sum_t_mean'] / df['s_count'])
+    # Extract zoom level from subtile cooridnates
+    zoom = df['subtile'].apply(lambda x: x[0], meta=('subtile', 'object')) 
+    df = df.assign(zoom=zoom).drop(['subtile', 's_count'], axis=1)
+    # Group by zoom level and compute min and max value
+    df = df.groupby(['feature', 'timestamp', 'zoom']).agg(['min', 'max'])
+    # Flatten multi index columns to single index e.g (s_sum_t_sum, min) -> min_s_sum_t_sum
+    df.columns = ["_".join(tuple(reversed(cols))) for cols in df.columns.to_flat_index()]
+    df = df.reset_index()
+
+    # Save the stats for each timestamp
+    df = df.groupby(['feature', 'timestamp']).apply(lambda x: save_subtile_stats(x, dest, model_id, run_id, time_res, writer), meta=(None, 'object'))
+    df.compute()
