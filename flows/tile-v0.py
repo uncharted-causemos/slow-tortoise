@@ -116,6 +116,14 @@ def download_data(source, data_paths, is_indicator):
     # These columns are empty for indicators and they seem to break the pipeline
     if is_indicator:
         df = df.drop(columns=['lat', 'lng'])
+    
+    # Drop all additional columns
+    accepted_cols = set(['timestamp', 'country', 'admin1', 'admin2', 'admin3', 'lat', 'lng', 'feature', 'value'])
+    all_cols = df.columns.to_list()
+    cols_to_drop = list(set(all_cols) - accepted_cols)
+    print(f'All columns: {all_cols}. Dropping: {cols_to_drop}')
+    if cols_to_drop != None and len(cols_to_drop) > 0:
+        df = df.drop(columns=cols_to_drop)
 
     # Ensure types
     df = df.astype({'value': 'float64'})
@@ -246,6 +254,8 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
     df = df.reset_index()
 
     regions_cols = extract_region_columns(df)
+    if len(regions_cols) == 0:
+        raise SKIP('No regional information available')
 
     # Region aggregation at the highest admin level
     df = df[['feature', 'timestamp', 's_sum_t_sum', 's_sum_t_mean', 's_count'] + regions_cols] \

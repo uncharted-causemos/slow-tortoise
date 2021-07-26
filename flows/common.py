@@ -217,14 +217,15 @@ def get_storage_options(target):
     return options
 
 def join_region_columns(df, level=3, deli='__'):
-    if level == 3:
-        return df['country'] + deli + df['admin1'] + deli + df['admin2'] + deli + df['admin3']
-    elif level == 2:
-        return df['country'] + deli + df['admin1'] + deli + df['admin2']
-    elif level == 1:
-        return df['country'] + deli + df['admin1']
-    else:
-        return df['country']
+    cols = df.columns.to_list()
+    regions = []
+    for r in ['country', 'admin1', 'admin2', 'admin3']:
+        if r in cols:
+            regions.append(str(df[r]))
+        else:
+            regions.append('None')
+    
+    return deli.join(regions[:level + 1])
 
 
 def save_regional_aggregation(x, dest, model_id, run_id, time_res, writer, region_level="admin3"):
