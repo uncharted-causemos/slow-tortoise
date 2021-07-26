@@ -10,4 +10,4 @@ export WM_PUSH_IMAGE=true
 PROJECT="Tiling"
 
 # add calls to register flows here
-prefect register --project="$PROJECT" --label wm-prefect-server.openstack.uncharted.software --label docker --path ../../flows/tile-v0.py
+prefect register --project="$PROJECT" --label wm-prefect-server.openstack.uncharted.software --label docker --path ../../flows/tile_v0.py

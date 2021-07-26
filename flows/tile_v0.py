@@ -377,7 +377,7 @@ with Flow('datacube-ingest-v0.1') as flow:
         image_name=image_name,
         local_image=True,
         stored_as_script=True,
-        path="/wm_data_pipeline/flows/tile-v0.py",
+        path="/wm_data_pipeline/flows/tile_v0.py",
         ignore_healthchecks=True,
     )
 
