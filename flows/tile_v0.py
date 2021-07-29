@@ -358,18 +358,20 @@ def record_region_hierarchy(df, dest, model_id, run_id):
         current_hierarchy_position = hierarchy[feature]
         
         # Not all rows will have values for all regions, find the last good region level
-        last_region = region_cols[0]
+        last_region = None
         for region in reversed(region_cols):
             if row[region] is not None:
                 last_region = region
                 break
+        if last_region is None:
+            continue
         # Create list ending at the last good region. These are the levels we will have in our hierarchy
         last_level = REGION_LEVELS.index(last_region)
 
         # Add valid regions
         for level in range(last_level + 1):
             current_region = join_region_columns(row, region_cols, level)
-            if current_region not in current_hierarchy_position:
+            if current_region not in current_hierarchy_position or current_hierarchy_position[current_region] is None:
                 current_hierarchy_position[current_region] = None if level == last_level else {}
             current_hierarchy_position = current_hierarchy_position[current_region]
 
