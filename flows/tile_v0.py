@@ -85,7 +85,7 @@ ELASTIC_MODEL_RUN_INDEX = 'data-model-run'
 ELASTIC_INDICATOR_INDEX = 'data-datacube'
 
 @task(log_stdout=True)
-def download_data(source, data_paths, is_indicator):
+def download_data(source, data_paths):
     df = None
     # if source is from s3 bucket
     if 's3://' in data_paths[0]:
@@ -114,8 +114,11 @@ def download_data(source, data_paths, is_indicator):
         dfs = [delayed(pd.read_parquet)(path) for path in numeric_files]
         df = dd.from_delayed(dfs).repartition(npartitions = 12)
 
-    # These columns are empty for indicators and they seem to break the pipeline
-    if is_indicator:
+    # Remove lat/lng columns if they are null
+    ll_df = df[['lat', 'lng']]
+    null_cols = set(ll_df.columns[ll_df.isnull().all()])
+    if 'lat' in null_cols or 'lng' in null_cols:
+        print('No lat/long data. Dropping columns.')
         df = df.drop(columns=['lat', 'lng'])
     
     # Drop all additional columns
@@ -132,7 +135,10 @@ def download_data(source, data_paths, is_indicator):
     return df
 
 @task(log_stdout=True)
-def configure_pipeline(dest, indicator_bucket, model_bucket, compute_tiles, is_indicator) -> Tuple[dict, str, bool, bool, bool, bool, bool]:
+def configure_pipeline(df, dest, indicator_bucket, model_bucket, compute_tiles, is_indicator) -> Tuple[dict, str, bool, bool, bool, bool, bool]:
+    all_cols = df.columns.to_list()
+    compute_tiles = compute_tiles and 'lat' in all_cols and 'lng' in all_cols
+
     if is_indicator:
         dest['bucket'] = indicator_bucket
         elastic_index = ELASTIC_INDICATOR_INDEX
@@ -140,7 +146,6 @@ def configure_pipeline(dest, indicator_bucket, model_bucket, compute_tiles, is_i
         compute_monthly = True
         compute_annual = True
         compute_summary = False
-        compute_tiles = False
     else:
         dest['bucket'] = model_bucket
         elastic_index = ELASTIC_MODEL_RUN_INDEX
@@ -435,7 +440,7 @@ with Flow('datacube-ingest-v0.1') as flow:
         'secret': 'foobarbaz'
     })
 
-    raw_df = download_data(source, data_paths, is_indicator)
+    raw_df = download_data(source, data_paths)
 
     # ==== Set parameters that determine which tasks should run based on the type of data we're ingesting ====
     (
@@ -446,7 +451,7 @@ with Flow('datacube-ingest-v0.1') as flow:
         compute_annual,
         compute_summary,
         compute_tiles,
-    ) = configure_pipeline(dest, indicator_bucket, model_bucket, compute_tiles, is_indicator)
+    ) = configure_pipeline(raw_df, dest, indicator_bucket, model_bucket, compute_tiles, is_indicator)
 
     # ==== Save raw data =====
     save_raw_data(raw_df, dest, 'raw', model_id, 'indicator', compute_raw)
@@ -502,6 +507,12 @@ if __name__ == "__main__" and LOCAL_RUN:
         #      model_id='1fb59bc8-a321-4981-8ec9-1041798ddb7e',
         #      run_id='indicator',
         #      data_paths=["https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/1fb59bc8-a321-4981-8ec9-1041798ddb7e/1fb59bc8-a321-4981-8ec9-1041798ddb7e.parquet.gzip"]
+        # ))
+        # flow.run(parameters=dict(
+        #      compute_tiles=True,
+        #      model_id="9e896392-2639-4df6-b4b4-e1b1d4cf46ae",
+        #      run_id="2dc64e9d-be17-471e-a24b-aeb9c1178313",
+        #      data_paths=["https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/2dc64e9d-be17-471e-a24b-aeb9c1178313/2dc64e9d-be17-471e-a24b-aeb9c1178313_9e896392-2639-4df6-b4b4-e1b1d4cf46ae.parquet.gzip"]
         # ))
         flow.run(parameters=dict(
              compute_tiles=True,
