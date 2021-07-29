@@ -16,7 +16,7 @@ from flows.common import run_temporal_aggregation, deg2num, ancestor_tiles, filt
     stats_to_json, feature_to_json, to_proto, to_normalized_time, \
     extract_region_columns, join_region_columns, save_regional_aggregation, \
     output_values_to_json_array, raw_data_to_json, compute_timeseries_by_region, \
-    write_to_file, write_to_null, write_to_s3, compute_subtile_stats
+    write_to_file, write_to_null, write_to_s3, compute_subtile_stats, REGION_LEVELS
 
 
 # Maps a write type to writing function
@@ -257,7 +257,7 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
     for level in range(len(regions_cols)):
         save_df = df.copy()
         # Merge region columns to single region_id column. eg. ['Ethiopia', 'Afar'] -> ['Ethiopia_Afar']
-        save_df['region_id'] = join_region_columns(save_df, level)
+        save_df['region_id'] = join_region_columns(save_df, regions_cols, level)
 
         desired_columns = ['feature', 'timestamp', 'region_id', 's_sum_t_sum', 's_sum_t_mean', 's_count']
         save_df = save_df[desired_columns].groupby(['feature', 'timestamp']).agg(list)
@@ -279,7 +279,7 @@ def compute_regional_aggregation_stats(regional_df, dest, timeframe, model_id, r
     for level in range(len(regions_cols)):
         df = regional_df.copy()
         # Merge region columns to single region_id column. eg. ['Ethiopia', 'Afar'] -> ['Ethiopia_Afar']
-        df['region_id'] = join_region_columns(df, level)
+        df['region_id'] = join_region_columns(df, regions_cols, level)
         assist_compute_stats(df, dest, timeframe, model_id, run_id, f'regional/{regions_cols[level]}')
 
 @task(log_stdout=True)
@@ -346,21 +346,33 @@ def update_metadata(doc_ids, summary_values, elastic_url, elastic_index):
 @task(log_stdout=True)
 def record_region_hierarchy(df, dest, model_id, run_id):
     region_cols = extract_region_columns(df)
+    if len(region_cols) == 0:
+        raise SKIP('No regional information available')
+
     hierarchy = {}
     # This builds the hierarchy
-    for index, row in df.iterrows():
+    for _, row in df.iterrows():
         feature = row['feature']
         if feature not in hierarchy:
             hierarchy[feature] = {}
         current_hierarchy_position = hierarchy[feature]
-        regions = []
-        for region_id in range(len(region_cols) - 1):
-            regions.append(row[region_cols[region_id]])
-            current_region = "__".join(regions)
+        
+        # Not all rows will have values for all regions, find the last good region level
+        last_region = region_cols[0]
+        for region in reversed(region_cols):
+            if row[region] is not None:
+                last_region = region
+                break
+        # Create list ending at the last good region. These are the levels we will have in our hierarchy
+        last_level = REGION_LEVELS.index(last_region)
+
+        # Add valid regions
+        for level in range(last_level + 1):
+            current_region = join_region_columns(row, region_cols, level)
             if current_region not in current_hierarchy_position:
-                current_hierarchy_position[current_region] = {}
+                current_hierarchy_position[current_region] = None if level == last_level else {}
             current_hierarchy_position = current_hierarchy_position[current_region]
-        current_hierarchy_position[f"{current_region}__{row[region_cols[-1]]}"] = None
+
     for feature in hierarchy:
         feature_to_json(hierarchy[feature], dest, model_id, run_id, feature, WRITE_TYPES[DEST_TYPE])
 
@@ -483,6 +495,12 @@ if __name__ == "__main__" and LOCAL_RUN:
     with raise_on_exception():
         # flow.run(parameters=dict(is_indicator=True, model_id='ACLED', run_id='indicator', data_paths=['s3://test/acled/acled-test.bin']))
         # flow.run(parameters=dict(compute_tiles=True, model_id='geo-test-data', run_id='test-run', data_paths=['s3://test/geo-test-data.parquet']))
+        # flow.run(parameters=dict(
+        #      is_indicator=True,
+        #      model_id='1fb59bc8-a321-4981-8ec9-1041798ddb7e',
+        #      run_id='indicator',
+        #      data_paths=["https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/1fb59bc8-a321-4981-8ec9-1041798ddb7e/1fb59bc8-a321-4981-8ec9-1041798ddb7e.parquet.gzip"]
+        # ))
         flow.run(parameters=dict(
              compute_tiles=True,
              model_id='maxhop-v0.2',

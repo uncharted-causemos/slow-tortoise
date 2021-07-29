@@ -239,17 +239,19 @@ def get_storage_options(target):
     }
     return options
 
-def join_region_columns(df, level=3, deli='__'):
-    cols = df.columns.to_list()
-    regions = []
-    for r in REGION_LEVELS:
-        if r in cols:
-            regions.append(str(df[r]))
-        else:
-            regions.append('None')
-    
-    return deli.join(regions[:level + 1])
+def join_region_columns(df, columns, level=3, deli='__'):
+    regions = ['None', 'None', 'None', 'None']
+    for region in columns:
+        regions[REGION_LEVELS.index(region)] = df[region]
 
+    if level == 3:
+        return regions[0] + deli + regions[1] + deli + regions[2] + deli + regions[3]
+    elif level == 2:
+        return regions[0] + deli + regions[1] + deli + regions[2]
+    elif level == 1:
+        return regions[0] + deli + regions[1]
+    else:
+        return regions[0]
 
 def save_regional_aggregation(x, dest, model_id, run_id, time_res, writer, region_level="admin3"):
     feature = x.feature
@@ -318,7 +320,8 @@ def save_regional_timeseries(df, dest, model_id, run_id, time_res, timeseries_ag
 # Compute timeseries by region
 def compute_timeseries_by_region(temporal_df, dest, model_id, run_id, time_res, region_level, writer):
     timeseries_df = temporal_df.copy()
-    timeseries_df['region_id'] = join_region_columns(timeseries_df, REGION_LEVELS.index(region_level))
+    regions_cols = extract_region_columns(timeseries_df)
+    timeseries_df['region_id'] = join_region_columns(timeseries_df, regions_cols, REGION_LEVELS.index(region_level))
     timeseries_aggs = ['min', 'max', 'sum', 'mean', 'count']
     timeseries_lookup = {
         ('t_sum', 'min'): 's_min_t_sum', ('t_sum', 'max'): 's_max_t_sum', ('t_sum', 'sum'): 's_sum_t_sum', ('t_sum', 'mean'): 's_mean_t_sum',
