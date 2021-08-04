@@ -84,6 +84,8 @@ MAX_ZOOM = MAX_SUBTILE_PRECISION - LEVEL_DIFF
 ELASTIC_MODEL_RUN_INDEX = 'data-model-run'
 ELASTIC_INDICATOR_INDEX = 'data-datacube'
 
+LAT_LONG_COLUMNS = ['lat', 'lng']
+
 @task(log_stdout=True)
 def download_data(source, data_paths):
     df = None
@@ -115,11 +117,11 @@ def download_data(source, data_paths):
         df = dd.from_delayed(dfs).repartition(npartitions = 12)
 
     # Remove lat/lng columns if they are null
-    ll_df = df[['lat', 'lng']]
+    ll_df = df[LAT_LONG_COLUMNS]
     null_cols = set(ll_df.columns[ll_df.isnull().all()])
-    if 'lat' in null_cols or 'lng' in null_cols:
+    if len(set(LAT_LONG_COLUMNS) & null_cols) > 0:
         print('No lat/long data. Dropping columns.')
-        df = df.drop(columns=['lat', 'lng'])
+        df = df.drop(columns=LAT_LONG_COLUMNS)
     
     # Drop all additional columns
     accepted_cols = set(['timestamp', 'country', 'admin1', 'admin2', 'admin3', 'lat', 'lng', 'feature', 'value'])
@@ -137,7 +139,7 @@ def download_data(source, data_paths):
 @task(log_stdout=True)
 def configure_pipeline(df, dest, indicator_bucket, model_bucket, compute_tiles, is_indicator) -> Tuple[dict, str, bool, bool, bool, bool, bool]:
     all_cols = df.columns.to_list()
-    compute_tiles = compute_tiles and 'lat' in all_cols and 'lng' in all_cols
+    compute_tiles = compute_tiles and set(LAT_LONG_COLUMNS).issubset(all_cols)
 
     if is_indicator:
         dest['bucket'] = indicator_bucket
