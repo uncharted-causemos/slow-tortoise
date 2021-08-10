@@ -383,7 +383,30 @@ def record_region_hierarchy(df, dest, model_id, run_id):
             current_hierarchy_position = current_hierarchy_position[current_region]
 
     for feature in hierarchy:
-        feature_to_json(hierarchy[feature], dest, model_id, run_id, feature, WRITE_TYPES[DEST_TYPE])
+        feature_to_json(hierarchy[feature], dest, model_id, run_id, feature, 'hierarchy', WRITE_TYPES[DEST_TYPE])
+
+@task(log_stdout=True)
+def record_region_lists(df, dest, model_id, run_id):
+    region_cols = extract_region_columns(df)
+    if len(region_cols) == 0:
+        raise SKIP('No regional information available')
+
+    feature_to_regions = {}
+    # This builds the hierarchy
+    for _, row in df.iterrows():
+        feature = row['feature']
+        if feature not in feature_to_regions:
+            feature_to_regions[feature] = {r:[] for r in reversed(region_cols)}
+        feature_region_lists = feature_to_regions[feature]
+
+        all_regions = []
+        for region in reversed(region_cols):
+            all_regions.append(row[region])
+            all_region_str = ["None" if i is None else i for i in all_regions]
+            feature_region_lists[region].append("__".join(all_region_str))
+
+    for feature in feature_to_regions:
+        feature_to_json(feature_to_regions[feature], dest, model_id, run_id, feature, 'region_lists', WRITE_TYPES[DEST_TYPE])
 
 ###########################################################################
 
@@ -462,6 +485,7 @@ with Flow('datacube-ingest-v0.1') as flow:
 
     # ==== Compute high level features for current run =====
     record_region_hierarchy(df, dest, model_id, run_id)
+    record_region_lists(df, dest, model_id, run_id)
 
     # ==== Run aggregations based on monthly time resolution =====
     monthly_data = temporal_aggregation(df, 'month', compute_monthly)
