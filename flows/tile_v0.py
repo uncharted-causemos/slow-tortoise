@@ -172,7 +172,9 @@ def save_raw_data(df, dest, time_res, model_id, run_id, should_run):
     raw_df.compute()
 
 @task(log_stdout=True)
-def remove_null_region_columns(df):
+def process_null_region_columns(df):
+    for region_level in REGION_LEVELS:
+        df[region_level] = df[region_level].fillna(value="None")
     region_cols = extract_region_columns(df)
     cols_to_drop = set(df.columns[df.isnull().all()])
     region_cols_to_drop = list(cols_to_drop.intersection(region_cols))
@@ -458,7 +460,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     # ==== Save raw data =====
     save_raw_data(raw_df, dest, 'raw', model_id, 'indicator', compute_raw)
 
-    df = remove_null_region_columns(raw_df)
+    df = process_null_region_columns(raw_df)
 
     # ==== Compute high level features for current run =====
     record_region_hierarchy(df, dest, model_id, run_id)
