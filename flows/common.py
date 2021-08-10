@@ -29,6 +29,7 @@ def run_temporal_aggregation(df, time_res):
 
     # Monthly temporal aggregation (compute for both sum and mean)
     t = dd.to_datetime(df['timestamp'], unit='ms').apply(lambda x: to_normalized_time(x, time_res), meta=(None, 'int'))
+    df = df.fillna(value="")
     temporal_df = df.assign(timestamp=t) \
                     .groupby(columns)['value'].agg(['sum', 'mean'])
 
