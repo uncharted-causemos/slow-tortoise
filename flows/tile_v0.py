@@ -396,17 +396,18 @@ def record_region_lists(df, dest, model_id, run_id):
     for _, row in df.iterrows():
         feature = row['feature']
         if feature not in feature_to_regions:
-            feature_to_regions[feature] = {r:[] for r in reversed(region_cols)}
+            feature_to_regions[feature] = {r:set() for r in region_cols}
         feature_region_lists = feature_to_regions[feature]
 
         all_regions = []
-        for region in reversed(region_cols):
+        for region in region_cols:
             all_regions.append(row[region])
             all_region_str = ["None" if i is None else i for i in all_regions]
-            feature_region_lists[region].append("__".join(all_region_str))
-
+            feature_region_lists[region].add("__".join(all_region_str))
     for feature in feature_to_regions:
-        feature_to_json(feature_to_regions[feature], dest, model_id, run_id, feature, 'region_lists', WRITE_TYPES[DEST_TYPE])
+        current_feature_map = feature_to_regions[feature]
+        regions_for_feature = {region: list(current_feature_map[region]) for region in current_feature_map}
+        feature_to_json(regions_for_feature, dest, model_id, run_id, feature, 'region_lists', WRITE_TYPES[DEST_TYPE])
 
 ###########################################################################
 
