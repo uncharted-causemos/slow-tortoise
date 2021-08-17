@@ -17,6 +17,9 @@ with open(sys.argv[2]) as datamart_file:
     datamart_list = [did.rstrip() for did in lines]
 num_datamart = len(datamart_list)
 
+# Old indicators that should have been deleted from Dojo
+datamart_list = datamart_list + ['bd7f6184-35bd-4c6c-a490-dd2a365dc358', '12ecb553-9c50-4f3e-b175-4e3819a2f37b']
+
 non_datamart = [];
 print(f'>> Read {num_indicators} indicators, {num_datamart} datamart IDs.', file=sys.stderr)
 for indicator in indicators:
