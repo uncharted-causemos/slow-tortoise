@@ -387,10 +387,16 @@ def record_region_hierarchy(df, dest, model_id, run_id):
 
 @task(log_stdout=True)
 def record_region_lists(df, dest, model_id, run_id):
+    feature_to_regions = get_feature_to_regions(df)
+    for feature in feature_to_regions:
+        current_feature_map = feature_to_regions[feature]
+        regions_for_feature = {region: list(current_feature_map[region]) for region in current_feature_map}
+        feature_to_json(regions_for_feature, dest, model_id, run_id, feature, 'region_lists', WRITE_TYPES[DEST_TYPE])
+
+def get_feature_to_regions(df):
     region_cols = extract_region_columns(df)
     if len(region_cols) == 0:
         raise SKIP('No regional information available')
-
     feature_to_regions = {}
     # This builds the hierarchy
     for _, row in df.iterrows():
@@ -398,17 +404,17 @@ def record_region_lists(df, dest, model_id, run_id):
         if feature not in feature_to_regions:
             feature_to_regions[feature] = {r:set() for r in region_cols}
         feature_region_lists = feature_to_regions[feature]
-
         all_regions = []
         for region in region_cols:
             all_regions.append(row[region])
             all_region_str = ["None" if i is None else i for i in all_regions]
             feature_region_lists[region].add("__".join(all_region_str))
-    for feature in feature_to_regions:
-        current_feature_map = feature_to_regions[feature]
-        regions_for_feature = {region: list(current_feature_map[region]) for region in current_feature_map}
-        feature_to_json(regions_for_feature, dest, model_id, run_id, feature, 'region_lists', WRITE_TYPES[DEST_TYPE])
-
+    feature_to_regions_lists = {
+        feature: { admin_level: list(feature_to_regions[feature][admin_level])
+           for admin_level in feature_to_regions[feature] }
+        for feature in feature_to_regions
+    }
+    return feature_to_regions_lists
 ###########################################################################
 
 with Flow('datacube-ingest-v0.1') as flow:
