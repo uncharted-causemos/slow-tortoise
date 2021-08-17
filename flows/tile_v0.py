@@ -394,12 +394,9 @@ def record_region_lists(df, dest, model_id, run_id):
         feature_to_json(regions_for_feature, dest, model_id, run_id, feature, 'region_lists', WRITE_TYPES[DEST_TYPE])
 
 def get_feature_to_regions(df):
-    region_cols = extract_region_columns(df)
-    if len(region_cols) == 0:
-        raise SKIP('No regional information available')
-    feature_to_regions = {}
-    # This builds the hierarchy
-    for _, row in df.iterrows():
+    def process_row(row, feature_to_regions):
+        indices = list(row.index)
+        row = {indices[index]: row[index] for index, _ in enumerate(list(row))}
         feature = row['feature']
         if feature not in feature_to_regions:
             feature_to_regions[feature] = {r:set() for r in region_cols}
@@ -409,10 +406,17 @@ def get_feature_to_regions(df):
             all_regions.append(row[region])
             all_region_str = ["None" if i is None else i for i in all_regions]
             feature_region_lists[region].add("__".join(all_region_str))
+    region_cols = extract_region_columns(df)
+    if len(region_cols) == 0:
+        raise SKIP('No regional information available')
+    feature_to_regions = {}
+    # This builds the hierarchy
+    df.apply(lambda row: process_row(row, feature_to_regions), axis=1)
     feature_to_regions_lists = {
         feature: { admin_level: list(feature_to_regions[feature][admin_level])
            for admin_level in feature_to_regions[feature] }
         for feature in feature_to_regions
+
     }
     return feature_to_regions_lists
 ###########################################################################

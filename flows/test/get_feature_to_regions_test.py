@@ -1,14 +1,14 @@
 from flows.tile_v0 import get_feature_to_regions
 import pandas as pd
 
-d = {
+data = {
     'feature': ["f1", "f1"],
     'country': ["Canada", "Canada"],
     'admin1': ["Ontario", "Ontario"],
     'admin2': ["Simcoe", "Halton"],
     'admin3': ["Barrie", "Burlington"]
 }
-df = pd.DataFrame(data=d)
+df = pd.DataFrame(data=data)
 result = get_feature_to_regions(df)
 expected = {
     'f1': {'country': ['Canada'],
