@@ -13,17 +13,17 @@ with open(file) as geojson_file:
     properties = f['properties']
     region_id = properties['NAME_0']
     delimeter = '__'
-    if delimeter in region_id:
+    if region_id is not None and delimeter in region_id:
       msg = f'Region name, {region_id} contains {delimeter}.\nCan not create an unique region id using region names joined with "{delimeter}"'
       raise ValueError(msg)
     for level in range(1, 4): 
       name_field = 'NAME_' + str(level)
       if name_field in properties:
         region_name = properties[name_field] 
-        if delimeter in region_name:
+        if region_name is not None and delimeter in region_name:
           msg = f'Region name, {region_name} contains {delimeter}.\nCan not create an unique region id using region names joined with "{delimeter}"' 
           raise ValueError(msg)
-        region_id = region_id + delimeter + region_name
+        region_id = region_id + delimeter + (region_name if region_name is not None else 'None')
     properties['id'] = region_id
   
 # Write back to the same file
