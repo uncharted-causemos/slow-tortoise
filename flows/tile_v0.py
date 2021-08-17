@@ -554,7 +554,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     month_csv_ts_done = compute_timeseries_as_csv(monthly_data, dest, 'month', model_id, run_id, qualifier_map)
     compute_regional_timeseries(monthly_data, dest, 'month', model_id, run_id)
     monthly_regional_df = compute_regional_aggregation(monthly_data, dest, 'month', model_id, run_id)
-    # monthly_regional_df = compute_regional_aggregation_to_csv(monthly_data, dest, 'month', model_id, run_id, qualifier_map)
+    # monthly_csv_regional_df = compute_regional_aggregation_to_csv(monthly_data, dest, 'month', model_id, run_id, qualifier_map)
 
     monthly_spatial_data = subtile_aggregation(monthly_data, compute_tiles, upstream_tasks=[month_ts_done, month_csv_ts_done])
     month_stats_done = compute_stats(monthly_spatial_data, dest, 'month', model_id, run_id, "stats")
@@ -566,6 +566,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     year_csv_ts_done = compute_timeseries_as_csv(annual_data, dest, 'year', model_id, run_id, qualifier_map)
     compute_regional_timeseries(annual_data, dest, 'year', model_id, run_id)
     annual_regional_df = compute_regional_aggregation(annual_data, dest, 'year', model_id, run_id)
+    # annual_csv_regional_df = compute_regional_aggregation_to_csv(annual_data, dest, 'year', model_id, run_id, qualifier_map)
 
     annual_spatial_data = subtile_aggregation(annual_data, compute_tiles, upstream_tasks=[year_ts_done, year_csv_ts_done])
     year_stats_done = compute_stats(annual_spatial_data, dest, 'year', model_id, run_id, "stats")
@@ -616,8 +617,7 @@ if __name__ == "__main__" and LOCAL_RUN:
         # ))
         flow.run(parameters=dict(
              is_indicator=True,
-            #  qualifier_map={'fatalities': ['country_non_primary', 'admin1_non_primary', 'admin2_non_primary', 'admin3_non_primary',
-            #     'event_id_cnty', 'event_type', 'sub_event_type', 'actor1', 'assoc_actor_1', 'actor2', 'assoc_actor_2', 'source', 'source_scale']},
+             qualifier_map={'fatalities': ['event_type', 'sub_event_type', 'source_scale']},
              model_id='_qualifier-test',
              run_id='indicator',
              data_paths=['/Users/mkozlowski/_Git/slow-tortoise/flows/12ecb553-9c50-4f3e-b175-4e3819a2f37b.parquet.gzip']
