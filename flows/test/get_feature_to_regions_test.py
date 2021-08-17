@@ -9,7 +9,7 @@ data = {
     'admin3': ["Barrie", "Burlington"]
 }
 df = pd.DataFrame(data=data)
-result = get_feature_to_regions(df)
+result = get_feature_to_regions(df, True)
 expected = {
     'f1': {'country': ['Canada'],
            'admin1': ['Canada__Ontario'],
