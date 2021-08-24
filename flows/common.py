@@ -188,9 +188,8 @@ def stats_to_json(x, dest, model_id, run_id, feature, time_res, filename, writer
 
 
 # save feature as a json file
-def feature_to_json(hierarchy, dest, model_id, run_id, feature, writer):
-    bucket = dest['bucket']
-    path = f'{model_id}/{run_id}/raw/{feature}/hierarchy/hierarchy.json'
+def feature_to_json(hierarchy, dest, model_id, run_id, feature, filename, writer):
+    path = f'{model_id}/{run_id}/raw/{feature}/hierarchy/{filename}.json'
     body = str(json.dumps(hierarchy))
     writer(body, path, dest)
 
