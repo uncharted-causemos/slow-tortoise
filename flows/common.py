@@ -451,7 +451,7 @@ def compute_timeseries_by_region(temporal_df, dest, model_id, run_id, time_res, 
 def save_subtile_stats(df, dest, model_id, run_id, time_res, writer):
     feature = df['feature'].values[0]
     timestamp = df['timestamp'].values[0]
-    columns = list(REQUIRED_COLS & set(df.columns.tolist()))
+    columns = df.columns.tolist()
     columns.remove('feature')
     columns.remove('timestamp')
 
