@@ -10,7 +10,7 @@ def reprocess_indicator(indicator_id):
     common.reprocess_indicator(metadata)
   except Exception as exc:
     print(exc)
-    sys.exit(1)
+    raise
 
 if __name__ == "__main__":
   if len(sys.argv) < 2:
