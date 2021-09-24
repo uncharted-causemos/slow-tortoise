@@ -8,8 +8,8 @@ def reprocess_model_run(run_id):
     metadata = common.get_model_run_from_es(run_id)
     common.process_model_run(metadata)
   except Exception as exc:
-    print(exc)
-    sys.exit(1)
+    print('>> ERROR reprocessing model run')
+    raise
 
 if __name__ == "__main__":
   if len(sys.argv) < 2:
