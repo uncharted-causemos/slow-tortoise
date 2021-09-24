@@ -9,7 +9,7 @@ def reprocess_indicator(indicator_id):
     common.delete_indicator_from_es(indicator_id)
     common.reprocess_indicator(metadata)
   except Exception as exc:
-    print(exc)
+    print('>> ERROR reprocessing indicator')
     raise
 
 if __name__ == "__main__":
