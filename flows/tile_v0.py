@@ -12,10 +12,10 @@ from prefect.storage import Docker
 from prefect.executors import DaskExecutor, LocalDaskExecutor
 from flows.common import run_temporal_aggregation, deg2num, ancestor_tiles, filter_by_min_zoom, \
     tile_coord, save_tile, save_timeseries, save_timeseries_as_csv, \
-    stats_to_json, feature_to_json, to_proto, get_qualifier_columns, \
+    stats_to_json, feature_to_json, to_proto, \
     extract_region_columns, join_region_columns, save_regional_aggregation, save_regional_qualifiers_to_csv, write_regional_aggregation_csv, \
     output_values_to_json_array, raw_data_to_json, compute_timeseries_by_region, \
-    write_to_file, write_to_null, write_to_s3, compute_subtile_stats, REGION_LEVELS
+    write_to_file, write_to_null, write_to_s3, compute_subtile_stats, REGION_LEVELS, REQUIRED_COLS
 
 
 # Maps a write type to writing function
@@ -209,16 +209,15 @@ def compute_timeseries(df, dest, time_res, model_id, run_id):
     timeseries_df.compute()
 
 @task(log_stdout=True)
-def compute_timeseries_as_csv(df, dest, time_res, model_id, run_id, qualifier_map):
-    qualifer_cols = get_qualifier_columns(df)
-    qualifer_cols.append([]) # This is the default case of ignoring qualifiers
+def compute_timeseries_as_csv(df, dest, time_res, model_id, run_id, qualifier_map, qualifer_columns):
+    qualifier_cols = [*qualifer_columns, []] # [] is the default case of ignoring qualifiers
 
     # persist the result in memory since this df is going to be used for multiple qualifiers
     df = df.persist()
 
     # Iterate through all the qualifier columns. Not all columns map to
     # all the features, they will be excluded when processing each feature
-    for qualifier_col in qualifer_cols:
+    for qualifier_col in qualifier_cols:
         timeseries_df = df.copy()
         timeseries_aggs = ['min', 'max', 'sum', 'mean']
         timeseries_lookup = {
@@ -276,9 +275,8 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
         save_df.compute()
 
 @task(log_stdout=True)
-def compute_regional_aggregation_to_csv(input_df, dest, time_res, model_id, run_id, qualifier_map):
-    qualifer_cols = get_qualifier_columns(input_df)
-    qualifer_cols.append([]) # This is the default case of ignoring qualifiers
+def compute_regional_aggregation_to_csv(input_df, dest, time_res, model_id, run_id, qualifier_map, qualifer_columns):
+    qualifier_cols = [*qualifer_columns, []] # [] is the default case of ignoring qualifiers
 
     # Copy input df so that original df doesn't get mutated
     df = input_df.copy()
@@ -296,14 +294,14 @@ def compute_regional_aggregation_to_csv(input_df, dest, time_res, model_id, run_
 
     # Iterate through all the qualifier columns. Not all columns map to
     # all the features, they will be excluded when processing each feature
-    for qualifier_col in qualifer_cols:
+    for qualifier_col in qualifier_cols:
         qualifier_df = df.copy()
 
         # Region aggregation at the highest admin level
         qualifier_df = qualifier_df[['feature', 'timestamp', 's_sum_t_sum', 's_sum_t_mean', 's_count'] + regions_cols + qualifier_col] \
             .groupby(['feature', 'timestamp'] + regions_cols + qualifier_col) \
             .agg(['sum'])
-        # qualifier_df.columns = qualifier_df.columns.droplevel(1)
+        qualifier_df.columns = qualifier_df.columns.droplevel(1)
         qualifier_df = qualifier_df.reset_index()
 
         # persist the result in memory at this point since this df is going to be used multiple times to compute for different regional levels
@@ -336,6 +334,13 @@ def compute_regional_aggregation_to_csv(input_df, dest, time_res, model_id, run_
                 foo = save_df.apply(lambda x: save_regional_qualifiers_to_csv(x, qualifier_col[0], dest, model_id, run_id, time_res, qualifier_map, WRITE_TYPES[DEST_TYPE], region_level=regions_cols[level]),
                     axis=1, meta=(None, 'object'))
                 foo.compute()
+
+@task(log_stdout=True)
+def get_qualifier_columns(df):
+    base_cols = REQUIRED_COLS
+    all_cols = df.columns.to_list()
+    qualifier_cols = [[col] for col in set(all_cols) - base_cols]
+    return qualifier_cols
 
 @task(log_stdout=True)
 def compute_regional_timeseries(df, dest, time_res, model_id, run_id):
@@ -548,13 +553,15 @@ with Flow('datacube-ingest-v0.1') as flow:
     # ==== Compute high level features for current run =====
     record_region_hierarchy(df, dest, model_id, run_id)
 
+    qualifier_columns = get_qualifier_columns(df)
+
     # ==== Run aggregations based on monthly time resolution =====
     monthly_data = temporal_aggregation(df, 'month', compute_monthly)
     month_ts_done = compute_timeseries(monthly_data, dest, 'month', model_id, run_id)
-    month_csv_ts_done = compute_timeseries_as_csv(monthly_data, dest, 'month', model_id, run_id, qualifier_map)
+    month_csv_ts_done = compute_timeseries_as_csv(monthly_data, dest, 'month', model_id, run_id, qualifier_map, qualifier_columns)
     compute_regional_timeseries(monthly_data, dest, 'month', model_id, run_id)
     monthly_regional_df = compute_regional_aggregation(monthly_data, dest, 'month', model_id, run_id)
-    # monthly_csv_regional_df = compute_regional_aggregation_to_csv(monthly_data, dest, 'month', model_id, run_id, qualifier_map)
+    monthly_csv_regional_df = compute_regional_aggregation_to_csv(monthly_data, dest, 'month', model_id, run_id, qualifier_map, qualifier_columns)
 
     monthly_spatial_data = subtile_aggregation(monthly_data, compute_tiles, upstream_tasks=[month_ts_done, month_csv_ts_done])
     month_stats_done = compute_stats(monthly_spatial_data, dest, 'month', model_id, run_id, "stats")
@@ -563,17 +570,17 @@ with Flow('datacube-ingest-v0.1') as flow:
     # ==== Run aggregations based on annual time resolution =====
     annual_data = temporal_aggregation(df, 'year', compute_annual, upstream_tasks=[month_done, month_ts_done])
     year_ts_done = compute_timeseries(annual_data, dest, 'year', model_id, run_id)
-    year_csv_ts_done = compute_timeseries_as_csv(annual_data, dest, 'year', model_id, run_id, qualifier_map)
+    year_csv_ts_done = compute_timeseries_as_csv(annual_data, dest, 'year', model_id, run_id, qualifier_map, qualifier_columns)
     compute_regional_timeseries(annual_data, dest, 'year', model_id, run_id)
     annual_regional_df = compute_regional_aggregation(annual_data, dest, 'year', model_id, run_id)
-    # annual_csv_regional_df = compute_regional_aggregation_to_csv(annual_data, dest, 'year', model_id, run_id, qualifier_map)
+    annual_csv_regional_df = compute_regional_aggregation_to_csv(annual_data, dest, 'year', model_id, run_id, qualifier_map, qualifier_columns)
 
     annual_spatial_data = subtile_aggregation(annual_data, compute_tiles, upstream_tasks=[year_ts_done, year_csv_ts_done])
     year_stats_done = compute_stats(annual_spatial_data, dest, 'year', model_id, run_id, "stats")
     year_done = compute_tiling(annual_spatial_data, dest, 'year', model_id, run_id, upstream_tasks=[year_stats_done])
 
     # ==== Generate a single aggregate value per feature =====
-    summary_data = temporal_aggregation(df, 'all', compute_summary, upstream_tasks=[year_done, year_ts_done, year_csv_ts_done])
+    summary_data = temporal_aggregation(df, 'all', compute_summary, upstream_tasks=[year_done, year_ts_done, year_csv_ts_done, annual_csv_regional_df])
     summary_values = compute_output_summary(summary_data)
 
     # ==== Update document in ES setting the status to READY =====

@@ -410,12 +410,6 @@ def extract_region_columns(df):
         result.insert(0, 'country')
     return result
 
-def get_qualifier_columns(df):
-    base_cols = set(['timestamp', 'country', 'admin1', 'admin2', 'admin3', 'lat', 'lng', 'feature', 'value'])
-    all_cols = df.columns.to_list()
-    qualifer_cols = [[col] for col in set(all_cols) - base_cols]
-    return qualifer_cols
-
 # Save regional timeseries data to csv
 def save_regional_timeseries(df, dest, model_id, run_id, time_res, timeseries_agg_columns, region_level, writer):
     feature = df['feature'].values[0]
