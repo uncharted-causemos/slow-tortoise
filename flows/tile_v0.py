@@ -174,13 +174,13 @@ def save_raw_data(df, dest, time_res, model_id, run_id, should_run):
 def process_null_columns(df):
     # Drop a column if all values are null
     exclude_columns = set(['timestamp', 'lat', 'lng', 'feature', 'value'])
-    cols_to_drop = set(df.columns[df.isnull().all()])
-    region_cols_to_drop = list(cols_to_drop - exclude_columns)
-    df = df.drop(columns=region_cols_to_drop)
+    null_cols = set(df.columns[df.isnull().all()])
+    cols_to_drop = list(null_cols - exclude_columns)
+    df = df.drop(columns=cols_to_drop)
 
     # In the remaining columns, fill all null values with "None"
     # TODO: When adding support for different qualifier roles, we will need to fill numeric roles with something else
-    remaining_columns = list(set(df.columns.to_list()) - exclude_columns - cols_to_drop)
+    remaining_columns = list(set(df.columns.to_list()) - exclude_columns - null_cols)
     df[remaining_columns] = df[remaining_columns].fillna(value="None", axis=1).astype('str')
     return df
 
