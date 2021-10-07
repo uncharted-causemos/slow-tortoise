@@ -21,10 +21,11 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__))))
 import tiles_pb2
 
 REGION_LEVELS = ['country', 'admin1', 'admin2', 'admin3']
+REQUIRED_COLS = {'timestamp', 'country', 'admin1', 'admin2', 'admin3', 'lat', 'lng', 'feature', 'value'}
 
 # Run temporal aggregation on given provided dataframe
 def run_temporal_aggregation(df, time_res):
-    columns = df.columns.tolist()
+    columns = df.columns.tolist() # includes qualifier columns
     columns.remove('value')
 
     # Monthly temporal aggregation (compute for both sum and mean)
@@ -147,11 +148,8 @@ def save_tile(tile, dest, model_id, run_id, feature, time_res, timestamp, writer
 
     return tile
 
-
 # save timeseries as json
-def save_timeseries(
-    df, dest, model_id, run_id, time_res, timeseries_agg_columns, writer
-):
+def save_timeseries(df, dest, model_id, run_id, time_res, timeseries_agg_columns, writer):
     for col in timeseries_agg_columns:
         timeseries_to_json(df[["timestamp", col]], dest, model_id, run_id, df["feature"].values[0], time_res, col, writer)
 
@@ -163,6 +161,34 @@ def timeseries_to_json(df, dest, model_id, run_id, feature, time_res, column, wr
     # Save the result to s3
     body = df.rename(columns=col_map, inplace=False).to_json(orient="records")
     path = f"{model_id}/{run_id}/{time_res}/{feature}/timeseries/{column}.json"
+    writer(body, path, dest)
+
+# save timeseries as csv
+def save_timeseries_as_csv(df, qualifier_col, dest, model_id, run_id, time_res, timeseries_agg_columns, qualifier_map, writer):
+    feature = df["feature"].values[0]
+
+    if len(qualifier_col) == 0:
+        timeseries_to_csv(df, dest, model_id, run_id, feature, time_res, timeseries_agg_columns, writer)
+    elif feature in qualifier_map and qualifier_col[0] in qualifier_map[feature]:
+        for agg_col in timeseries_agg_columns:
+            qualifier = qualifier_col[0]
+            qualifier_values = df[['timestamp', agg_col] + qualifier_col].groupby('timestamp').agg(list) \
+                .apply(lambda x: dict(zip(['timestamp'] + x[qualifier], [x.name] + x[agg_col])), axis=1)
+            qualifier_df = pd.DataFrame(qualifier_values.tolist())
+            qualifier_timeseries_to_csv(qualifier_df, dest, model_id, run_id, feature, time_res, agg_col, qualifier, writer)
+
+# write timeseries to json in S3
+def timeseries_to_csv(df, dest, model_id, run_id, feature, time_res, timeseries_agg_columns, writer):
+    path = f'{model_id}/{run_id}/{time_res}/{feature}/timeseries/global/global.csv'
+    body = df[['timestamp'] + timeseries_agg_columns].to_csv(index=False)
+    writer(body, path, dest)
+
+# write timeseries to json in S3
+def qualifier_timeseries_to_csv(df, dest, model_id, run_id, feature, time_res, agg_column, qualifier, writer):
+    path = f'{model_id}/{run_id}/{time_res}/{feature}/timeseries/qualifiers/{qualifier}/{agg_column}.csv'
+
+    # Save the result to s3
+    body = df.to_csv(index=False)
     writer(body, path, dest)
 
 # write raw data to json file in S3
@@ -215,9 +241,9 @@ def to_proto(row):
 def to_normalized_time(date, time_res):
     def time_in_seconds():
         if time_res == 'month':
-            return int(datetime.datetime(date.year, date.month, 1).timestamp())
+            return int(datetime.datetime(date.year, date.month, 1, tzinfo=datetime.timezone.utc).timestamp())
         elif time_res == 'year':
-            return int(datetime.datetime(date.year, 1, 1).timestamp())
+            return int(datetime.datetime(date.year, 1, 1, tzinfo=datetime.timezone.utc).timestamp())
         elif time_res == 'all':
             return 0 # just put everything under one timestamp
         else:
@@ -294,6 +320,85 @@ def save_regional_aggregation_to_s3(agg_result, dest, model_id, run_id, time_res
         writer(body, path, dest)
 
 
+def write_regional_aggregation_csv(x, dest, model_id, run_id, time_res, writer, region_level="admin3"):
+    feature = x.feature
+    timestamp = x.timestamp
+    
+    region_agg = {}
+    # Run sum up all values for each region.
+    for i in range(len(x.region_id)):
+        region_id = x.region_id[i]
+        if region_id not in region_agg:
+            region_agg[region_id] = {'s_sum_t_sum': 0, 's_sum_t_mean': 0, 's_count': 0}
+
+        region_agg[region_id]['s_sum_t_sum'] += x['s_sum_t_sum'][i]
+        region_agg[region_id]['s_sum_t_mean'] += x['s_sum_t_mean'][i]
+        region_agg[region_id]['s_count'] += x['s_count'][i]
+
+    # Compute mean
+    for key in region_agg:
+        region_agg[key]['s_mean_t_sum'] = region_agg[key]['s_sum_t_sum'] / region_agg[key]['s_count']
+        region_agg[key]['s_mean_t_mean'] = region_agg[key]['s_sum_t_mean'] / region_agg[key]['s_count']
+
+    # to Json
+    data = []
+    for key in region_agg:
+        data.append([key, region_agg[key]['s_sum_t_mean'], region_agg[key]['s_mean_t_mean'], region_agg[key]['s_sum_t_sum'], region_agg[key]['s_mean_t_sum']])
+    df = pd.DataFrame(data, columns = ['id', 's_sum_t_mean', 's_mean_t_mean', 's_sum_t_sum', 's_mean_t_sum'])
+    
+    # Save the result to s3
+    path = f"{model_id}/{run_id}/{time_res}/{feature}/regional/{region_level}/aggs/{timestamp}/default/default.csv"
+
+    body = df.to_csv(index=False)
+    writer(body, path, dest)
+    return data
+
+def save_regional_qualifiers_to_csv(x, qualifier, dest, model_id, run_id, time_res, qualifier_map, writer, region_level="admin3"):
+    feature = x.feature
+    # print('------------ in common')
+    if feature in qualifier_map and qualifier in qualifier_map[feature]:
+        write_regional_qualifiers_csv(x, qualifier, dest, model_id, run_id, time_res, writer, region_level)
+
+def write_regional_qualifiers_csv(x, qualifier, dest, model_id, run_id, time_res, writer, region_level="admin3"):
+    feature = x.feature
+    timestamp = x.timestamp
+
+    region_agg = {}
+    # Run sum up all values for each region.
+    for i in range(len(x.region_id)):
+        region_id = x.region_id[i]
+        qualifier_value = x[qualifier][i]
+        if region_id not in region_agg:
+            region_agg[region_id] = {}
+        if qualifier_value not in region_agg[region_id]:
+            region_agg[region_id][qualifier_value] = {'s_sum_t_sum': 0, 's_sum_t_mean': 0, 's_count': 0}
+
+        region_agg[region_id][qualifier_value]['s_sum_t_sum'] += x['s_sum_t_sum'][i]
+        region_agg[region_id][qualifier_value]['s_sum_t_mean'] += x['s_sum_t_mean'][i]
+        region_agg[region_id][qualifier_value]['s_count'] += x['s_count'][i]
+
+    # Compute mean
+    for key in region_agg:
+        for qkey in region_agg[key]:
+            region_agg[key][qkey]['s_mean_t_sum'] = region_agg[key][qkey]['s_sum_t_sum'] / region_agg[key][qkey]['s_count']
+            region_agg[key][qkey]['s_mean_t_mean'] = region_agg[key][qkey]['s_sum_t_mean'] / region_agg[key][qkey]['s_count']
+
+    # to Json
+    data = []
+    for key in region_agg:
+        for qkey in region_agg[key]:
+            data.append([key, qkey, region_agg[key][qkey]['s_sum_t_mean'], region_agg[key][qkey]['s_mean_t_mean'], region_agg[key][qkey]['s_sum_t_sum'], region_agg[key][qkey]['s_mean_t_sum']])
+    df = pd.DataFrame(data, columns = ['id', 'qualifier', 's_sum_t_mean', 's_mean_t_mean', 's_sum_t_sum', 's_mean_t_sum'])
+    
+    # Save the result to s3
+    # qualifier_value = x[qualifier]
+    path = f"{model_id}/{run_id}/{time_res}/{feature}/regional/{region_level}/aggs/{timestamp}/qualifiers/{qualifier}.csv"
+
+    body = df.to_csv(index=False)
+    writer(body, path, dest)
+    return data
+
+
 def extract_region_columns(df):
     columns = df.columns.to_list()
     # find the intersection
@@ -338,7 +443,6 @@ def compute_timeseries_by_region(temporal_df, dest, model_id, run_id, time_res, 
 
 # Save subtile stats to csv
 def save_subtile_stats(df, dest, model_id, run_id, time_res, writer):
-    bucket = dest['bucket']
     feature = df['feature'].values[0]
     timestamp = df['timestamp'].values[0]
     columns = df.columns.tolist()

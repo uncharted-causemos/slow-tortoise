@@ -4,7 +4,6 @@ import dask.dataframe as dd
 import dask.bytes as db
 import pandas as pd
 import requests
-import boto3
 import os
 
 from prefect import task, Flow, Parameter
@@ -12,11 +11,11 @@ from prefect.engine.signals import SKIP
 from prefect.storage import Docker
 from prefect.executors import DaskExecutor, LocalDaskExecutor
 from flows.common import run_temporal_aggregation, deg2num, ancestor_tiles, filter_by_min_zoom, \
-    tile_coord, save_tile, save_timeseries, \
-    stats_to_json, feature_to_json, to_proto, to_normalized_time, \
-    extract_region_columns, join_region_columns, save_regional_aggregation, \
+    tile_coord, save_tile, save_timeseries, save_timeseries_as_csv, \
+    stats_to_json, feature_to_json, to_proto, \
+    extract_region_columns, join_region_columns, save_regional_aggregation, save_regional_qualifiers_to_csv, write_regional_aggregation_csv, \
     output_values_to_json_array, raw_data_to_json, compute_timeseries_by_region, \
-    write_to_file, write_to_null, write_to_s3, compute_subtile_stats, REGION_LEVELS
+    write_to_file, write_to_null, write_to_s3, compute_subtile_stats, REGION_LEVELS, REQUIRED_COLS
 
 
 # Maps a write type to writing function
@@ -123,13 +122,13 @@ def download_data(source, data_paths):
         print('No lat/long data. Dropping columns.')
         df = df.drop(columns=LAT_LONG_COLUMNS)
     
-    # Drop all additional columns
-    accepted_cols = set(['timestamp', 'country', 'admin1', 'admin2', 'admin3', 'lat', 'lng', 'feature', 'value'])
-    all_cols = df.columns.to_list()
-    cols_to_drop = list(set(all_cols) - accepted_cols)
-    print(f'All columns: {all_cols}. Dropping: {cols_to_drop}')
-    if len(cols_to_drop) > 0:
-        df = df.drop(columns=cols_to_drop)
+    # # Drop all additional columns
+    # accepted_cols = set(['timestamp', 'country', 'admin1', 'admin2', 'admin3', 'lat', 'lng', 'feature', 'value'])
+    # all_cols = df.columns.to_list()
+    # cols_to_drop = list(set(all_cols) - accepted_cols)
+    # print(f'All columns: {all_cols}. Dropping: {cols_to_drop}')
+    # if len(cols_to_drop) > 0:
+    #     df = df.drop(columns=cols_to_drop)
 
     # Ensure types
     df = df.astype({'value': 'float64'})
@@ -172,14 +171,17 @@ def save_raw_data(df, dest, time_res, model_id, run_id, should_run):
     raw_df.compute()
 
 @task(log_stdout=True)
-def process_null_region_columns(df):
-    region_cols = extract_region_columns(df)
-    cols_to_drop = set(df.columns[df.isnull().all()])
-    region_cols_to_drop = list(cols_to_drop.intersection(region_cols))
-    df = df.drop(columns=region_cols_to_drop)
+def process_null_columns(df):
+    # Drop a column if all values are null
+    exclude_columns = set(['timestamp', 'lat', 'lng', 'feature', 'value'])
+    null_cols = set(df.columns[df.isnull().all()])
+    cols_to_drop = list(null_cols - exclude_columns)
+    df = df.drop(columns=cols_to_drop)
 
-    remaining_regions = list(set(REGION_LEVELS) - cols_to_drop)
-    df[remaining_regions] = df[remaining_regions].fillna(value="None", axis=1).astype('str')
+    # In the remaining columns, fill all null values with "None"
+    # TODO: When adding support for different qualifier roles, we will need to fill numeric roles with something else
+    remaining_columns = list(set(df.columns.to_list()) - exclude_columns - null_cols)
+    df[remaining_columns] = df[remaining_columns].fillna(value="None", axis=1).astype('str')
     return df
 
 @task(skip_on_upstream_skip=False)
@@ -207,40 +209,30 @@ def compute_timeseries(df, dest, time_res, model_id, run_id):
     timeseries_df.compute()
 
 @task(log_stdout=True)
-def subtile_aggregation(df, should_run):
-    if should_run is False:
-        raise SKIP('Tiling was not requested')
+def compute_timeseries_as_csv(df, dest, time_res, model_id, run_id, qualifier_map, qualifer_columns):
+    qualifier_cols = [*qualifer_columns, []] # [] is the default case of ignoring qualifiers
 
-    # Spatial aggregation to the higest supported precision(subtile z) level
+    # persist the result in memory since this df is going to be used for multiple qualifiers
+    df = df.persist()
 
-    stile = df.apply(lambda x: deg2num(x.lat, x.lng, MAX_SUBTILE_PRECISION), axis=1, meta=(None, 'object'))
-    subtile_df = df.assign(subtile=stile)
-    subtile_df = subtile_df[['feature', 'timestamp', 'subtile', 't_sum', 't_mean']] \
-        .groupby(['feature', 'timestamp', 'subtile']) \
-        .agg(['sum', 'count'])
+    # Iterate through all the qualifier columns. Not all columns map to
+    # all the features, they will be excluded when processing each feature
+    for qualifier_col in qualifier_cols:
+        timeseries_df = df.copy()
+        timeseries_aggs = ['min', 'max', 'sum', 'mean']
+        timeseries_lookup = {
+            ('t_sum', 'min'): 's_min_t_sum', ('t_sum', 'max'): 's_max_t_sum', ('t_sum', 'sum'): 's_sum_t_sum', ('t_sum', 'mean'): 's_mean_t_sum',
+            ('t_mean', 'min'): 's_min_t_mean', ('t_mean', 'max'): 's_max_t_mean', ('t_mean', 'sum'): 's_sum_t_mean', ('t_mean', 'mean'): 's_mean_t_mean'
+        }
+        timeseries_agg_columns = ['s_min_t_sum', 's_max_t_sum', 's_sum_t_sum', 's_mean_t_sum', 's_min_t_mean', 's_max_t_mean', 's_sum_t_mean', 's_mean_t_mean']
 
-    # Rename columns
-    spatial_lookup = {('t_sum', 'sum'): 's_sum_t_sum', ('t_sum', 'count'): 's_count_t_sum',
-            ('t_mean', 'sum'): 's_sum_t_mean', ('t_mean', 'count'): 's_count'}
-    subtile_df.columns = subtile_df.columns.to_flat_index()
-    subtile_df = subtile_df.rename(columns=spatial_lookup).drop(columns='s_count_t_sum').reset_index()
-    return subtile_df
-
-@task(log_stdout=True)
-def compute_tiling(df, dest, time_res, model_id, run_id):
-    stile = df.apply(lambda x: filter_by_min_zoom(ancestor_tiles(x.subtile), MIN_SUBTILE_PRECISION), axis=1, meta=(None, 'object'))
-    tiling_df = df.assign(subtile=stile)
-    tiling_df = tiling_df.explode('subtile').repartition(npartitions = 100)
-
-    # Assign main tile coord for each subtile
-    tiling_df['tile'] = tiling_df.apply(lambda x: tile_coord(x.subtile, LEVEL_DIFF), axis=1, meta=(None, 'object'))
-
-    tiling_df = tiling_df.groupby(['feature', 'timestamp', 'tile']) \
-        .agg(list) \
-        .reset_index() \
-        .repartition(npartitions = 200) \
-        .apply(lambda x: save_tile(to_proto(x), dest, model_id, run_id, x.feature, time_res, x.timestamp, WRITE_TYPES[DEST_TYPE]), axis=1, meta=(None, 'object'))  # convert each row to protobuf and save
-    tiling_df.compute()
+        timeseries_df = timeseries_df.groupby(['feature', 'timestamp'] + qualifier_col).agg({ 't_sum' : timeseries_aggs, 't_mean' : timeseries_aggs })
+        timeseries_df.columns = timeseries_df.columns.to_flat_index()
+        timeseries_df = timeseries_df.rename(columns=timeseries_lookup).reset_index()
+        timeseries_df = timeseries_df.groupby(['feature']).apply(
+            lambda x: save_timeseries_as_csv(x, qualifier_col, dest, model_id, run_id, time_res, timeseries_agg_columns, qualifier_map, WRITE_TYPES[DEST_TYPE]),
+            meta=(None, 'object'))
+        timeseries_df.compute()
 
 @task(log_stdout=True)
 def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
@@ -281,23 +273,116 @@ def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
         save_df = save_df.apply(lambda x: save_regional_aggregation(x, dest, model_id, run_id, time_res, WRITE_TYPES[DEST_TYPE], region_level=regions_cols[level]),
                       axis=1, meta=(None, 'object'))
         save_df.compute()
-    return df
-
-@task
-def compute_regional_aggregation_stats(regional_df, dest, timeframe, model_id, run_id):
-    # Compute aggregation and save for all regional levels
-    regions_cols = extract_region_columns(regional_df)
-    for level in range(len(regions_cols)):
-        df = regional_df.copy()
-        # Merge region columns to single region_id column. eg. ['Ethiopia', 'Afar'] -> ['Ethiopia_Afar']
-        df['region_id'] = join_region_columns(df, regions_cols, level)
-        assist_compute_stats(df, dest, timeframe, model_id, run_id, f'regional/{regions_cols[level]}')
 
 @task(log_stdout=True)
-def compute_regional_timeseries(df, dest, model_id, run_id, time_res):
+def compute_regional_aggregation_to_csv(input_df, dest, time_res, model_id, run_id, qualifier_map, qualifer_columns):
+    qualifier_cols = [*qualifer_columns, []] # [] is the default case of ignoring qualifiers
+
+    # Copy input df so that original df doesn't get mutated
+    df = input_df.copy()
+    # Ranme columns
+    df.columns = df.columns.str.replace('t_sum', 's_sum_t_sum').str.replace('t_mean', 's_sum_t_mean')
+    df['s_count'] = 1
+    df = df.reset_index()
+
+    regions_cols = extract_region_columns(df)
+    if len(regions_cols) == 0:
+        raise SKIP('No regional information available')
+
+    # persist the result in memory since this df is going to be used for multiple qualifiers
+    df = df.persist()
+
+    # Iterate through all the qualifier columns. Not all columns map to
+    # all the features, they will be excluded when processing each feature
+    for qualifier_col in qualifier_cols:
+        qualifier_df = df.copy()
+
+        # Region aggregation at the highest admin level
+        qualifier_df = qualifier_df[['feature', 'timestamp', 's_sum_t_sum', 's_sum_t_mean', 's_count'] + regions_cols + qualifier_col] \
+            .groupby(['feature', 'timestamp'] + regions_cols + qualifier_col) \
+            .agg(['sum'])
+        qualifier_df.columns = qualifier_df.columns.droplevel(1)
+        qualifier_df = qualifier_df.reset_index()
+
+        # persist the result in memory at this point since this df is going to be used multiple times to compute for different regional levels
+        qualifier_df = qualifier_df.persist()
+
+        # Compute aggregation and save for all regional levels
+        for level in range(len(regions_cols)):
+            save_df = qualifier_df.copy()
+            # Merge region columns to single region_id column. eg. ['Ethiopia', 'Afar'] -> ['Ethiopia_Afar']
+            save_df['region_id'] = join_region_columns(save_df, regions_cols, level)
+
+            if len(qualifier_col) == 0:
+                # Compute regional stats
+                assist_compute_stats(save_df.copy(), dest, time_res, model_id, run_id, f'regional/{regions_cols[level]}')
+
+            desired_columns = ['feature', 'timestamp', 'region_id', 's_sum_t_sum', 's_sum_t_mean', 's_count'] + qualifier_col
+            save_df = save_df[desired_columns].groupby(['feature', 'timestamp']).agg(list)
+
+            save_df = save_df.reset_index()
+            # At this point data is already reduced to reasonably small size due to prior admin aggregation.
+            # Just perform repartition to make sure save io operation runs in parallel since each writing operation is expensive and blocks
+            # Set npartitions to same as # of available workers/threads. Increasing partition number beyond the number of the workers doesn't seem to give more performance benefits.
+            save_df = save_df.repartition(npartitions = 12)
+
+            if len(qualifier_col) == 0:
+                foo = save_df.apply(lambda x: write_regional_aggregation_csv(x, dest, model_id, run_id, time_res, WRITE_TYPES[DEST_TYPE], region_level=regions_cols[level]),
+                    axis=1, meta=(None, 'object'))
+                foo.compute()
+            else:
+                foo = save_df.apply(lambda x: save_regional_qualifiers_to_csv(x, qualifier_col[0], dest, model_id, run_id, time_res, qualifier_map, WRITE_TYPES[DEST_TYPE], region_level=regions_cols[level]),
+                    axis=1, meta=(None, 'object'))
+                foo.compute()
+
+@task(log_stdout=True)
+def get_qualifier_columns(df):
+    base_cols = REQUIRED_COLS
+    all_cols = df.columns.to_list()
+    qualifier_cols = [[col] for col in set(all_cols) - base_cols]
+    return qualifier_cols
+
+@task(log_stdout=True)
+def compute_regional_timeseries(df, dest, time_res, model_id, run_id):
     regions_cols = extract_region_columns(df)
     for region_level in regions_cols:
         compute_timeseries_by_region(df, dest, model_id, run_id, time_res, region_level, WRITE_TYPES[DEST_TYPE])
+
+@task(log_stdout=True)
+def subtile_aggregation(df, should_run):
+    if should_run is False:
+        raise SKIP('Tiling was not requested')
+
+    # Spatial aggregation to the higest supported precision(subtile z) level
+
+    stile = df.apply(lambda x: deg2num(x.lat, x.lng, MAX_SUBTILE_PRECISION), axis=1, meta=(None, 'object'))
+    subtile_df = df.assign(subtile=stile)
+    subtile_df = subtile_df[['feature', 'timestamp', 'subtile', 't_sum', 't_mean']] \
+        .groupby(['feature', 'timestamp', 'subtile']) \
+        .agg(['sum', 'count'])
+
+    # Rename columns
+    spatial_lookup = {('t_sum', 'sum'): 's_sum_t_sum', ('t_sum', 'count'): 's_count_t_sum',
+            ('t_mean', 'sum'): 's_sum_t_mean', ('t_mean', 'count'): 's_count'}
+    subtile_df.columns = subtile_df.columns.to_flat_index()
+    subtile_df = subtile_df.rename(columns=spatial_lookup).drop(columns='s_count_t_sum').reset_index()
+    return subtile_df
+
+@task(log_stdout=True)
+def compute_tiling(df, dest, time_res, model_id, run_id):
+    stile = df.apply(lambda x: filter_by_min_zoom(ancestor_tiles(x.subtile), MIN_SUBTILE_PRECISION), axis=1, meta=(None, 'object'))
+    tiling_df = df.assign(subtile=stile)
+    tiling_df = tiling_df.explode('subtile').repartition(npartitions = 100)
+
+    # Assign main tile coord for each subtile
+    tiling_df['tile'] = tiling_df.apply(lambda x: tile_coord(x.subtile, LEVEL_DIFF), axis=1, meta=(None, 'object'))
+
+    tiling_df = tiling_df.groupby(['feature', 'timestamp', 'tile']) \
+        .agg(list) \
+        .reset_index() \
+        .repartition(npartitions = 200) \
+        .apply(lambda x: save_tile(to_proto(x), dest, model_id, run_id, x.feature, time_res, x.timestamp, WRITE_TYPES[DEST_TYPE]), axis=1, meta=(None, 'object'))  # convert each row to protobuf and save
+    tiling_df.compute()
 
 @task(log_stdout=True)
 def compute_stats(df, dest, time_res, model_id, run_id, filename):
@@ -457,6 +542,7 @@ with Flow('datacube-ingest-v0.1') as flow:
     data_paths = Parameter('data_paths', default=['s3://test/geo-test-data.parquet'])
     compute_tiles = Parameter('compute_tiles', default=False)
     is_indicator = Parameter('is_indicator', default=False)
+    qualifier_map = Parameter('qualifier_map', default={})
     indicator_bucket = Parameter('indicator_bucket', default=S3_DEFAULT_INDICATOR_BUCKET)
     model_bucket = Parameter('model_bucket', default=S3_DEFAULT_MODEL_BUCKET)
 
@@ -496,74 +582,85 @@ with Flow('datacube-ingest-v0.1') as flow:
     # ==== Save raw data =====
     save_raw_data(raw_df, dest, 'raw', model_id, 'indicator', compute_raw)
 
-    df = process_null_region_columns(raw_df)
+    df = process_null_columns(raw_df)
 
     # ==== Compute high level features for current run =====
     record_region_hierarchy(df, dest, model_id, run_id)
     record_region_lists(df, dest, model_id, run_id)
 
+    qualifier_columns = get_qualifier_columns(df)
+
     # ==== Run aggregations based on monthly time resolution =====
     monthly_data = temporal_aggregation(df, 'month', compute_monthly)
     month_ts_done = compute_timeseries(monthly_data, dest, 'month', model_id, run_id)
-    compute_regional_timeseries(monthly_data, dest, model_id, run_id, 'month')
+    month_csv_ts_done = compute_timeseries_as_csv(monthly_data, dest, 'month', model_id, run_id, qualifier_map, qualifier_columns)
+    compute_regional_timeseries(monthly_data, dest, 'month', model_id, run_id)
     monthly_regional_df = compute_regional_aggregation(monthly_data, dest, 'month', model_id, run_id)
-    compute_regional_aggregation_stats(monthly_regional_df, dest, 'month', model_id, run_id)
+    monthly_csv_regional_df = compute_regional_aggregation_to_csv(monthly_data, dest, 'month', model_id, run_id, qualifier_map, qualifier_columns)
 
-    monthly_spatial_data = subtile_aggregation(monthly_data, compute_tiles, upstream_tasks=[month_ts_done])
+    monthly_spatial_data = subtile_aggregation(monthly_data, compute_tiles, upstream_tasks=[month_ts_done, month_csv_ts_done])
     month_stats_done = compute_stats(monthly_spatial_data, dest, 'month', model_id, run_id, "stats")
     month_done = compute_tiling(monthly_spatial_data, dest, 'month', model_id, run_id, upstream_tasks=[month_stats_done])
 
     # ==== Run aggregations based on annual time resolution =====
     annual_data = temporal_aggregation(df, 'year', compute_annual, upstream_tasks=[month_done, month_ts_done])
     year_ts_done = compute_timeseries(annual_data, dest, 'year', model_id, run_id)
-    compute_regional_timeseries(annual_data, dest, model_id, run_id, 'year')
+    year_csv_ts_done = compute_timeseries_as_csv(annual_data, dest, 'year', model_id, run_id, qualifier_map, qualifier_columns)
+    compute_regional_timeseries(annual_data, dest, 'year', model_id, run_id)
     annual_regional_df = compute_regional_aggregation(annual_data, dest, 'year', model_id, run_id)
-    compute_regional_aggregation_stats(annual_regional_df, dest, 'year', model_id, run_id)
+    annual_csv_regional_df = compute_regional_aggregation_to_csv(annual_data, dest, 'year', model_id, run_id, qualifier_map, qualifier_columns)
 
-    annual_spatial_data = subtile_aggregation(annual_data, compute_tiles, upstream_tasks=[year_ts_done])
+    annual_spatial_data = subtile_aggregation(annual_data, compute_tiles, upstream_tasks=[year_ts_done, year_csv_ts_done])
     year_stats_done = compute_stats(annual_spatial_data, dest, 'year', model_id, run_id, "stats")
     year_done = compute_tiling(annual_spatial_data, dest, 'year', model_id, run_id, upstream_tasks=[year_stats_done])
 
     # ==== Generate a single aggregate value per feature =====
-    summary_data = temporal_aggregation(df, 'all', compute_summary, upstream_tasks=[year_done, year_ts_done])
+    summary_data = temporal_aggregation(df, 'all', compute_summary, upstream_tasks=[year_done, year_ts_done, year_csv_ts_done, annual_csv_regional_df])
     summary_values = compute_output_summary(summary_data)
 
     # ==== Update document in ES setting the status to READY =====
     if ELASTIC_URL:
         update_metadata(doc_ids, summary_values, elastic_url, elastic_index)
 
-    ## TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful.
-    ## Then same data can be used for producing tiles and also used for doing regional aggregation and other computation in other tasks.
-    ## In that way we can have one jupyter notbook or python module for each tasks
+    # TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful.
+    # Then same data can be used for producing tiles and also used for doing regional aggregation and other computation in other tasks.
+    # In that way we can have one jupyter notbook or python module for each tasks
 
 # If this is a local run, just execute the flow in process.  Setting WM_DASK_SCHEDULER="" will result in a local cluster
 # being run as well.
 if __name__ == "__main__" and LOCAL_RUN:
     from prefect.utilities.debug import raise_on_exception
     with raise_on_exception():
-        flow.run(parameters=dict(is_indicator=True, model_id='ACLED', run_id='indicator', data_paths=['s3://test/acled/acled-test.bin']))
-        flow.run(parameters=dict(compute_tiles=True, model_id='geo-test-data', run_id='test-run', data_paths=['s3://test/geo-test-data.parquet']))
+        # flow.run(parameters=dict(is_indicator=True, model_id='ACLED', run_id='indicator', data_paths=['s3://test/acled/acled-test.bin']))
+        # flow.run(parameters=dict(compute_tiles=True, model_id='geo-test-data', run_id='test-run', data_paths=['s3://test/geo-test-data.parquet']))
+        # flow.run(parameters=dict(
+        #      is_indicator=True,
+        #      model_id='1fb59bc8-a321-4981-8ec9-1041798ddb7e',
+        #      run_id='indicator',
+        #      data_paths=["https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/1fb59bc8-a321-4981-8ec9-1041798ddb7e/1fb59bc8-a321-4981-8ec9-1041798ddb7e.parquet.gzip"]
+        # ))
+        # flow.run(parameters=dict( # Conflict model
+        #      compute_tiles=True,
+        #      model_id="9e896392-2639-4df6-b4b4-e1b1d4cf46ae",
+        #      run_id="2dc64e9d-be17-471e-a24b-aeb9c1178313",
+        #      data_paths=["https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/2dc64e9d-be17-471e-a24b-aeb9c1178313/2dc64e9d-be17-471e-a24b-aeb9c1178313_9e896392-2639-4df6-b4b4-e1b1d4cf46ae.parquet.gzip"]
+        # ))
+        # flow.run(parameters=dict( # Malnutrition model
+        #      compute_tiles=True,
+        #      model_id='425f58a4-bbba-44d3-83f3-aba353fc7c64',
+        #      run_id='db68a592-e456-465f-9785-86440f49e838',
+        #      data_paths=['https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/db68a592-e456-465f-9785-86440f49e838/db68a592-e456-465f-9785-86440f49e838_425f58a4-bbba-44d3-83f3-aba353fc7c64.parquet.gzip']
+        # ))
+        # flow.run(parameters=dict( # Maxhop
+        #      compute_tiles=True,
+        #      model_id='maxhop-v0.2',
+        #      run_id='4675d89d-904c-466f-a588-354c047ecf72',
+        #      data_paths=['https://jataware-world-modelers.s3.amazonaws.com/dmc_results/4675d89d-904c-466f-a588-354c047ecf72/4675d89d-904c-466f-a588-354c047ecf72_maxhop-v0.2.parquet.gzip']
+        # ))
         flow.run(parameters=dict(
              is_indicator=True,
-             model_id='1fb59bc8-a321-4981-8ec9-1041798ddb7e',
+             qualifier_map={'fatalities': ['event_type', 'sub_event_type', 'source_scale']},
+             model_id='_qualifier-test',
              run_id='indicator',
-             data_paths=["https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/1fb59bc8-a321-4981-8ec9-1041798ddb7e/1fb59bc8-a321-4981-8ec9-1041798ddb7e.parquet.gzip"]
-        ))
-        flow.run(parameters=dict( # Conflict model
-             compute_tiles=True,
-             model_id="9e896392-2639-4df6-b4b4-e1b1d4cf46ae",
-             run_id="2dc64e9d-be17-471e-a24b-aeb9c1178313",
-             data_paths=["https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/2dc64e9d-be17-471e-a24b-aeb9c1178313/2dc64e9d-be17-471e-a24b-aeb9c1178313_9e896392-2639-4df6-b4b4-e1b1d4cf46ae.parquet.gzip"]
-        ))
-        flow.run(parameters=dict( # Malnutrition model
-             compute_tiles=True,
-             model_id='425f58a4-bbba-44d3-83f3-aba353fc7c64',
-             run_id='db68a592-e456-465f-9785-86440f49e838',
-             data_paths=['https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/db68a592-e456-465f-9785-86440f49e838/db68a592-e456-465f-9785-86440f49e838_425f58a4-bbba-44d3-83f3-aba353fc7c64.parquet.gzip']
-        ))
-        flow.run(parameters=dict( # Maxhop
-             compute_tiles=True,
-             model_id='maxhop-v0.2',
-             run_id='4675d89d-904c-466f-a588-354c047ecf72',
-             data_paths=['https://jataware-world-modelers.s3.amazonaws.com/dmc_results/4675d89d-904c-466f-a588-354c047ecf72/4675d89d-904c-466f-a588-354c047ecf72_maxhop-v0.2.parquet.gzip']
+             data_paths=['/Users/mkozlowski/_Git/slow-tortoise/flows/12ecb553-9c50-4f3e-b175-4e3819a2f37b.parquet.gzip']
         ))
