@@ -8,9 +8,11 @@ import os
 Simple prefect sanity check that runs in the local execution environment.
 """
 
+
 @task
 def foo():
     return "bar"
+
 
 LOCAL_RUN = os.getenv("WM_LOCAL", "False").lower() in ("true", "1", "t")
 PUSH_IMAGE = os.getenv("WM_PUSH_IMAGE", "False").lower() in ("true", "1", "t")

@@ -6,17 +6,16 @@ import os
 import time
 import random
 
+
 @task
 def foo():
     def inc(x):
         time.sleep(random.random())
         return x + 1
 
-
     def dec(x):
         time.sleep(random.random())
         return x - 1
-
 
     def add(x, y):
         time.sleep(random.random())
@@ -32,6 +31,7 @@ def foo():
     result = z.compute()
 
     return result
+
 
 DASK_SCHEDULER = os.getenv("WM_DASK_SCHEDULER")
 LOCAL_RUN = os.getenv("WM_LOCAL", "False").lower() in ("true", "1", "t")
@@ -68,5 +68,5 @@ flow.storage = Docker(
 # For debugging support - local dask cluster needs to run in main otherwise process forking
 # fails.
 if __name__ == "__main__" and LOCAL_RUN:
-    state = flow.run(executor=executor)
+    state = flow.run()
     print(state.result[foo_result].result)

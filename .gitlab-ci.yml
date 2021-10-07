@@ -5,7 +5,7 @@
 # deploy deploys the app to the openstack when there's new tag
 stages:
   - test
-  # - lint
+  - lint
   - prepare
   - build
 
@@ -27,10 +27,9 @@ stages:
 lint:
   extends: .test_common
   script:
-    echo "" > /dev/null
-    #- turn on when ready
-    #- black --check flows
-    #- python -m mypy flows
+    - black --check flows
+    - mypy --non-interactive --install-types flows
+    - mypy flows
 
 test:
   extends: .test_common
@@ -49,7 +48,6 @@ environment:
     paths:
       - ci.env
     expire_in: 1 week
-  before_script:
   script:
     - echo "--- Preparing environment vars ---"
     - >
