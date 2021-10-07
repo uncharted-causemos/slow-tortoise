@@ -6,7 +6,6 @@ import common
 def reprocess_indicator(indicator_id):
   try:
     metadata = common.get_indicator_metadata_from_dojo(indicator_id)
-    common.delete_indicator_from_es(indicator_id)
     common.reprocess_indicator(metadata)
   except Exception as exc:
     print('>> ERROR reprocessing indicator')

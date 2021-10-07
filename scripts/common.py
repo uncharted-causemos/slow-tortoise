@@ -1,13 +1,18 @@
 
+import os
 import json
 import sys
 import time
 import requests
 from requests.auth import HTTPBasicAuth
 
+DOJO_USR = os.getenv("DOJO_USR", "")
+DOJO_PW = os.getenv("DOJO_PW", "")
+
 DOJO_URL = 'https://dojo-test.com'
 CAUSEMOS_URL = 'http://localhost:3000'
 ES_URL = 'http://10.65.18.34:9200'
+
 
 def get_model_run_from_es(run_id, es_url=ES_URL):
   # Fetch existing model run metadata
@@ -33,7 +38,7 @@ def process_model_run(run_metadata, causemos_url=CAUSEMOS_URL):
 
 def get_indicator_metadata_from_dojo(indicator_id, dojo_url=DOJO_URL):
   try:
-    res = requests.get(f'{dojo_url}/indicators/{indicator_id}', auth=HTTPBasicAuth('wmuser', 'mellowcubicle'))
+    res = requests.get(f'{dojo_url}/indicators/{indicator_id}', auth=HTTPBasicAuth(DOJO_USR, DOJO_PW))
     res.raise_for_status()
     indicator_metadata = res.json()
   except Exception as exc:
