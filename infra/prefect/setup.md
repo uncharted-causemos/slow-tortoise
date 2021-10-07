@@ -36,7 +36,7 @@ It is helpful to run the prefect server and agent in their own tmux session.
 ---
 
 ### Using a custom docker swarm
-This method is a lot more fiddly. You are essentially redoing the functionality of `prefect server start`.
+This method not recommended. You are essentially redoing the functionality of `prefect server start`.
 See the instructions [here](https://gitlab.uncharted.software/dchang/dask-cluster-example/-/blob/master/prefect-swarm-example/README.md) or [here](https://github.com/flavienbwk/prefect-docker-compose)
 
 

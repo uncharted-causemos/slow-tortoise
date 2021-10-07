@@ -10,5 +10,8 @@
 - To **stop** the docker services run `docker stack rm dask_swarm`
 
 ## Updating the image
-- Stop the swarm with `docker stack rm dask_swarm`
 - If not yet done, update the docker image by running [docker_build.sh](../docker/docker_build.sh) from the `infra/docker` directory, and push the image to the registry by running [docker_push.sh](../docker/docker_push.sh).
+- SSH into the dask VM
+- Stop the swarm with `docker stack rm dask_swarm`
+- Pull the latest image with `docker pull docker.uncharted.software/worldmodeler/wm-data-pipeline:latest`
+- Restart docker swarm by running `docker stack deploy --compose-file docker-compose.yml dask_swarm`

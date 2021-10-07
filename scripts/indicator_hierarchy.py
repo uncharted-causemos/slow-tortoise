@@ -1,4 +1,3 @@
-
 import time
 
 from prefect.utilities.debug import raise_on_exception
@@ -17,8 +16,6 @@ from prefect import task, Flow, Parameter
 from prefect.engine.signals import SKIP
 from prefect.storage import Docker
 from prefect.executors import DaskExecutor, LocalDaskExecutor
-
-
 
 
 TRUE_TOKENS = ("true", "1", "t")
@@ -54,10 +51,10 @@ S3_SOURCE_URL = os.getenv("WM_S3_SOURCE_URL", "http://10.65.18.73:9000")
 S3_DEST_URL = os.getenv("WM_S3_DEST_URL", "http://10.65.18.9:9000")
 
 # default s3 indicator write bucket
-S3_DEFAULT_INDICATOR_BUCKET = os.getenv("WM_S3_DEFAULT_INDICATOR_BUCKET", 'indicators')
+S3_DEFAULT_INDICATOR_BUCKET = os.getenv("WM_S3_DEFAULT_INDICATOR_BUCKET", "indicators")
 
 # default model s3 write bucket
-S3_DEFAULT_MODEL_BUCKET = os.getenv("WM_S3_DEFAULT_MODEL_BUCKET", 'models')
+S3_DEFAULT_MODEL_BUCKET = os.getenv("WM_S3_DEFAULT_MODEL_BUCKET", "models")
 
 # This determines the number of bins(subtiles) per tile. Eg. Each tile has 4^6=4096 grid cells (subtiles) when LEVEL_DIFF is 6
 # Tile (z, x, y) will have a sutbile where its zoom level is z + LEVEL_DIFF
@@ -71,17 +68,19 @@ LEVEL_DIFF = 6
 # significant difference visually since underlying data itself is very coarse.
 MAX_SUBTILE_PRECISION = 14
 
-MIN_SUBTILE_PRECISION = LEVEL_DIFF # since (0,0,0) main tile wil have (LEVEL_DIFF, x, y) subtiles as its grid cells
+MIN_SUBTILE_PRECISION = (
+    LEVEL_DIFF  # since (0,0,0) main tile wil have (LEVEL_DIFF, x, y) subtiles as its grid cells
+)
 
 # Maximum zoom level for a main tile
 MAX_ZOOM = MAX_SUBTILE_PRECISION - LEVEL_DIFF
 
-ELASTIC_MODEL_RUN_INDEX = 'data-model-run'
-ELASTIC_INDICATOR_INDEX = 'data-datacube'
+ELASTIC_MODEL_RUN_INDEX = "data-model-run"
+ELASTIC_INDICATOR_INDEX = "data-datacube"
 
-LAT_LONG_COLUMNS = ['lat', 'lng']
+LAT_LONG_COLUMNS = ["lat", "lng"]
 
-REGION_LEVELS = ['country', 'admin1', 'admin2', 'admin3']
+REGION_LEVELS = ["country", "admin1", "admin2", "admin3"]
 
 
 def extract_region_columns(df):
@@ -90,14 +89,14 @@ def extract_region_columns(df):
     result = list(set(REGION_LEVELS) & set(columns))
     # Re order the list by admin levels
     result.sort()
-    if 'country' in result:
-        result.remove('country')
-        result.insert(0, 'country')
+    if "country" in result:
+        result.remove("country")
+        result.insert(0, "country")
     return result
 
 
-def join_region_columns(df, columns, level=3, deli='__'):
-    regions = ['None', 'None', 'None', 'None']
+def join_region_columns(df, columns, level=3, deli="__"):
+    regions = ["None", "None", "None", "None"]
     for region in columns:
         regions[REGION_LEVELS.index(region)] = df[region]
 
@@ -113,7 +112,7 @@ def join_region_columns(df, columns, level=3, deli='__'):
 
 # save feature as a json file
 def feature_to_json(hierarchy, dest, model_id, run_id, feature, writer):
-    path = f'{model_id}/{run_id}/raw/{feature}/hierarchy/hierarchy.json'
+    path = f"{model_id}/{run_id}/raw/{feature}/hierarchy/hierarchy.json"
     body = str(json.dumps(hierarchy))
     writer(body, path, dest)
 
@@ -139,54 +138,57 @@ def write_to_s3(body, path, dest):
         logging.error(e)
 
 
-
 @task(log_stdout=True)
 def download_data(source, data_paths):
     df = None
     # if source is from s3 bucket
-    if 's3://' in data_paths[0]:
-        df = dd.read_parquet(data_paths,
+    if "s3://" in data_paths[0]:
+        df = dd.read_parquet(
+            data_paths,
             storage_options={
-                'anon': False,
-                'use_ssl': False,
-                'key': source['key'],
-                'secret': source['secret'],
-                'client_kwargs':{
-                    'region_name': source['region_name'],
-                    'endpoint_url': source['endpoint_url']
-                }
-            }).repartition(npartitions = 12)
+                "anon": False,
+                "use_ssl": False,
+                "key": source["key"],
+                "secret": source["secret"],
+                "client_kwargs": {
+                    "region_name": source["region_name"],
+                    "endpoint_url": source["endpoint_url"],
+                },
+            },
+        ).repartition(npartitions=12)
     else:
         # In some parquet files the value column will be type string. Filter out those parquet files and ignore for now
         numeric_files = []
         string_files = []
         for path in data_paths:
-            if path.endswith('_str.parquet.gzip'):
+            if path.endswith("_str.parquet.gzip"):
                 string_files.append(path)
             else:
                 numeric_files.append(path)
 
         # Note: dask read_parquet doesn't work for gzip files. So here is the work around using pandas read_parquet
         dfs = [delayed(pd.read_parquet)(path) for path in numeric_files]
-        df = dd.from_delayed(dfs).repartition(npartitions = 12)
+        df = dd.from_delayed(dfs).repartition(npartitions=12)
 
     # Remove lat/lng columns if they are null
     ll_df = df[LAT_LONG_COLUMNS]
     null_cols = set(ll_df.columns[ll_df.isnull().all()])
     if len(set(LAT_LONG_COLUMNS) & null_cols) > 0:
-        print('No lat/long data. Dropping columns.')
+        print("No lat/long data. Dropping columns.")
         df = df.drop(columns=LAT_LONG_COLUMNS)
-    
+
     # Drop all additional columns
-    accepted_cols = set(['timestamp', 'country', 'admin1', 'admin2', 'admin3', 'lat', 'lng', 'feature', 'value'])
+    accepted_cols = set(
+        ["timestamp", "country", "admin1", "admin2", "admin3", "lat", "lng", "feature", "value"]
+    )
     all_cols = df.columns.to_list()
     cols_to_drop = list(set(all_cols) - accepted_cols)
-    print(f'All columns: {all_cols}. Dropping: {cols_to_drop}')
+    print(f"All columns: {all_cols}. Dropping: {cols_to_drop}")
     if len(cols_to_drop) > 0:
         df = df.drop(columns=cols_to_drop)
 
     # Ensure types
-    df = df.astype({'value': 'float64'})
+    df = df.astype({"value": "float64"})
     df.dtypes
     return df
 
@@ -199,23 +201,20 @@ def remove_null_region_columns(df):
     return df.drop(columns=region_cols_to_drop)
 
 
-
-
-
 @task(log_stdout=True)
 def record_region_hierarchy(df, dest, model_id, run_id):
     region_cols = extract_region_columns(df)
     if len(region_cols) == 0:
-        raise SKIP('No regional information available')
+        raise SKIP("No regional information available")
 
     hierarchy = {}
     # This builds the hierarchy
     for _, row in df.iterrows():
-        feature = row['feature']
+        feature = row["feature"]
         if feature not in hierarchy:
             hierarchy[feature] = {}
         current_hierarchy_position = hierarchy[feature]
-        
+
         # Not all rows will have values for all regions, find the last good region level
         last_region = None
         for region in reversed(region_cols):
@@ -230,41 +229,50 @@ def record_region_hierarchy(df, dest, model_id, run_id):
         # Add valid regions
         for level in range(last_level + 1):
             current_region = join_region_columns(row, region_cols, level)
-            if current_region not in current_hierarchy_position or current_hierarchy_position[current_region] is None:
+            if (
+                current_region not in current_hierarchy_position
+                or current_hierarchy_position[current_region] is None
+            ):
                 current_hierarchy_position[current_region] = None if level == last_level else {}
             current_hierarchy_position = current_hierarchy_position[current_region]
 
     for feature in hierarchy:
         feature_to_json(hierarchy[feature], dest, model_id, run_id, feature, write_to_s3)
 
+
 ###########################################################################
 
-with Flow('hierarchy-only') as flow:
+with Flow("hierarchy-only") as flow:
     # Parameters
-    model_id = Parameter('model_id', default='geo-test-data')
-    run_id = Parameter('run_id', default='indicator')
-    doc_ids = Parameter('doc_ids', default=[])
-    data_paths = Parameter('data_paths', default=['s3://test/geo-test-data.parquet'])
-    compute_tiles = Parameter('compute_tiles', default=False)
-    output_qualifiers = Parameter('output_qualifiers', default={})
-    indicator_bucket = Parameter('indicator_bucket', default=S3_DEFAULT_INDICATOR_BUCKET)
-    model_bucket = Parameter('model_bucket', default=S3_DEFAULT_MODEL_BUCKET)
+    model_id = Parameter("model_id", default="geo-test-data")
+    run_id = Parameter("run_id", default="indicator")
+    doc_ids = Parameter("doc_ids", default=[])
+    data_paths = Parameter("data_paths", default=["s3://test/geo-test-data.parquet"])
+    compute_tiles = Parameter("compute_tiles", default=False)
+    output_qualifiers = Parameter("output_qualifiers", default={})
+    indicator_bucket = Parameter("indicator_bucket", default=S3_DEFAULT_INDICATOR_BUCKET)
+    model_bucket = Parameter("model_bucket", default=S3_DEFAULT_MODEL_BUCKET)
 
-    source = Parameter('source', default = {
-        'endpoint_url': S3_SOURCE_URL,
-        'region_name':'us-east-1',
-        'key': 'foobar',
-        'secret': 'foobarbaz'
-    })
+    source = Parameter(
+        "source",
+        default={
+            "endpoint_url": S3_SOURCE_URL,
+            "region_name": "us-east-1",
+            "key": "foobar",
+            "secret": "foobarbaz",
+        },
+    )
 
-
-    dest = Parameter('dest', default = {
-        'bucket': S3_DEFAULT_INDICATOR_BUCKET,
-        'endpoint_url': S3_DEST_URL,
-        'region_name': 'us-east-1',
-        'key': 'foobar',
-        'secret': 'foobarbaz'
-    })
+    dest = Parameter(
+        "dest",
+        default={
+            "bucket": S3_DEFAULT_INDICATOR_BUCKET,
+            "endpoint_url": S3_DEST_URL,
+            "region_name": "us-east-1",
+            "key": "foobar",
+            "secret": "foobarbaz",
+        },
+    )
 
     raw_df = download_data(source, data_paths)
 
@@ -274,27 +282,28 @@ with Flow('hierarchy-only') as flow:
     record_region_hierarchy(df, dest, model_id, run_id)
 
 
-
 total_start_time = time.time()
 with raise_on_exception():
-    jsons_dir = f'{os.getcwd()}/s3_jsons/'
+    jsons_dir = f"{os.getcwd()}/s3_jsons/"
     indicator_metadata_files = os.listdir(jsons_dir)
     indicator_metadata_files.sort()
     num_indicators = len(indicator_metadata_files)
 
     for index, file_name in enumerate(indicator_metadata_files):
-        print(f'>> Progess {index}/{num_indicators}. Started {int((time.time() - total_start_time) / 60)} minutes ago.')
-        print(f'>> Processing {file_name}')
+        print(
+            f">> Progess {index}/{num_indicators}. Started {int((time.time() - total_start_time) / 60)} minutes ago."
+        )
+        print(f">> Processing {file_name}")
         start_time = time.time()
         try:
-            with open(f'{jsons_dir}{file_name}') as f:
+            with open(f"{jsons_dir}{file_name}") as f:
                 metadata = json.loads(f.read())
                 state = flow.run(
                     executor=DaskExecutor(address=DASK_SCHEDULER),
                     parameters=dict(
-                        model_id=metadata['id'],
-                        run_id='indicator',
-                        data_paths=metadata['data_paths'],
+                        model_id=metadata["id"],
+                        run_id="indicator",
+                        data_paths=metadata["data_paths"],
                     ),
                 )
                 if state.is_successful():
@@ -302,8 +311,8 @@ with raise_on_exception():
                 else:
                     print(f'>> Ingest failed for {metadata["id"]}')
         except Exception as exc:
-            print(f'>> Error processing {file_name}')
+            print(f">> Error processing {file_name}")
             print(exc)
-        print('>> Finished in %.2f seconds' % (time.time() - start_time))
+        print(">> Finished in %.2f seconds" % (time.time() - start_time))
 
-print('## All completed in %.2f seconds' % (time.time() - total_start_time))
+print("## All completed in %.2f seconds" % (time.time() - total_start_time))

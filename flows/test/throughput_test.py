@@ -6,20 +6,19 @@ import os
 import time
 import random
 
+
 @task
 def foo():
     def inc(x):
-        time.sleep(random.random()*5)
+        time.sleep(random.random() * 5)
         return x + 1
 
-
     def dec(x):
-        time.sleep(random.random()*5)
+        time.sleep(random.random() * 5)
         return x - 1
 
-
     def add(x, y):
-        time.sleep(random.random()*5)
+        time.sleep(random.random() * 5)
         return x + y
 
     inc = dask.delayed(inc)
@@ -32,6 +31,7 @@ def foo():
     result = z.compute()
 
     return result
+
 
 DASK_SCHEDULER = os.getenv("WM_DASK_SCHEDULER")
 LOCAL_RUN = os.getenv("WM_LOCAL", "False").lower() in ("true", "1", "t")

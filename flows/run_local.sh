@@ -7,4 +7,4 @@ export WM_S3_DEST_URL=http://10.65.18.73:9000 # dev s3 cluster
 export WM_S3_DEFAULT_INDICATOR_BUCKET=test-indicators
 export WM_S3_DEFAULT_MODEL_BUCKET=test-models
 
-python3 tile_v0.py
+python3 data_pipeline.py
