@@ -6,8 +6,8 @@ import time
 import requests
 from requests.auth import HTTPBasicAuth
 
-DOJO_USR = os.getenv("DOJO_USR", "")
-DOJO_PW = os.getenv("DOJO_PW", "")
+DOJO_USER = os.getenv("DOJO_USER", "")
+DOJO_PWD = os.getenv("DOJO_PWD", "")
 
 DOJO_URL = 'https://dojo-test.com'
 CAUSEMOS_URL = 'http://localhost:3000'
@@ -38,7 +38,7 @@ def process_model_run(run_metadata, causemos_url=CAUSEMOS_URL):
 
 def get_indicator_metadata_from_dojo(indicator_id, dojo_url=DOJO_URL):
   try:
-    res = requests.get(f'{dojo_url}/indicators/{indicator_id}', auth=HTTPBasicAuth(DOJO_USR, DOJO_PW))
+    res = requests.get(f'{dojo_url}/indicators/{indicator_id}', auth=HTTPBasicAuth(DOJO_USER, DOJO_PWD))
     res.raise_for_status()
     indicator_metadata = res.json()
   except Exception as exc:
