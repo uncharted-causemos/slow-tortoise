@@ -2,6 +2,9 @@ from elasticsearch import Elasticsearch, helpers
 import uuid
 import csv
 
+# This script is used for processing documents that can be found at the following url pattern:
+# https://data.apps.fao.org/catalog/dataset/code-list-gadm36-global-admin-{x}
+
 elastic = Elasticsearch("10.65.18.69")
 
 total_names = 4
