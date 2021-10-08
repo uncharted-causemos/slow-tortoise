@@ -6,7 +6,12 @@ elastic = Elasticsearch("10.65.18.69")
 
 total_names = 4
 files = [f"./gadm/gadm36_{i}.csv" for i in range(total_names)]
-columns_to_read = [f"name_{i}" for i in range(total_names)]
+columns_to_region = {
+    "name_0": "country",
+    "name_1": "admin1",
+    "name_2": "admin2",
+    "name_3": "admin3"
+}
 
 def generate_id(filtered_row):
     sorted_row = sorted([(key, filtered_row[key]) for key in filtered_row])
@@ -19,17 +24,16 @@ for file in files:
         filtered_rows = []
         for row in list_of_rows:
             new_row = {}
-            for column in columns_to_read:
+            for column in columns_to_region:
                 if column in row:
-                    new_row[column] = row[column]
+                    new_row[columns_to_region[column]] = row[column]
             filtered_rows.append(new_row)
-        input_rows = [{
-            "_id": generate_id(filtered_row), "_doc": filtered_row
-        } for filtered_row in filtered_rows]
+        for filtered_row in filtered_rows:
+            filtered_row["_id"] = generate_id(filtered_row)
         try:
             # make the bulk call, and get a response
-            response = helpers.bulk(elastic, input_rows, index="gadm-name", doc_type="_doc")
+            response = helpers.bulk(elastic, filtered_rows, index="gadm-name")
             print ("\nRESPONSE:", response)
         except Exception as e:
             print("\nERROR:", e)
-            print(input_rows)
+            print(filtered_rows)
