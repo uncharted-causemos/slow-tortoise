@@ -33,9 +33,8 @@ def populate_es_with_gadm():
                 for column in columns_to_region:
                     if column in row:
                         new_row[columns_to_region[column]] = row[column]
+                new_row["_id"] = generate_id(new_row)
                 filtered_rows.append(new_row)
-            for filtered_row in filtered_rows:
-                filtered_row["_id"] = generate_id(filtered_row)
             try:
                 # make the bulk call, and get a response
                 response = helpers.bulk(elastic, filtered_rows, index="gadm-name")
