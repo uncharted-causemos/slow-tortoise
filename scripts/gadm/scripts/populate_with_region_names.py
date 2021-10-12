@@ -28,17 +28,22 @@ def populate_es_with_gadm():
         with open(file) as f:
             list_of_rows = [{k: v for k, v in row.items()} for row in csv.DictReader(f, skipinitialspace=True)]
             filtered_rows = []
+            ids = set()
             for row in list_of_rows:
                 new_row = {}
                 for column in columns_to_region:
                     if column in row:
                         new_row[columns_to_region[column]] = row[column]
-                new_row["_id"] = generate_id(new_row)
+                generated_id = generate_id(new_row)
+                ids.add(generated_id)
+                new_row["_id"] = generated_id
                 filtered_rows.append(new_row)
+            if len(ids) != len(filtered_rows):
+                print("The number of unique ids generated do not match the number of documents inserted.")
             try:
                 # make the bulk call, and get a response
                 response = helpers.bulk(elastic, filtered_rows, index="gadm-name")
-                print ("\nRESPONSE:", response)
+                print("\nRESPONSE:", response)
             except Exception as e:
                 print("\nERROR:", e)
                 print(filtered_rows)
