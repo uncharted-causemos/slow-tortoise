@@ -8,7 +8,7 @@ import os
 
 def download_gadm():
     for index in range(MAX_GADM_INDEX):
-        csv_url = f"https://data.apps.fao.org/catalog/dataset/code-list-gadm36-global-admin-{index}"
+        csv_url = f"http://10.64.16.209:4005/gadm/gadm36_{index}.csv"
         req = requests.get(csv_url)
         url_content = req.content
         csv_file = open(get_csv_filename(index), 'wb')

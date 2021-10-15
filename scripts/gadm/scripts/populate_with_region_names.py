@@ -12,12 +12,13 @@ def populate_es_with_gadm():
     elastic = Elasticsearch("10.65.18.69")
 
     files = [get_csv_filename(i) for i in range(MAX_GADM_INDEX)]
-    columns_to_region = {
-        "name_0": "country",
-        "name_1": "admin1",
-        "name_2": "admin2",
-        "name_3": "admin3"
-    }
+    # column_data must be ordered from broadest region to most specific region (largest to smallest)
+    column_data = [
+        { "input": "name_0", "output": "country" },
+        { "input": "name_1", "output": "admin1" },
+        { "input": "name_2", "output": "admin2" },
+        { "input": "name_3", "output": "admin3" }
+    ]
 
     def generate_id(filtered_row):
         sorted_row = sorted([(key, filtered_row[key]) for key in filtered_row])
@@ -31,9 +32,12 @@ def populate_es_with_gadm():
             ids = set()
             for row in list_of_rows:
                 new_row = {}
-                for column in columns_to_region:
-                    if column in row:
-                        new_row[columns_to_region[column]] = row[column]
+                for column_datum in column_data:
+                    input = column_datum["input"]
+                    output = column_datum["output"]
+                    if input in row:
+                        new_row[output] = row[input]
+                        new_row["level"] = output
                 generated_id = generate_id(new_row)
                 ids.add(generated_id)
                 new_row["_id"] = generated_id
