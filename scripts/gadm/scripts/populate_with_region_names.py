@@ -1,6 +1,7 @@
 from elasticsearch import Elasticsearch, helpers
 import uuid
 import csv
+import os
 
 # This script is used for processing documents that can be found at the following url pattern:
 # https://data.apps.fao.org/catalog/dataset/code-list-gadm36-global-admin-{x}
@@ -8,8 +9,10 @@ import csv
 
 from scripts.gadm.scripts.common_gadm import MAX_GADM_INDEX, get_csv_filename
 
+ES_URL = os.getenv("ES_URL", "10.65.18.69")
+
 def populate_es_with_gadm():
-    elastic = Elasticsearch("10.65.18.69")
+    elastic = Elasticsearch(ES_URL)
 
     files = [get_csv_filename(i) for i in range(MAX_GADM_INDEX)]
     # column_data must be ordered from broadest region to most specific region (largest to smallest)
