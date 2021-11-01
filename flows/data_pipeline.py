@@ -731,14 +731,12 @@ def record_region_hierarchy(df, dest, model_id, run_id):
 
 @task(log_stdout=True)
 def record_region_lists(df, dest, model_id, run_id):
-    feature_to_regions = get_feature_to_regions(df)
-    for feature in feature_to_regions:
-        current_feature_map = feature_to_regions[feature]
-        regions_for_feature = {
-            region: list(current_feature_map[region]) for region in current_feature_map
-        }
+    def cols_to_lists(df, id_cols, feature):
+        lists = {region: [] for region in REGION_LEVELS}
+        for index, id_col in enumerate(id_cols):
+            lists[REGION_LEVELS[index]] = df[id_col].unique().tolist()
         feature_to_json(
-            regions_for_feature,
+            lists,
             dest,
             model_id,
             run_id,
@@ -747,35 +745,26 @@ def record_region_lists(df, dest, model_id, run_id):
             WRITE_TYPES[DEST_TYPE],
         )
 
-
-def get_feature_to_regions(df):
-    def process_row(row, feature_to_regions):
-        indices = list(row.index)
-        row = {indices[index]: row[index] for index, _ in enumerate(list(row))}
-        feature = row["feature"]
-        if feature not in feature_to_regions:
-            feature_to_regions[feature] = {r: set() for r in region_cols}
-        feature_region_lists = feature_to_regions[feature]
-        all_regions = []
-        for region in region_cols:
-            all_regions.append(row[region])
-            all_region_str = ["None" if i is None else i for i in all_regions]
-            feature_region_lists[region].add("__".join(all_region_str))
-
     region_cols = extract_region_columns(df)
     if len(region_cols) == 0:
         raise SKIP("No regional information available")
-    feature_to_regions = {}
-    # This builds the hierarchy
-    df.apply(lambda row: process_row(row, feature_to_regions), axis=1, meta=(None, "object"))
-    feature_to_regions_lists = {
-        feature: {
-            admin_level: list(feature_to_regions[feature][admin_level])
-            for admin_level in feature_to_regions[feature]
-        }
-        for feature in feature_to_regions
-    }
-    return feature_to_regions_lists
+
+    save_df = df.copy()
+
+    # ["__region_id_0", "__region_id_1", "__region_id_2", "__region_id_3"]
+    id_cols = [f"__region_id_{level}" for level in range(len(region_cols))]
+    for index, id_col in enumerate(id_cols):
+        save_df[id_col] = join_region_columns(save_df, region_cols, index)
+
+    foo = (
+        save_df[["feature"] + id_cols]
+        .groupby(["feature"])
+        .apply(
+            lambda x: cols_to_lists(x, id_cols, x["feature"].values[0]),
+            meta=(None, "object"),
+        )
+    )
+    foo.compute()
 
 
 ###########################################################################
@@ -954,20 +943,32 @@ if __name__ == "__main__" and LOCAL_RUN:
         #      run_id='db68a592-e456-465f-9785-86440f49e838',
         #      data_paths=['https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/db68a592-e456-465f-9785-86440f49e838/db68a592-e456-465f-9785-86440f49e838_425f58a4-bbba-44d3-83f3-aba353fc7c64.parquet.gzip']
         # ))
-        # flow.run(parameters=dict( # Maxhop
-        #      compute_tiles=True,
-        #      model_id='maxhop-v0.2',
-        #      run_id='4675d89d-904c-466f-a588-354c047ecf72',
-        #      data_paths=['https://jataware-world-modelers.s3.amazonaws.com/dmc_results/4675d89d-904c-466f-a588-354c047ecf72/4675d89d-904c-466f-a588-354c047ecf72_maxhop-v0.2.parquet.gzip']
-        # ))
-        flow.run(
-            parameters=dict(
-                is_indicator=True,
-                qualifier_map={"fatalities": ["event_type", "sub_event_type", "source_scale"]},
-                model_id="_qualifier-test",
-                run_id="indicator",
-                data_paths=[
-                    "/Users/mkozlowski/_Git/slow-tortoise/flows/12ecb553-9c50-4f3e-b175-4e3819a2f37b.parquet.gzip"
-                ],
-            )
-        )
+        flow.run(parameters=dict( # Maxhop
+             compute_tiles=True,
+             model_id='maxhop-v0.2',
+             run_id='4675d89d-904c-466f-a588-354c047ecf72',
+             data_paths=['https://jataware-world-modelers.s3.amazonaws.com/dmc_results/4675d89d-904c-466f-a588-354c047ecf72/4675d89d-904c-466f-a588-354c047ecf72_maxhop-v0.2.parquet.gzip']
+        ))
+        # flow.run(
+        #     parameters=dict(
+        #         is_indicator=True,
+        #         qualifier_map={"fatalities": ["event_type", "sub_event_type", "source_scale"]},
+        #         model_id="_qualifier-test",
+        #         run_id="indicator",
+        #         data_paths=[
+        #             "/Users/mkozlowski/_Git/12ecb553-9c50-4f3e-b175-4e3819a2f37b.parquet.gzip"
+        #         ],
+        #     )
+        # )
+        # LPJmL
+        # flow.run(
+        #     parameters=dict(
+        #         is_indicator=True,
+        #         qualifier_map={},
+        #         model_id="_hierarchy-test",
+        #         run_id="indicator",
+        #         data_paths=[
+        #             "/Users/mkozlowski/_Git/f9ee6dc2-ef3b-46d6-90cb-ba317b926629_9f407b82-d2d2-4c38-a2c3-ae1bb483f476.1.parquet.gzip"
+        #         ],
+        #     )
+        # )
