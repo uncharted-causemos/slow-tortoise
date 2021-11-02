@@ -20,7 +20,7 @@ from flows.common import (
     save_timeseries,
     save_timeseries_as_csv,
     stats_to_json,
-    feature_to_json,
+    info_to_json,
     to_proto,
     extract_region_columns,
     join_region_columns,
@@ -145,7 +145,7 @@ def download_data(source, data_paths):
 
     print(df.dtypes)
     print(df.head())
-    
+
     # Remove lat/lng columns if they are null
     ll_df = df[LAT_LONG_COLUMNS]
     null_cols = set(ll_df.columns[ll_df.isnull().all()])
@@ -721,7 +721,7 @@ def record_region_hierarchy(df, dest, model_id, run_id):
             current_hierarchy_position = current_hierarchy_position[current_region]
 
     for feature in hierarchy:
-        feature_to_json(
+        info_to_json(
             hierarchy[feature], dest, model_id, run_id, feature, "hierarchy", WRITE_TYPES[DEST_TYPE]
         )
 
@@ -732,7 +732,7 @@ def record_region_lists(df, dest, model_id, run_id):
         lists = {region: [] for region in REGION_LEVELS}
         for index, id_col in enumerate(id_cols):
             lists[REGION_LEVELS[index]] = df[id_col].unique().tolist()
-        feature_to_json(
+        info_to_json(
             lists,
             dest,
             model_id,
@@ -753,13 +753,29 @@ def record_region_lists(df, dest, model_id, run_id):
     for index, id_col in enumerate(id_cols):
         save_df[id_col] = join_region_columns(save_df, region_cols, index)
 
-    foo = (
-        save_df[["feature"] + id_cols]
-        .groupby(["feature"])
-        .apply(
-            lambda x: cols_to_lists(x, id_cols, x["feature"].values[0]),
-            meta=(None, "object"),
-        )
+    foo = save_df[["feature"] + id_cols].groupby(["feature"]).apply(
+        lambda x: cols_to_lists(x, id_cols, x["feature"].values[0]),
+        meta=(None, "object"),
+    )
+    foo.compute()
+
+
+@task(log_stdout=True)
+def record_qualifier_lists(df, dest, model_id, run_id, qualifiers):
+    save_df = df.copy()
+    qualifier_columns = sum(qualifiers, [])
+
+    foo = save_df[["feature"] + qualifier_columns].groupby(["feature"]).apply(
+        lambda x: info_to_json(
+            {col: x[col].unique().tolist() for col in qualifier_columns},
+            dest,
+            model_id,
+            run_id,
+            x["feature"].values[0],
+            "qualifier_lists",
+            WRITE_TYPES[DEST_TYPE],
+        ),
+        meta=(None, "object"),
     )
     foo.compute()
 
@@ -847,11 +863,12 @@ with Flow(FLOW_NAME) as flow:
 
     df = process_null_columns(raw_df)
 
-    # ==== Compute high level features for current run =====
+    qualifier_columns = get_qualifier_columns(df)
+
+    # ==== Compute lists of all gadm regions and qualifier values =====
     record_region_hierarchy(df, dest, model_id, run_id)
     record_region_lists(df, dest, model_id, run_id)
-
-    qualifier_columns = get_qualifier_columns(df)
+    record_qualifier_lists(df, dest, model_id, run_id, qualifier_columns)
 
     # ==== Run aggregations based on monthly time resolution =====
     monthly_data = temporal_aggregation(df, "month", compute_monthly)
@@ -908,6 +925,9 @@ with Flow(FLOW_NAME) as flow:
 
     # ==== Update document in ES setting the status to READY =====
     if ELASTIC_URL:
+        # TODO: Additional info to output
+        # compute_tiles -> is there tile data computed
+        # df["feature"].unique().tolist() -> list of features
         update_metadata(doc_ids, summary_values, elastic_url, elastic_index)
 
     # TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful.

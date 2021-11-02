@@ -271,10 +271,10 @@ def stats_to_json(x, dest, model_id, run_id, feature, time_res, filename, writer
     writer(body, path, dest)
 
 
-# save feature as a json file
-def feature_to_json(hierarchy, dest, model_id, run_id, feature, filename, writer):
-    path = f"{model_id}/{run_id}/raw/{feature}/hierarchy/{filename}.json"
-    body = str(json.dumps(hierarchy))
+# save any generic info as a json file (gadm regions lists, qualifier lists, etc)
+def info_to_json(contents, dest, model_id, run_id, feature, filename, writer):
+    path = f"{model_id}/{run_id}/raw/{feature}/info/{filename}.json"
+    body = str(json.dumps(contents))
     writer(body, path, dest)
 
 
