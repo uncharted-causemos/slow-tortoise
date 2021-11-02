@@ -7,7 +7,7 @@ import requests
 import os
 
 from prefect import task, Flow, Parameter
-from prefect.engine.signals import SKIP
+from prefect.engine.signals import SKIP, FAIL
 from prefect.storage import Docker
 from prefect.executors import DaskExecutor, LocalDaskExecutor
 from flows.common import (
@@ -143,6 +143,9 @@ def download_data(source, data_paths):
         dfs = [delayed(pd.read_parquet)(path) for path in numeric_files]
         df = dd.from_delayed(dfs).repartition(npartitions=12)
 
+    print(df.dtypes)
+    print(df.head())
+    
     # Remove lat/lng columns if they are null
     ll_df = df[LAT_LONG_COLUMNS]
     null_cols = set(ll_df.columns[ll_df.isnull().all()])
@@ -150,17 +153,11 @@ def download_data(source, data_paths):
         print("No lat/long data. Dropping columns.")
         df = df.drop(columns=LAT_LONG_COLUMNS)
 
-    # # Drop all additional columns
-    # accepted_cols = set(['timestamp', 'country', 'admin1', 'admin2', 'admin3', 'lat', 'lng', 'feature', 'value'])
-    # all_cols = df.columns.to_list()
-    # cols_to_drop = list(set(all_cols) - accepted_cols)
-    # print(f'All columns: {all_cols}. Dropping: {cols_to_drop}')
-    # if len(cols_to_drop) > 0:
-    #     df = df.drop(columns=cols_to_drop)
+    if len(df.index) == 0:
+        raise FAIL("DataFrame has no rows")
 
     # Ensure types
     df = df.astype({"value": "float64"})
-    df.dtypes
     return df
 
 
