@@ -232,6 +232,9 @@ def process_null_columns(df):
     # TODO: When adding support for different qualifier roles, we will need to fill numeric roles with something else
     remaining_columns = list(set(df.columns.to_list()) - exclude_columns - null_cols)
     df[remaining_columns] = df[remaining_columns].fillna(value="None", axis=1).astype("str")
+
+    # Fill missing timestamp values with 0
+    df["timestamp"] = df["timestamp"].fillna(value=0)
     return df
 
 
