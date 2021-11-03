@@ -620,25 +620,47 @@ def record_region_lists(df, dest, model_id, run_id):
 
 
 @task(log_stdout=True)
-def record_qualifier_lists(df, dest, model_id, run_id, qualifiers):
+def record_qualifier_lists(df, dest, model_id, run_id, qualifiers, thresholds):
+    def save_qualifier_lists(df):
+        feature = df["feature"].values[0]
+        qualifier_counts = {
+            "thresholds": thresholds,
+            "counts": {},
+        }
+        for col in qualifier_columns:
+            values = df[col].unique().tolist()
+            qualifier_counts["counts"][col] = len(values)
+
+            # Write one list of qualifier values per file
+            info_to_json(
+                values,
+                dest,
+                model_id,
+                run_id,
+                feature,
+                f"qualifiers/{col}",
+                WRITE_TYPES[DEST_TYPE],
+            )
+
+        # Write a file that holds the counts of the above qualifier lists
+        info_to_json(
+            qualifier_counts,
+            dest,
+            model_id,
+            run_id,
+            feature,
+            f"qualifier_counts",
+            WRITE_TYPES[DEST_TYPE],
+        )
+        return qualifier_counts["counts"]
+
     save_df = df.copy()
     qualifier_columns = sum(qualifiers, [])
 
     foo = (
         save_df[["feature"] + qualifier_columns]
         .groupby(["feature"])
-        .apply(
-            lambda x: info_to_json(
-                {col: x[col].unique().tolist() for col in qualifier_columns},
-                dest,
-                model_id,
-                run_id,
-                x["feature"].values[0],
-                "qualifier_lists",
-                WRITE_TYPES[DEST_TYPE],
-            ),
-            meta=(None, "object"),
-        )
+        .apply(lambda x: save_qualifier_lists(x), meta=(None, "object"))
     )
     foo.compute()
 
@@ -680,6 +702,15 @@ with Flow(FLOW_NAME) as flow:
     qualifier_map = Parameter("qualifier_map", default={})
     indicator_bucket = Parameter("indicator_bucket", default=S3_DEFAULT_INDICATOR_BUCKET)
     model_bucket = Parameter("model_bucket", default=S3_DEFAULT_MODEL_BUCKET)
+    # The thresholds are values that the pipeline uses for processing qualifiers
+    # It tells the user what sort of data they can expect to be available
+    # For ex, no regional_timeseries for qualifier with more than 100 values
+    qualifier_threshold = Parameter(
+        "qualifier_thresholds",
+        default={
+            "regional_timeseries": 100,
+        },
+    )
 
     # skip write to elastic if URL unset - we define this and don't use it prefect
     # errors
@@ -730,7 +761,7 @@ with Flow(FLOW_NAME) as flow:
 
     # ==== Compute lists of all gadm regions and qualifier values =====
     record_region_lists(df, dest, model_id, run_id)
-    record_qualifier_lists(df, dest, model_id, run_id, qualifier_columns)
+    record_qualifier_lists(df, dest, model_id, run_id, qualifier_columns, qualifier_threshold)
 
     # ==== Run aggregations based on monthly time resolution =====
     monthly_data = temporal_aggregation(df, "month", compute_monthly)
@@ -751,7 +782,9 @@ with Flow(FLOW_NAME) as flow:
     )
 
     # ==== Run aggregations based on annual time resolution =====
-    annual_data = temporal_aggregation(df, "year", compute_annual, upstream_tasks=[monthly_csv_regional_df, month_done])
+    annual_data = temporal_aggregation(
+        df, "year", compute_annual, upstream_tasks=[monthly_csv_regional_df, month_done]
+    )
     year_csv_ts_done = compute_timeseries_as_csv(
         annual_data, dest, "year", model_id, run_id, qualifier_map, qualifier_columns
     )
