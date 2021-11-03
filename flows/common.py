@@ -167,21 +167,6 @@ def save_tile(tile, dest, model_id, run_id, feature, time_res, timestamp, writer
     return tile
 
 
-# save timeseries as json
-def save_timeseries(df, dest, model_id, run_id, time_res, timeseries_agg_columns, writer):
-    for col in timeseries_agg_columns:
-        timeseries_to_json(
-            df[["timestamp", col]],
-            dest,
-            model_id,
-            run_id,
-            df["feature"].values[0],
-            time_res,
-            col,
-            writer,
-        )
-
-
 # write timeseries to json in S3
 def timeseries_to_json(df, dest, model_id, run_id, feature, time_res, column, writer):
     col_map = {}
@@ -346,56 +331,6 @@ def join_region_columns(df, columns, level=3, deli="__"):
         return regions[0] + deli + regions[1]
     else:
         return regions[0]
-
-
-def save_regional_aggregation(x, dest, model_id, run_id, time_res, writer, region_level="admin3"):
-    feature = x.feature
-    timestamp = x.timestamp
-
-    region_agg = {}
-    # Run sum up all values for each region.
-    for i in range(len(x.region_id)):
-        region_id = x.region_id[i]
-        if region_id not in region_agg:
-            region_agg[region_id] = {"s_sum_t_sum": 0, "s_sum_t_mean": 0, "s_count": 0}
-
-        region_agg[region_id]["s_sum_t_sum"] += x["s_sum_t_sum"][i]
-        region_agg[region_id]["s_sum_t_mean"] += x["s_sum_t_mean"][i]
-        region_agg[region_id]["s_count"] += x["s_count"][i]
-
-    # Compute mean
-    for key in region_agg:
-        region_agg[key]["s_mean_t_sum"] = (
-            region_agg[key]["s_sum_t_sum"] / region_agg[key]["s_count"]
-        )
-        region_agg[key]["s_mean_t_mean"] = (
-            region_agg[key]["s_sum_t_mean"] / region_agg[key]["s_count"]
-        )
-
-    # to Json
-    result = {"s_sum_t_mean": [], "s_mean_t_mean": [], "s_sum_t_sum": [], "s_mean_t_sum": []}
-    for key in region_agg:
-        result["s_sum_t_mean"].append({"id": key, "value": region_agg[key]["s_sum_t_mean"]})
-        result["s_mean_t_mean"].append({"id": key, "value": region_agg[key]["s_mean_t_mean"]})
-        result["s_sum_t_sum"].append({"id": key, "value": region_agg[key]["s_sum_t_sum"]})
-        result["s_mean_t_sum"].append({"id": key, "value": region_agg[key]["s_mean_t_sum"]})
-    # Save the result to s3
-    save_regional_aggregation_to_s3(
-        result, dest, model_id, run_id, time_res, region_level, feature, timestamp, writer
-    )
-    return result
-
-
-def save_regional_aggregation_to_s3(
-    agg_result, dest, model_id, run_id, time_res, region_level, feature, timestamp, writer
-):
-    for key in agg_result:
-        save_df = pd.DataFrame(agg_result[key])
-
-        path = f"{model_id}/{run_id}/{time_res}/{feature}/regional/{region_level}/aggs/{timestamp}/{key}.json"
-        body = save_df.to_json(orient="records")
-
-        writer(body, path, dest)
 
 
 def write_regional_aggregation_csv(

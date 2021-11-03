@@ -17,14 +17,12 @@ from flows.common import (
     filter_by_min_zoom,
     tile_coord,
     save_tile,
-    save_timeseries,
     save_timeseries_as_csv,
     stats_to_json,
     info_to_json,
     to_proto,
     extract_region_columns,
     join_region_columns,
-    save_regional_aggregation,
     save_regional_qualifiers_to_csv,
     write_regional_aggregation_csv,
     output_values_to_json_array,
@@ -240,45 +238,6 @@ def temporal_aggregation(df, time_res, should_run):
 
 
 @task(log_stdout=True)
-def compute_timeseries(df, dest, time_res, model_id, run_id):
-    # Timeseries aggregation
-    timeseries_aggs = ["min", "max", "sum", "mean"]
-    timeseries_lookup = {
-        ("t_sum", "min"): "s_min_t_sum",
-        ("t_sum", "max"): "s_max_t_sum",
-        ("t_sum", "sum"): "s_sum_t_sum",
-        ("t_sum", "mean"): "s_mean_t_sum",
-        ("t_mean", "min"): "s_min_t_mean",
-        ("t_mean", "max"): "s_max_t_mean",
-        ("t_mean", "sum"): "s_sum_t_mean",
-        ("t_mean", "mean"): "s_mean_t_mean",
-    }
-    timeseries_agg_columns = [
-        "s_min_t_sum",
-        "s_max_t_sum",
-        "s_sum_t_sum",
-        "s_mean_t_sum",
-        "s_min_t_mean",
-        "s_max_t_mean",
-        "s_sum_t_mean",
-        "s_mean_t_mean",
-    ]
-
-    timeseries_df = df.groupby(["feature", "timestamp"]).agg(
-        {"t_sum": timeseries_aggs, "t_mean": timeseries_aggs}
-    )
-    timeseries_df.columns = timeseries_df.columns.to_flat_index()
-    timeseries_df = timeseries_df.rename(columns=timeseries_lookup).reset_index()
-    timeseries_df = timeseries_df.groupby(["feature"]).apply(
-        lambda x: save_timeseries(
-            x, dest, model_id, run_id, time_res, timeseries_agg_columns, WRITE_TYPES[DEST_TYPE]
-        ),
-        meta=(None, "object"),
-    )
-    timeseries_df.compute()
-
-
-@task(log_stdout=True)
 def compute_timeseries_as_csv(
     df, dest, time_res, model_id, run_id, qualifier_map, qualifer_columns
 ):
@@ -333,69 +292,6 @@ def compute_timeseries_as_csv(
             meta=(None, "object"),
         )
         timeseries_df.compute()
-
-
-@task(log_stdout=True)
-def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
-    # Copy input df so that original df doesn't get mutated
-    df = input_df.copy()
-    # Ranme columns
-    df.columns = df.columns.str.replace("t_sum", "s_sum_t_sum").str.replace(
-        "t_mean", "s_sum_t_mean"
-    )
-    df["s_count"] = 1
-    df = df.reset_index()
-
-    regions_cols = extract_region_columns(df)
-    if len(regions_cols) == 0:
-        raise SKIP("No regional information available")
-
-    # Region aggregation at the highest admin level
-    df = (
-        df[["feature", "timestamp", "s_sum_t_sum", "s_sum_t_mean", "s_count"] + regions_cols]
-        .groupby(["feature", "timestamp"] + regions_cols)
-        .agg(["sum"])
-    )
-    df.columns = df.columns.droplevel(1)
-    df = df.reset_index()
-    # persist the result in memory at this point since this df is going to be used multiple times to compute for different regional levels
-    df = df.persist()
-
-    # Compute aggregation and save for all regional levels
-    for level in range(len(regions_cols)):
-        save_df = df.copy()
-        # Merge region columns to single region_id column. eg. ['Ethiopia', 'Afar'] -> ['Ethiopia_Afar']
-        save_df["region_id"] = join_region_columns(save_df, regions_cols, level)
-
-        desired_columns = [
-            "feature",
-            "timestamp",
-            "region_id",
-            "s_sum_t_sum",
-            "s_sum_t_mean",
-            "s_count",
-        ]
-        save_df = save_df[desired_columns].groupby(["feature", "timestamp"]).agg(list)
-
-        save_df = save_df.reset_index()
-        # At this point data is already reduced to reasonably small size due to prior admin aggregation.
-        # Just perform repartition to make sure save io operation runs in parallel since each writing operation is expensive and blocks
-        # Set npartitions to same as # of available workers/threads. Increasing partition number beyond the number of the workers doesn't seem to give more performance benefits.
-        save_df = save_df.repartition(npartitions=12)
-        save_df = save_df.apply(
-            lambda x: save_regional_aggregation(
-                x,
-                dest,
-                model_id,
-                run_id,
-                time_res,
-                WRITE_TYPES[DEST_TYPE],
-                region_level=regions_cols[level],
-            ),
-            axis=1,
-            meta=(None, "object"),
-        )
-        save_df.compute()
 
 
 @task(log_stdout=True)
@@ -686,47 +582,6 @@ def update_metadata(doc_ids, summary_values, elastic_url, elastic_index):
 
 
 @task(log_stdout=True)
-def record_region_hierarchy(df, dest, model_id, run_id):
-    region_cols = extract_region_columns(df)
-    if len(region_cols) == 0:
-        raise SKIP("No regional information available")
-
-    hierarchy = {}
-    # This builds the hierarchy
-    for _, row in df.iterrows():
-        feature = row["feature"]
-        if feature not in hierarchy:
-            hierarchy[feature] = {}
-        current_hierarchy_position = hierarchy[feature]
-
-        # Not all rows will have values for all regions, find the last good region level
-        last_region = None
-        for region in reversed(region_cols):
-            if row[region] is not None:
-                last_region = region
-                break
-        if last_region is None:
-            continue
-        # Create list ending at the last good region. These are the levels we will have in our hierarchy
-        last_level = REGION_LEVELS.index(last_region)
-
-        # Add valid regions
-        for level in range(last_level + 1):
-            current_region = join_region_columns(row, region_cols, level)
-            if (
-                current_region not in current_hierarchy_position
-                or current_hierarchy_position[current_region] is None
-            ):
-                current_hierarchy_position[current_region] = None if level == last_level else {}
-            current_hierarchy_position = current_hierarchy_position[current_region]
-
-    for feature in hierarchy:
-        info_to_json(
-            hierarchy[feature], dest, model_id, run_id, feature, "hierarchy", WRITE_TYPES[DEST_TYPE]
-        )
-
-
-@task(log_stdout=True)
 def record_region_lists(df, dest, model_id, run_id):
     def cols_to_lists(df, id_cols, feature):
         lists = {region: [] for region in REGION_LEVELS}
@@ -753,9 +608,13 @@ def record_region_lists(df, dest, model_id, run_id):
     for index, id_col in enumerate(id_cols):
         save_df[id_col] = join_region_columns(save_df, region_cols, index)
 
-    foo = save_df[["feature"] + id_cols].groupby(["feature"]).apply(
-        lambda x: cols_to_lists(x, id_cols, x["feature"].values[0]),
-        meta=(None, "object"),
+    foo = (
+        save_df[["feature"] + id_cols]
+        .groupby(["feature"])
+        .apply(
+            lambda x: cols_to_lists(x, id_cols, x["feature"].values[0]),
+            meta=(None, "object"),
+        )
     )
     foo.compute()
 
@@ -765,17 +624,21 @@ def record_qualifier_lists(df, dest, model_id, run_id, qualifiers):
     save_df = df.copy()
     qualifier_columns = sum(qualifiers, [])
 
-    foo = save_df[["feature"] + qualifier_columns].groupby(["feature"]).apply(
-        lambda x: info_to_json(
-            {col: x[col].unique().tolist() for col in qualifier_columns},
-            dest,
-            model_id,
-            run_id,
-            x["feature"].values[0],
-            "qualifier_lists",
-            WRITE_TYPES[DEST_TYPE],
-        ),
-        meta=(None, "object"),
+    foo = (
+        save_df[["feature"] + qualifier_columns]
+        .groupby(["feature"])
+        .apply(
+            lambda x: info_to_json(
+                {col: x[col].unique().tolist() for col in qualifier_columns},
+                dest,
+                model_id,
+                run_id,
+                x["feature"].values[0],
+                "qualifier_lists",
+                WRITE_TYPES[DEST_TYPE],
+            ),
+            meta=(None, "object"),
+        )
     )
     foo.compute()
 
@@ -866,26 +729,21 @@ with Flow(FLOW_NAME) as flow:
     qualifier_columns = get_qualifier_columns(df)
 
     # ==== Compute lists of all gadm regions and qualifier values =====
-    record_region_hierarchy(df, dest, model_id, run_id)
     record_region_lists(df, dest, model_id, run_id)
     record_qualifier_lists(df, dest, model_id, run_id, qualifier_columns)
 
     # ==== Run aggregations based on monthly time resolution =====
     monthly_data = temporal_aggregation(df, "month", compute_monthly)
-    month_ts_done = compute_timeseries(monthly_data, dest, "month", model_id, run_id)
     month_csv_ts_done = compute_timeseries_as_csv(
         monthly_data, dest, "month", model_id, run_id, qualifier_map, qualifier_columns
     )
     compute_regional_timeseries(monthly_data, dest, "month", model_id, run_id)
-    monthly_regional_df = compute_regional_aggregation(
-        monthly_data, dest, "month", model_id, run_id
-    )
     monthly_csv_regional_df = compute_regional_aggregation_to_csv(
         monthly_data, dest, "month", model_id, run_id, qualifier_map, qualifier_columns
     )
 
     monthly_spatial_data = subtile_aggregation(
-        monthly_data, compute_tiles, upstream_tasks=[month_ts_done, month_csv_ts_done]
+        monthly_data, compute_tiles, upstream_tasks=[month_csv_ts_done]
     )
     month_stats_done = compute_stats(monthly_spatial_data, dest, "month", model_id, run_id, "stats")
     month_done = compute_tiling(
@@ -893,21 +751,17 @@ with Flow(FLOW_NAME) as flow:
     )
 
     # ==== Run aggregations based on annual time resolution =====
-    annual_data = temporal_aggregation(
-        df, "year", compute_annual, upstream_tasks=[month_done, month_ts_done]
-    )
-    year_ts_done = compute_timeseries(annual_data, dest, "year", model_id, run_id)
+    annual_data = temporal_aggregation(df, "year", compute_annual, upstream_tasks=[monthly_csv_regional_df, month_done])
     year_csv_ts_done = compute_timeseries_as_csv(
         annual_data, dest, "year", model_id, run_id, qualifier_map, qualifier_columns
     )
     compute_regional_timeseries(annual_data, dest, "year", model_id, run_id)
-    annual_regional_df = compute_regional_aggregation(annual_data, dest, "year", model_id, run_id)
     annual_csv_regional_df = compute_regional_aggregation_to_csv(
         annual_data, dest, "year", model_id, run_id, qualifier_map, qualifier_columns
     )
 
     annual_spatial_data = subtile_aggregation(
-        annual_data, compute_tiles, upstream_tasks=[year_ts_done, year_csv_ts_done]
+        annual_data, compute_tiles, upstream_tasks=[year_csv_ts_done]
     )
     year_stats_done = compute_stats(annual_spatial_data, dest, "year", model_id, run_id, "stats")
     year_done = compute_tiling(
@@ -919,7 +773,7 @@ with Flow(FLOW_NAME) as flow:
         df,
         "all",
         compute_summary,
-        upstream_tasks=[year_done, year_ts_done, year_csv_ts_done, annual_csv_regional_df],
+        upstream_tasks=[year_done, year_csv_ts_done, annual_csv_regional_df],
     )
     summary_values = compute_output_summary(summary_data)
 
@@ -960,12 +814,16 @@ if __name__ == "__main__" and LOCAL_RUN:
         #      run_id='db68a592-e456-465f-9785-86440f49e838',
         #      data_paths=['https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/db68a592-e456-465f-9785-86440f49e838/db68a592-e456-465f-9785-86440f49e838_425f58a4-bbba-44d3-83f3-aba353fc7c64.parquet.gzip']
         # ))
-        flow.run(parameters=dict( # Maxhop
-             compute_tiles=True,
-             model_id='maxhop-v0.2',
-             run_id='4675d89d-904c-466f-a588-354c047ecf72',
-             data_paths=['https://jataware-world-modelers.s3.amazonaws.com/dmc_results/4675d89d-904c-466f-a588-354c047ecf72/4675d89d-904c-466f-a588-354c047ecf72_maxhop-v0.2.parquet.gzip']
-        ))
+        flow.run(
+            parameters=dict(  # Maxhop
+                compute_tiles=True,
+                model_id="maxhop-v0.2",
+                run_id="4675d89d-904c-466f-a588-354c047ecf72",
+                data_paths=[
+                    "https://jataware-world-modelers.s3.amazonaws.com/dmc_results/4675d89d-904c-466f-a588-354c047ecf72/4675d89d-904c-466f-a588-354c047ecf72_maxhop-v0.2.parquet.gzip"
+                ],
+            )
+        )
         # flow.run(
         #     parameters=dict(
         #         is_indicator=True,
