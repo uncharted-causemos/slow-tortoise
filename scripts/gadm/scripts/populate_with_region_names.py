@@ -22,6 +22,7 @@ def populate_es_with_gadm():
         { "input": "name_2", "output": "admin2" },
         { "input": "name_3", "output": "admin3" }
     ]
+    code_columns = [ "gadm36_0", "gadm36_1", "gadm36_2", "gadm36_3" ]
 
     def generate_id(filtered_row):
         sorted_row = sorted([(key, filtered_row[key]) for key in filtered_row])
@@ -32,7 +33,6 @@ def populate_es_with_gadm():
         with open(file) as f:
             list_of_rows = [{k: v for k, v in row.items()} for row in csv.DictReader(f, skipinitialspace=True)]
             filtered_rows = []
-            ids = set()
             for row in list_of_rows:
                 new_row = {}
                 for column_datum in column_data:
@@ -41,12 +41,11 @@ def populate_es_with_gadm():
                     if input in row:
                         new_row[output] = row[input]
                         new_row["level"] = output
-                generated_id = generate_id(new_row)
-                ids.add(generated_id)
-                new_row["_id"] = generated_id
+                for code_column in code_columns:
+                    if code_column in row:
+                        new_row["code"] = row[code_column]
+                new_row["_id"] = new_row["code"]
                 filtered_rows.append(new_row)
-            if len(ids) != len(filtered_rows):
-                print("The number of unique ids generated do not match the number of documents inserted.")
             try:
                 # make the bulk call, and get a response
                 response = helpers.bulk(elastic, filtered_rows, index="gadm-name")
