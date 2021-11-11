@@ -14,7 +14,7 @@ def get_bounding_box(geometry):
     return coords[:,0].min(), coords[:,0].max(), coords[:,1].min(), coords[:,1].max()
 
 # a list of all geojson files from all countries and all admin levels
-fileList = [f for f in glob.glob("countries/*.txt")]
+fileList = [f for f in glob.glob(dir_path + "countries/*.txt")]
 # transform into an array of arrays by grouping each country as one array
 fileListGrouped = []
 for file in fileList:
