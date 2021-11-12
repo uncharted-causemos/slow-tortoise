@@ -44,9 +44,11 @@ def bulk_update(all_items):
     print(res.json())
 
 dir_path = str(pathlib.Path(__file__).parent.resolve()) + '/.tmp/'
-fileList = [f for f in glob.glob(".tmp/*.json")]
+fileList = [f for f in glob.glob("*.json")]
+print("Found files", fileList)
 for file in fileList:
     with open(file) as geojson_file:
+        print("Sending bulk update for", file)
         data = json.load(geojson_file)
         # update in bulk
         bulk_update(data["geo"])
