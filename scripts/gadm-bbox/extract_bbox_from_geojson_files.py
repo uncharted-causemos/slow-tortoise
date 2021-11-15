@@ -32,7 +32,7 @@ for filelist in fileListGrouped:
     jsonOutputData = {}
     allBBoxObjs = []
     for file in filelist:
-        #print("Adding bounding-box for", file, "...")
+        print("Adding bounding-box for", file, "...")
         with open(file, 'r') as geojson_file:
             data = json.load(geojson_file)
             # Add bbox field constructed as an array holding the bounding box rectangle of each region
@@ -60,6 +60,7 @@ for filelist in fileListGrouped:
         fileName = fileName.rsplit( "_", 1 )[0]
         # fileName will be for each country something like "gadm36_ETH"
         outputFilePath = dir_path + fileName + ".json"
+        print("Writing to", outputFilePath, "...")
         if os.path.isfile(outputFilePath):
             os.remove(outputFilePath)
         with open(outputFilePath, "w") as outputFile:

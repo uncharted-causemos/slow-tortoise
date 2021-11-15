@@ -25,7 +25,9 @@ for f in ${cfiles[@]}; do
   country=$(echo "$f" | cut -f 1 -d '.' | cut -f 2 -d '/')
   fname="gadm36_${country}_shp.zip"
   echo "Downloading shape files for ${country} ..."
-  curl -LO "https://biogeo.ucdavis.edu/data/gadm3.6/shp/${fname}"
+  # Local cache, to download from GADM use URL below
+  curl -LO "http://10.64.16.209:4005/gadm/countries/${fname}"
+  # curl -LO "https://biogeo.ucdavis.edu/data/gadm3.6/shp/${fname}"
   echo "Extracting ${fname} ..."
   unzip ${fname} -d "gadm36_${country}_shp" 
 done
