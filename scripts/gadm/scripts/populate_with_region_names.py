@@ -15,24 +15,19 @@ def populate_es_with_gadm():
     elastic = Elasticsearch(ES_URL)
 
     files = [get_csv_filename(i) for i in range(MAX_GADM_INDEX)]
-    # column_data must be ordered from broadest region to most specific region (largest to smallest)
+    # column_data and code_columns must be ordered from broadest region to most specific region (largest to smallest)
     column_data = [
         { "input": "name_0", "output": "country" },
         { "input": "name_1", "output": "admin1" },
         { "input": "name_2", "output": "admin2" },
         { "input": "name_3", "output": "admin3" }
     ]
-
-    def generate_id(filtered_row):
-        sorted_row = sorted([(key, filtered_row[key]) for key in filtered_row])
-        row_as_string = ":".join([f"{key[0]},{key[1]}" for key in sorted_row])
-        return str(uuid.uuid3(uuid.NAMESPACE_DNS, row_as_string))
+    code_columns = [ "gadm36_0", "gadm36_1", "gadm36_2", "gadm36_3" ]
 
     for file in files:
         with open(file) as f:
             list_of_rows = [{k: v for k, v in row.items()} for row in csv.DictReader(f, skipinitialspace=True)]
             filtered_rows = []
-            ids = set()
             for row in list_of_rows:
                 new_row = {}
                 for column_datum in column_data:
@@ -41,12 +36,11 @@ def populate_es_with_gadm():
                     if input in row:
                         new_row[output] = row[input]
                         new_row["level"] = output
-                generated_id = generate_id(new_row)
-                ids.add(generated_id)
-                new_row["_id"] = generated_id
+                for code_column in code_columns:
+                    if code_column in row:
+                        new_row["code"] = row[code_column]
+                new_row["_id"] = new_row["code"]
                 filtered_rows.append(new_row)
-            if len(ids) != len(filtered_rows):
-                print("The number of unique ids generated do not match the number of documents inserted.")
             try:
                 # make the bulk call, and get a response
                 response = helpers.bulk(elastic, filtered_rows, index="gadm-name")
