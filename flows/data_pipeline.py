@@ -5,6 +5,7 @@ import dask.bytes as db
 import pandas as pd
 import requests
 import os
+import json
 
 from prefect import task, Flow, Parameter
 from prefect.engine.signals import SKIP, FAIL
@@ -32,6 +33,7 @@ from flows.common import (
     write_to_null,
     write_to_s3,
     compute_subtile_stats,
+    apply_qualifier_count_limit,
     REGION_LEVELS,
     REQUIRED_COLS,
 )
@@ -416,11 +418,41 @@ def get_qualifier_columns(df):
 
 
 @task(log_stdout=True)
-def compute_regional_timeseries(df, dest, time_res, model_id, run_id):
+def compute_regional_timeseries(
+    df,
+    dest,
+    time_res,
+    model_id,
+    run_id,
+    qualifier_map,
+    qualifier_columns,
+    qualifier_counts,
+    qualifier_thresholds,
+):
+    max_qualifier_count = qualifier_thresholds["regional_timeseries_count"]
+    max_level = qualifier_thresholds["regional_timeseries_max_level"]
+    (new_qualifier_map, new_qualifier_columns) = apply_qualifier_count_limit(
+        qualifier_map, qualifier_columns, qualifier_counts, max_qualifier_count
+    )
+
     regions_cols = extract_region_columns(df)
-    for region_level in regions_cols:
+    for level, region_level in enumerate(regions_cols):
+        # Qualifiers won't be used for admin levels above the threshold
+        if level > max_level:
+            qualifier_cols = [[]]  # [] is the default case of ignoring qualifiers
+        else:
+            qualifier_cols = [*new_qualifier_columns, []]
+
         compute_timeseries_by_region(
-            df, dest, model_id, run_id, time_res, region_level, WRITE_TYPES[DEST_TYPE]
+            df,
+            dest,
+            model_id,
+            run_id,
+            time_res,
+            region_level,
+            new_qualifier_map,
+            qualifier_cols,
+            WRITE_TYPES[DEST_TYPE],
         )
 
 
@@ -678,12 +710,21 @@ def record_qualifier_lists(df, dest, model_id, run_id, qualifiers, thresholds):
     save_df = df.copy()
     qualifier_columns = sum(qualifiers, [])
 
-    foo = (
+    counts = (
         save_df[["feature"] + qualifier_columns]
         .groupby(["feature"])
         .apply(lambda x: save_qualifier_lists(x), meta=(None, "object"))
     )
-    foo.compute()
+    pdf_counts = counts.compute()
+    json_str = pdf_counts.to_json(orient="index")
+    print(json_str)
+    return json.loads(json_str)
+
+
+@task(log_stdout=True)
+def apply_qualifier_thresholds(qualifier_map, columns, counts, thresholds) -> Tuple[dict, list]:
+    max_count = thresholds["max_count"]
+    return apply_qualifier_count_limit(qualifier_map, columns, counts, max_count)
 
 
 ###########################################################################
@@ -726,10 +767,12 @@ with Flow(FLOW_NAME) as flow:
     # The thresholds are values that the pipeline uses for processing qualifiers
     # It tells the user what sort of data they can expect to be available
     # For ex, no regional_timeseries for qualifier with more than 100 values
-    qualifier_threshold = Parameter(
+    qualifier_thresholds = Parameter(
         "qualifier_thresholds",
         default={
-            "regional_timeseries": 100,
+            "max_count": 10000,
+            "regional_timeseries_count": 10000,
+            "regional_timeseries_max_level": 1,
         },
     )
 
@@ -782,14 +825,29 @@ with Flow(FLOW_NAME) as flow:
 
     # ==== Compute lists of all gadm regions and qualifier values =====
     record_region_lists(df, dest, model_id, run_id)
-    record_qualifier_lists(df, dest, model_id, run_id, qualifier_columns, qualifier_threshold)
+    qualifier_counts = record_qualifier_lists(
+        df, dest, model_id, run_id, qualifier_columns, qualifier_thresholds
+    )
+    (qualifier_map, qualifier_columns) = apply_qualifier_thresholds(
+        qualifier_map, qualifier_columns, qualifier_counts, qualifier_thresholds
+    )
 
     # ==== Run aggregations based on monthly time resolution =====
     monthly_data = temporal_aggregation(df, "month", compute_monthly)
     month_csv_ts_done = compute_timeseries_as_csv(
         monthly_data, dest, "month", model_id, run_id, qualifier_map, qualifier_columns
     )
-    compute_regional_timeseries(monthly_data, dest, "month", model_id, run_id)
+    compute_regional_timeseries(
+        monthly_data,
+        dest,
+        "month",
+        model_id,
+        run_id,
+        qualifier_map,
+        qualifier_columns,
+        qualifier_counts,
+        qualifier_thresholds,
+    )
     monthly_csv_regional_df = compute_regional_aggregation_to_csv(
         monthly_data, dest, "month", model_id, run_id, qualifier_map, qualifier_columns
     )
@@ -809,7 +867,17 @@ with Flow(FLOW_NAME) as flow:
     year_csv_ts_done = compute_timeseries_as_csv(
         annual_data, dest, "year", model_id, run_id, qualifier_map, qualifier_columns
     )
-    compute_regional_timeseries(annual_data, dest, "year", model_id, run_id)
+    compute_regional_timeseries(
+        annual_data,
+        dest,
+        "year",
+        model_id,
+        run_id,
+        qualifier_map,
+        qualifier_columns,
+        qualifier_counts,
+        qualifier_thresholds,
+    )
     annual_csv_regional_df = compute_regional_aggregation_to_csv(
         annual_data, dest, "year", model_id, run_id, qualifier_map, qualifier_columns
     )
@@ -881,7 +949,15 @@ if __name__ == "__main__" and LOCAL_RUN:
         # flow.run(
         #     parameters=dict(
         #         is_indicator=True,
-        #         qualifier_map={"fatalities": ["event_type", "sub_event_type", "source_scale"]},
+        #         qualifier_map={
+        #             "fatalities": [
+        #                 "event_type",
+        #                 "sub_event_type",
+        #                 "source_scale",
+        #                 "country_non_primary",
+        #                 "admin1_non_primary",
+        #             ]
+        #         },
         #         model_id="_qualifier-test",
         #         run_id="indicator",
         #         data_paths=[

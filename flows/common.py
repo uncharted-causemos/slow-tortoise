@@ -1,4 +1,5 @@
 import datetime
+from typing import Tuple
 import pandas as pd
 import dask.dataframe as dd
 import math
@@ -113,6 +114,27 @@ def project(subtilecoord, tilecoord):
     bin_index = binx + biny * max_x_bins
 
     return int(bin_index)
+
+
+def apply_qualifier_count_limit(qualifier_map, columns, counts, max_count) -> Tuple[dict, list]:
+    # Modify qualifier_map to remove qualifiers with too many categories
+    new_qualifier_map = {}
+    small_qualifiers = set()
+    for feature in qualifier_map.keys():
+        if feature not in counts:
+            continue
+
+        counts_for_feature = counts[feature]
+        qualifiers = qualifier_map[feature]
+        new_qualifier_map[feature] = [
+            q for q in qualifiers if q in counts_for_feature and counts_for_feature[q] <= max_count
+        ]
+        small_qualifiers.update(new_qualifier_map[feature])
+
+    # Remove any qualifiers from the columns list that are too big for all feature
+    # Note: qualifier_columns is in the format [[qualifier1], [qualifier2]]
+    qualifier_columns = [col for col in columns if col[0] in small_qualifiers]
+    return (new_qualifier_map, qualifier_columns)
 
 
 # writes to S3 using the boto client
@@ -468,67 +490,109 @@ def extract_region_columns(df):
 
 # Save regional timeseries data to csv
 def save_regional_timeseries(
-    df, dest, model_id, run_id, time_res, timeseries_agg_columns, region_level, writer
+    df,
+    dest,
+    model_id,
+    run_id,
+    time_res,
+    timeseries_agg_columns,
+    region_level,
+    qualifier_map,
+    qualifier_col,
+    writer,
 ):
     feature = df["feature"].values[0]
     region_id = df["region_id"].values[0]
-    df = df[["timestamp"] + timeseries_agg_columns]
 
-    path = f"{model_id}/{run_id}/{time_res}/{feature}/regional/{region_level}/timeseries/{region_id}.csv"
-    body = df.to_csv(index=False)
-    writer(body, path, dest)
+    if len(qualifier_col) == 0:
+        df = df[["timestamp"] + timeseries_agg_columns]
+
+        path = f"{model_id}/{run_id}/{time_res}/{feature}/regional/{region_level}/timeseries/default/{region_id}.csv"
+        body = df.to_csv(index=False)
+        writer(body, path, dest)
+    elif feature in qualifier_map and qualifier_col[0] in qualifier_map[feature]:
+        qualifier = qualifier_col[0]
+        qualifier_value = df[qualifier_col[0]].values[0]
+        df = df[["timestamp"] + timeseries_agg_columns]
+
+        path = f"{model_id}/{run_id}/{time_res}/{feature}/regional/{region_level}/timeseries/qualifiers/{qualifier}/{qualifier_value}/{region_id}.csv"
+        body = df.to_csv(index=False)
+        writer(body, path, dest)
 
 
 # Compute timeseries by region
 def compute_timeseries_by_region(
-    temporal_df, dest, model_id, run_id, time_res, region_level, writer
+    temporal_df,
+    dest,
+    model_id,
+    run_id,
+    time_res,
+    region_level,
+    qualifier_map,
+    qualifier_cols,
+    writer,
 ):
-    timeseries_df = temporal_df.copy()
-    regions_cols = extract_region_columns(timeseries_df)
-    timeseries_df["region_id"] = join_region_columns(
-        timeseries_df, regions_cols, REGION_LEVELS.index(region_level)
-    )
-    timeseries_aggs = ["min", "max", "sum", "mean", "count"]
-    timeseries_lookup = {
-        ("t_sum", "min"): "s_min_t_sum",
-        ("t_sum", "max"): "s_max_t_sum",
-        ("t_sum", "sum"): "s_sum_t_sum",
-        ("t_sum", "mean"): "s_mean_t_sum",
-        ("t_mean", "min"): "s_min_t_mean",
-        ("t_mean", "max"): "s_max_t_mean",
-        ("t_mean", "sum"): "s_sum_t_mean",
-        ("t_mean", "mean"): "s_mean_t_mean",
-        ("t_mean", "count"): "s_count_t_mean",
-        ("t_sum", "count"): "s_count",
-    }
-    timeseries_agg_columns = [
-        "s_min_t_sum",
-        "s_max_t_sum",
-        "s_sum_t_sum",
-        "s_mean_t_sum",
-        "s_min_t_mean",
-        "s_max_t_mean",
-        "s_sum_t_mean",
-        "s_mean_t_mean",
-        "s_count",
-    ]
+    admin_level = REGION_LEVELS.index(region_level)
 
-    timeseries_df = timeseries_df.groupby(["feature", "region_id", "timestamp"]).agg(
-        {"t_sum": timeseries_aggs, "t_mean": timeseries_aggs}
-    )
-    timeseries_df.columns = timeseries_df.columns.to_flat_index()
-    timeseries_df = timeseries_df.rename(columns=timeseries_lookup).reset_index()
-    timeseries_df = (
-        timeseries_df.repartition(npartitions=12)
-        .groupby(["feature", "region_id"])
-        .apply(
-            lambda x: save_regional_timeseries(
-                x, dest, model_id, run_id, time_res, timeseries_agg_columns, region_level, writer
-            ),
-            meta=(None, "object"),
+    # persist the result in memory since this df is going to be used for multiple qualifiers
+    temporal_df = temporal_df.persist()
+
+    # Iterate through all the qualifier columns. Not all columns map to
+    # all the features, they will be excluded when processing each feature
+    for qualifier_col in qualifier_cols:
+        timeseries_df = temporal_df.copy()
+        regions_cols = extract_region_columns(timeseries_df)
+        timeseries_df["region_id"] = join_region_columns(timeseries_df, regions_cols, admin_level)
+        timeseries_aggs = ["min", "max", "sum", "mean", "count"]
+        timeseries_lookup = {
+            ("t_sum", "min"): "s_min_t_sum",
+            ("t_sum", "max"): "s_max_t_sum",
+            ("t_sum", "sum"): "s_sum_t_sum",
+            ("t_sum", "mean"): "s_mean_t_sum",
+            ("t_mean", "min"): "s_min_t_mean",
+            ("t_mean", "max"): "s_max_t_mean",
+            ("t_mean", "sum"): "s_sum_t_mean",
+            ("t_mean", "mean"): "s_mean_t_mean",
+            ("t_mean", "count"): "s_count_t_mean",
+            ("t_sum", "count"): "s_count",
+        }
+        timeseries_agg_columns = [
+            "s_min_t_sum",
+            "s_max_t_sum",
+            "s_sum_t_sum",
+            "s_mean_t_sum",
+            "s_min_t_mean",
+            "s_max_t_mean",
+            "s_sum_t_mean",
+            "s_mean_t_mean",
+            "s_count",
+        ]
+
+        timeseries_df = timeseries_df.groupby(
+            ["feature", "region_id", "timestamp"] + qualifier_col
+        ).agg({"t_sum": timeseries_aggs, "t_mean": timeseries_aggs})
+        timeseries_df.columns = timeseries_df.columns.to_flat_index()
+        timeseries_df = timeseries_df.rename(columns=timeseries_lookup).reset_index()
+        timeseries_df = (
+            timeseries_df.repartition(npartitions=12)
+            .groupby(["feature", "region_id"] + qualifier_col)
+            .apply(
+                lambda x: save_regional_timeseries(
+                    x,
+                    dest,
+                    model_id,
+                    run_id,
+                    time_res,
+                    timeseries_agg_columns,
+                    region_level,
+                    qualifier_map,
+                    qualifier_col,
+                    writer,
+                ),
+                meta=(None, "object"),
+            )
         )
-    )
-    timeseries_df.compute()
+        timeseries_df.compute()
 
 
 # Save subtile stats to csv
