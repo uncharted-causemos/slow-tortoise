@@ -297,9 +297,14 @@ def compute_timeseries_as_csv(
                 qualifier_map,
                 WRITE_TYPES[DEST_TYPE],
             ),
-            meta=(None, "object"),
+            meta=(None, "int"),
         )
-        timeseries_df.compute()
+
+        timeseries_pdf = timeseries_df.compute()
+        if len(qualifier_col) == 0:
+            timeseries_size = timeseries_pdf.to_json(orient="index")
+
+    return timeseries_size
 
 
 @task(log_stdout=True)
@@ -630,11 +635,14 @@ def update_metadata(
     doc_ids,
     summary_values,
     num_rows,
+    region_columns,
     feature_list,
     compute_raw,
     compute_monthly,
     compute_annual,
     compute_tiles,
+    month_ts_size,
+    year_ts_size,
     elastic_url,
     elastic_index,
 ):
@@ -643,6 +651,7 @@ def update_metadata(
             "status": "READY",
             "data_info": {
                 "num_rows": num_rows,
+                "region_levels": region_columns,
                 "features": feature_list,
                 "has_raw_data": compute_raw,
                 "has_tiles": compute_tiles,
@@ -654,6 +663,12 @@ def update_metadata(
     if summary_values is not None:
         data["doc"]["output_agg_values"] = summary_values
 
+    if compute_monthly and month_ts_size is not None:
+        data["doc"]["data_info"]["month_timeseries_size"] = json.loads(month_ts_size)
+
+    if compute_annual and year_ts_size is not None:
+        data["doc"]["data_info"]["year_timeseries_size"] = json.loads(year_ts_size)
+
     for doc_id in doc_ids:
         r = requests.post(f"{elastic_url}/{elastic_index}/_update/{doc_id}", json=data)
         print(r.text)
@@ -661,7 +676,7 @@ def update_metadata(
 
 
 @task(log_stdout=True)
-def record_region_lists(df, dest, model_id, run_id):
+def record_region_lists(df, dest, model_id, run_id) -> Tuple[list, list]:
     def cols_to_lists(df, id_cols, feature):
         lists = {region: [] for region in REGION_LEVELS}
         for index, id_col in enumerate(id_cols):
@@ -697,9 +712,9 @@ def record_region_lists(df, dest, model_id, run_id):
         )
     )
 
-    # As a side effect, return the list of features
+    # As a side effect, return the regions available, and the list of features
     feature_list = features.compute().unique().tolist()
-    return feature_list
+    return region_cols, feature_list
 
 
 @task(log_stdout=True)
@@ -747,7 +762,6 @@ def record_qualifier_lists(df, dest, model_id, run_id, qualifiers, thresholds):
     )
     pdf_counts = counts.compute()
     json_str = pdf_counts.to_json(orient="index")
-    print(json_str)
     return json.loads(json_str)
 
 
@@ -854,7 +868,7 @@ with Flow(FLOW_NAME) as flow:
     qualifier_columns = get_qualifier_columns(df)
 
     # ==== Compute lists of all gadm regions and qualifier values =====
-    feature_list = record_region_lists(df, dest, model_id, run_id)
+    (region_columns, feature_list) = record_region_lists(df, dest, model_id, run_id)
     qualifier_counts = record_qualifier_lists(
         df, dest, model_id, run_id, qualifier_columns, qualifier_thresholds
     )
@@ -864,7 +878,7 @@ with Flow(FLOW_NAME) as flow:
 
     # ==== Run aggregations based on monthly time resolution =====
     monthly_data = temporal_aggregation(df, "month", compute_monthly)
-    month_csv_ts_done = compute_timeseries_as_csv(
+    month_ts_size = compute_timeseries_as_csv(
         monthly_data, dest, "month", model_id, run_id, qualifier_map, qualifier_columns
     )
     compute_regional_timeseries(
@@ -883,7 +897,7 @@ with Flow(FLOW_NAME) as flow:
     )
 
     monthly_spatial_data = subtile_aggregation(
-        monthly_data, compute_tiles, upstream_tasks=[month_csv_ts_done]
+        monthly_data, compute_tiles, upstream_tasks=[month_ts_size]
     )
     month_stats_done = compute_stats(monthly_spatial_data, dest, "month", model_id, run_id, "stats")
     month_done = compute_tiling(
@@ -894,7 +908,7 @@ with Flow(FLOW_NAME) as flow:
     annual_data = temporal_aggregation(
         df, "year", compute_annual, upstream_tasks=[monthly_csv_regional_df, month_done]
     )
-    year_csv_ts_done = compute_timeseries_as_csv(
+    year_ts_size = compute_timeseries_as_csv(
         annual_data, dest, "year", model_id, run_id, qualifier_map, qualifier_columns
     )
     compute_regional_timeseries(
@@ -913,7 +927,7 @@ with Flow(FLOW_NAME) as flow:
     )
 
     annual_spatial_data = subtile_aggregation(
-        annual_data, compute_tiles, upstream_tasks=[year_csv_ts_done]
+        annual_data, compute_tiles, upstream_tasks=[year_ts_size]
     )
     year_stats_done = compute_stats(annual_spatial_data, dest, "year", model_id, run_id, "stats")
     year_done = compute_tiling(
@@ -925,7 +939,7 @@ with Flow(FLOW_NAME) as flow:
         df,
         "all",
         compute_summary,
-        upstream_tasks=[year_done, year_csv_ts_done, annual_csv_regional_df],
+        upstream_tasks=[year_done, year_ts_size, annual_csv_regional_df],
     )
     summary_values = compute_output_summary(summary_data)
 
@@ -935,11 +949,14 @@ with Flow(FLOW_NAME) as flow:
             doc_ids,
             summary_values,
             num_rows,
+            region_columns,
             feature_list,
             compute_raw,
             compute_monthly,
             compute_annual,
             compute_tiles,
+            month_ts_size,
+            year_ts_size,
             elastic_url,
             elastic_index,
         )

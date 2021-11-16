@@ -218,6 +218,7 @@ def save_timeseries_as_csv(
         timeseries_to_csv(
             df, dest, model_id, run_id, feature, time_res, timeseries_agg_columns, writer
         )
+        return len(df.index)
     elif feature in qualifier_map and qualifier_col[0] in qualifier_map[feature]:
         for agg_col in timeseries_agg_columns:
             qualifier = qualifier_col[0]
@@ -233,6 +234,8 @@ def save_timeseries_as_csv(
             qualifier_timeseries_to_csv(
                 qualifier_df, dest, model_id, run_id, feature, time_res, agg_col, qualifier, writer
             )
+
+    return -1
 
 
 # write timeseries to json in S3
