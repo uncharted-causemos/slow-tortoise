@@ -112,7 +112,7 @@ LAT_LONG_COLUMNS = ["lat", "lng"]
 
 
 @task(log_stdout=True)
-def download_data(source, data_paths):
+def download_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
     df = None
     # if source is from s3 bucket
     if "s3://" in data_paths[0]:
@@ -153,12 +153,14 @@ def download_data(source, data_paths):
         print("No lat/long data. Dropping columns.")
         df = df.drop(columns=LAT_LONG_COLUMNS)
 
-    if len(df.index) == 0:
+    num_rows = len(df.index)
+    print(f"Read {num_rows} rows of data")
+    if num_rows == 0:
         raise FAIL("DataFrame has no rows")
 
     # Ensure types
     df = df.astype({"value": "float64"})
-    return df
+    return (df, num_rows)
 
 
 @task(log_stdout=True)
@@ -623,8 +625,31 @@ def compute_output_summary(df):
 
 
 @task(skip_on_upstream_skip=False, log_stdout=True)
-def update_metadata(doc_ids, summary_values, elastic_url, elastic_index):
-    data = {"doc": {"status": "READY"}}
+def update_metadata(
+    doc_ids,
+    summary_values,
+    num_rows,
+    feature_list,
+    compute_raw,
+    compute_monthly,
+    compute_annual,
+    compute_tiles,
+    elastic_url,
+    elastic_index,
+):
+    data = {
+        "doc": {
+            "status": "READY",
+            "data_info": {
+                "num_rows": num_rows,
+                "features": feature_list,
+                "has_raw_data": compute_raw,
+                "has_tiles": compute_tiles,
+                "has_monthly": compute_monthly,
+                "has_annual": compute_annual,
+            },
+        }
+    }
     if summary_values is not None:
         data["doc"]["output_agg_values"] = summary_values
 
@@ -649,6 +674,7 @@ def record_region_lists(df, dest, model_id, run_id):
             "region_lists",
             WRITE_TYPES[DEST_TYPE],
         )
+        return feature
 
     region_cols = extract_region_columns(df)
     if len(region_cols) == 0:
@@ -661,15 +687,18 @@ def record_region_lists(df, dest, model_id, run_id):
     for index, id_col in enumerate(id_cols):
         save_df[id_col] = join_region_columns(save_df, region_cols, index)
 
-    foo = (
+    features = (
         save_df[["feature"] + id_cols]
         .groupby(["feature"])
         .apply(
             lambda x: cols_to_lists(x, id_cols, x["feature"].values[0]),
-            meta=(None, "object"),
+            meta=(None, "str"),
         )
     )
-    foo.compute()
+
+    # As a side effect, return the list of features
+    feature_list = features.compute().unique().tolist()
+    return feature_list
 
 
 @task(log_stdout=True)
@@ -801,7 +830,7 @@ with Flow(FLOW_NAME) as flow:
         },
     )
 
-    raw_df = download_data(source, data_paths)
+    (raw_df, num_rows) = download_data(source, data_paths)
 
     # ==== Set parameters that determine which tasks should run based on the type of data we're ingesting ====
     (
@@ -824,7 +853,7 @@ with Flow(FLOW_NAME) as flow:
     qualifier_columns = get_qualifier_columns(df)
 
     # ==== Compute lists of all gadm regions and qualifier values =====
-    record_region_lists(df, dest, model_id, run_id)
+    feature_list = record_region_lists(df, dest, model_id, run_id)
     qualifier_counts = record_qualifier_lists(
         df, dest, model_id, run_id, qualifier_columns, qualifier_thresholds
     )
@@ -901,10 +930,18 @@ with Flow(FLOW_NAME) as flow:
 
     # ==== Update document in ES setting the status to READY =====
     if ELASTIC_URL:
-        # TODO: Additional info to output
-        # compute_tiles -> is there tile data computed
-        # df["feature"].unique().tolist() -> list of features
-        update_metadata(doc_ids, summary_values, elastic_url, elastic_index)
+        update_metadata(
+            doc_ids,
+            summary_values,
+            num_rows,
+            feature_list,
+            compute_raw,
+            compute_monthly,
+            compute_annual,
+            compute_tiles,
+            elastic_url,
+            elastic_index,
+        )
 
     # TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful.
     # Then same data can be used for producing tiles and also used for doing regional aggregation and other computation in other tasks.
