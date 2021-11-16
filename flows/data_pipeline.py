@@ -6,6 +6,7 @@ import pandas as pd
 import requests
 import os
 import json
+import re
 
 from prefect import task, Flow, Parameter
 from prefect.engine.signals import SKIP, FAIL
@@ -134,7 +135,7 @@ def download_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
         numeric_files = []
         string_files = []
         for path in data_paths:
-            if path.endswith("_str.parquet.gzip"):
+            if re.match(".*_str(.[0-9]+)?.parquet.gzip$", path):
                 string_files.append(path)
             else:
                 numeric_files.append(path)
