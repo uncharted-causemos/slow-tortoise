@@ -669,10 +669,13 @@ def update_metadata(
     if compute_annual and year_ts_size is not None:
         data["doc"]["data_info"]["year_timeseries_size"] = json.loads(year_ts_size)
 
-    for doc_id in doc_ids:
-        r = requests.post(f"{elastic_url}/{elastic_index}/_update/{doc_id}", json=data)
-        print(r.text)
-        r.raise_for_status()
+    if ELASTIC_URL:
+        for doc_id in doc_ids:
+            r = requests.post(f"{elastic_url}/{elastic_index}/_update/{doc_id}", json=data)
+            print(r.text)
+            r.raise_for_status()
+    else:
+        print("Metadata update payload:", data)
 
 
 @task(log_stdout=True)
@@ -820,10 +823,7 @@ with Flow(FLOW_NAME) as flow:
         },
     )
 
-    # skip write to elastic if URL unset - we define this and don't use it prefect
-    # errors
-    if ELASTIC_URL:
-        elastic_url = Parameter("elastic_url", default=ELASTIC_URL)
+    elastic_url = Parameter("elastic_url", default=ELASTIC_URL)
 
     source = Parameter(
         "source",
@@ -944,22 +944,21 @@ with Flow(FLOW_NAME) as flow:
     summary_values = compute_output_summary(summary_data)
 
     # ==== Update document in ES setting the status to READY =====
-    if ELASTIC_URL:
-        update_metadata(
-            doc_ids,
-            summary_values,
-            num_rows,
-            region_columns,
-            feature_list,
-            compute_raw,
-            compute_monthly,
-            compute_annual,
-            compute_tiles,
-            month_ts_size,
-            year_ts_size,
-            elastic_url,
-            elastic_index,
-        )
+    update_metadata(
+        doc_ids,
+        summary_values,
+        num_rows,
+        region_columns,
+        feature_list,
+        compute_raw,
+        compute_monthly,
+        compute_annual,
+        compute_tiles,
+        month_ts_size,
+        year_ts_size,
+        elastic_url,
+        elastic_index,
+    )
 
     # TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful.
     # Then same data can be used for producing tiles and also used for doing regional aggregation and other computation in other tasks.
