@@ -5,9 +5,11 @@ import dask.bytes as db
 import pandas as pd
 import requests
 import os
+import json
+import re
 
 from prefect import task, Flow, Parameter
-from prefect.engine.signals import SKIP
+from prefect.engine.signals import SKIP, FAIL
 from prefect.storage import Docker
 from prefect.executors import DaskExecutor, LocalDaskExecutor
 from flows.common import (
@@ -17,14 +19,12 @@ from flows.common import (
     filter_by_min_zoom,
     tile_coord,
     save_tile,
-    save_timeseries,
     save_timeseries_as_csv,
     stats_to_json,
-    feature_to_json,
+    info_to_json,
     to_proto,
     extract_region_columns,
     join_region_columns,
-    save_regional_aggregation,
     save_regional_qualifiers_to_csv,
     write_regional_aggregation_csv,
     output_values_to_json_array,
@@ -34,6 +34,7 @@ from flows.common import (
     write_to_null,
     write_to_s3,
     compute_subtile_stats,
+    apply_qualifier_count_limit,
     REGION_LEVELS,
     REQUIRED_COLS,
 )
@@ -112,7 +113,7 @@ LAT_LONG_COLUMNS = ["lat", "lng"]
 
 
 @task(log_stdout=True)
-def download_data(source, data_paths):
+def download_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
     df = None
     # if source is from s3 bucket
     if "s3://" in data_paths[0]:
@@ -134,7 +135,7 @@ def download_data(source, data_paths):
         numeric_files = []
         string_files = []
         for path in data_paths:
-            if path.endswith("_str.parquet.gzip"):
+            if re.match(".*_str(.[0-9]+)?.parquet.gzip$", path):
                 string_files.append(path)
             else:
                 numeric_files.append(path)
@@ -143,6 +144,9 @@ def download_data(source, data_paths):
         dfs = [delayed(pd.read_parquet)(path) for path in numeric_files]
         df = dd.from_delayed(dfs).repartition(npartitions=12)
 
+    print(df.dtypes)
+    print(df.head())
+
     # Remove lat/lng columns if they are null
     ll_df = df[LAT_LONG_COLUMNS]
     null_cols = set(ll_df.columns[ll_df.isnull().all()])
@@ -150,18 +154,14 @@ def download_data(source, data_paths):
         print("No lat/long data. Dropping columns.")
         df = df.drop(columns=LAT_LONG_COLUMNS)
 
-    # # Drop all additional columns
-    # accepted_cols = set(['timestamp', 'country', 'admin1', 'admin2', 'admin3', 'lat', 'lng', 'feature', 'value'])
-    # all_cols = df.columns.to_list()
-    # cols_to_drop = list(set(all_cols) - accepted_cols)
-    # print(f'All columns: {all_cols}. Dropping: {cols_to_drop}')
-    # if len(cols_to_drop) > 0:
-    #     df = df.drop(columns=cols_to_drop)
+    num_rows = len(df.index)
+    print(f"Read {num_rows} rows of data")
+    if num_rows == 0:
+        raise FAIL("DataFrame has no rows")
 
     # Ensure types
     df = df.astype({"value": "float64"})
-    df.dtypes
-    return df
+    return (df, num_rows)
 
 
 @task(log_stdout=True)
@@ -246,45 +246,6 @@ def temporal_aggregation(df, time_res, should_run):
 
 
 @task(log_stdout=True)
-def compute_timeseries(df, dest, time_res, model_id, run_id):
-    # Timeseries aggregation
-    timeseries_aggs = ["min", "max", "sum", "mean"]
-    timeseries_lookup = {
-        ("t_sum", "min"): "s_min_t_sum",
-        ("t_sum", "max"): "s_max_t_sum",
-        ("t_sum", "sum"): "s_sum_t_sum",
-        ("t_sum", "mean"): "s_mean_t_sum",
-        ("t_mean", "min"): "s_min_t_mean",
-        ("t_mean", "max"): "s_max_t_mean",
-        ("t_mean", "sum"): "s_sum_t_mean",
-        ("t_mean", "mean"): "s_mean_t_mean",
-    }
-    timeseries_agg_columns = [
-        "s_min_t_sum",
-        "s_max_t_sum",
-        "s_sum_t_sum",
-        "s_mean_t_sum",
-        "s_min_t_mean",
-        "s_max_t_mean",
-        "s_sum_t_mean",
-        "s_mean_t_mean",
-    ]
-
-    timeseries_df = df.groupby(["feature", "timestamp"]).agg(
-        {"t_sum": timeseries_aggs, "t_mean": timeseries_aggs}
-    )
-    timeseries_df.columns = timeseries_df.columns.to_flat_index()
-    timeseries_df = timeseries_df.rename(columns=timeseries_lookup).reset_index()
-    timeseries_df = timeseries_df.groupby(["feature"]).apply(
-        lambda x: save_timeseries(
-            x, dest, model_id, run_id, time_res, timeseries_agg_columns, WRITE_TYPES[DEST_TYPE]
-        ),
-        meta=(None, "object"),
-    )
-    timeseries_df.compute()
-
-
-@task(log_stdout=True)
 def compute_timeseries_as_csv(
     df, dest, time_res, model_id, run_id, qualifier_map, qualifer_columns
 ):
@@ -336,72 +297,14 @@ def compute_timeseries_as_csv(
                 qualifier_map,
                 WRITE_TYPES[DEST_TYPE],
             ),
-            meta=(None, "object"),
+            meta=(None, "int"),
         )
-        timeseries_df.compute()
 
+        timeseries_pdf = timeseries_df.compute()
+        if len(qualifier_col) == 0:
+            timeseries_size = timeseries_pdf.to_json(orient="index")
 
-@task(log_stdout=True)
-def compute_regional_aggregation(input_df, dest, time_res, model_id, run_id):
-    # Copy input df so that original df doesn't get mutated
-    df = input_df.copy()
-    # Ranme columns
-    df.columns = df.columns.str.replace("t_sum", "s_sum_t_sum").str.replace(
-        "t_mean", "s_sum_t_mean"
-    )
-    df["s_count"] = 1
-    df = df.reset_index()
-
-    regions_cols = extract_region_columns(df)
-    if len(regions_cols) == 0:
-        raise SKIP("No regional information available")
-
-    # Region aggregation at the highest admin level
-    df = (
-        df[["feature", "timestamp", "s_sum_t_sum", "s_sum_t_mean", "s_count"] + regions_cols]
-        .groupby(["feature", "timestamp"] + regions_cols)
-        .agg(["sum"])
-    )
-    df.columns = df.columns.droplevel(1)
-    df = df.reset_index()
-    # persist the result in memory at this point since this df is going to be used multiple times to compute for different regional levels
-    df = df.persist()
-
-    # Compute aggregation and save for all regional levels
-    for level in range(len(regions_cols)):
-        save_df = df.copy()
-        # Merge region columns to single region_id column. eg. ['Ethiopia', 'Afar'] -> ['Ethiopia_Afar']
-        save_df["region_id"] = join_region_columns(save_df, regions_cols, level)
-
-        desired_columns = [
-            "feature",
-            "timestamp",
-            "region_id",
-            "s_sum_t_sum",
-            "s_sum_t_mean",
-            "s_count",
-        ]
-        save_df = save_df[desired_columns].groupby(["feature", "timestamp"]).agg(list)
-
-        save_df = save_df.reset_index()
-        # At this point data is already reduced to reasonably small size due to prior admin aggregation.
-        # Just perform repartition to make sure save io operation runs in parallel since each writing operation is expensive and blocks
-        # Set npartitions to same as # of available workers/threads. Increasing partition number beyond the number of the workers doesn't seem to give more performance benefits.
-        save_df = save_df.repartition(npartitions=12)
-        save_df = save_df.apply(
-            lambda x: save_regional_aggregation(
-                x,
-                dest,
-                model_id,
-                run_id,
-                time_res,
-                WRITE_TYPES[DEST_TYPE],
-                region_level=regions_cols[level],
-            ),
-            axis=1,
-            meta=(None, "object"),
-        )
-        save_df.compute()
+    return timeseries_size
 
 
 @task(log_stdout=True)
@@ -523,11 +426,41 @@ def get_qualifier_columns(df):
 
 
 @task(log_stdout=True)
-def compute_regional_timeseries(df, dest, time_res, model_id, run_id):
+def compute_regional_timeseries(
+    df,
+    dest,
+    time_res,
+    model_id,
+    run_id,
+    qualifier_map,
+    qualifier_columns,
+    qualifier_counts,
+    qualifier_thresholds,
+):
+    max_qualifier_count = qualifier_thresholds["regional_timeseries_count"]
+    max_level = qualifier_thresholds["regional_timeseries_max_level"]
+    (new_qualifier_map, new_qualifier_columns) = apply_qualifier_count_limit(
+        qualifier_map, qualifier_columns, qualifier_counts, max_qualifier_count
+    )
+
     regions_cols = extract_region_columns(df)
-    for region_level in regions_cols:
+    for level, region_level in enumerate(regions_cols):
+        # Qualifiers won't be used for admin levels above the threshold
+        if level > max_level:
+            qualifier_cols = [[]]  # [] is the default case of ignoring qualifiers
+        else:
+            qualifier_cols = [*new_qualifier_columns, []]
+
         compute_timeseries_by_region(
-            df, dest, model_id, run_id, time_res, region_level, WRITE_TYPES[DEST_TYPE]
+            df,
+            dest,
+            model_id,
+            run_id,
+            time_res,
+            region_level,
+            new_qualifier_map,
+            qualifier_cols,
+            WRITE_TYPES[DEST_TYPE],
         )
 
 
@@ -665,83 +598,94 @@ def assist_compute_stats(df, dest, time_res, model_id, run_id, filename):
 @task(log_stdout=True)
 def compute_output_summary(df):
     # Timeseries aggregation
-    timeseries_aggs = ["mean"]
-    timeseries_agg_column = "s_mean_t_mean"
-    timeseries_lookup = {("t_mean", "mean"): timeseries_agg_column}
+    timeseries_aggs = ["min", "max", "sum", "mean"]
+    timeseries_lookup = {
+        ("t_sum", "min"): "s_min_t_sum",
+        ("t_sum", "max"): "s_max_t_sum",
+        ("t_sum", "sum"): "s_sum_t_sum",
+        ("t_sum", "mean"): "s_mean_t_sum",
+        ("t_mean", "min"): "s_min_t_mean",
+        ("t_mean", "max"): "s_max_t_mean",
+        ("t_mean", "sum"): "s_sum_t_mean",
+        ("t_mean", "mean"): "s_mean_t_mean",
+    }
+    timeseries_agg_columns = [
+        "s_min_t_sum",
+        "s_max_t_sum",
+        "s_sum_t_sum",
+        "s_mean_t_sum",
+        "s_min_t_mean",
+        "s_max_t_mean",
+        "s_sum_t_mean",
+        "s_mean_t_mean",
+    ]
 
-    timeseries_df = df.groupby(["feature", "timestamp"]).agg({"t_mean": timeseries_aggs})
+    timeseries_df = df.groupby(["feature", "timestamp"]).agg(
+        {"t_sum": timeseries_aggs, "t_mean": timeseries_aggs}
+    )
     timeseries_df.columns = timeseries_df.columns.to_flat_index()
     timeseries_df = timeseries_df.rename(columns=timeseries_lookup).reset_index()
 
-    summary = output_values_to_json_array(
-        timeseries_df[["feature", timeseries_agg_column]], timeseries_agg_column
-    )
+    summary = output_values_to_json_array(timeseries_df[["feature"] + timeseries_agg_columns])
     return summary
 
 
 @task(skip_on_upstream_skip=False, log_stdout=True)
-def update_metadata(doc_ids, summary_values, elastic_url, elastic_index):
-    data = {"doc": {"status": "READY"}}
+def update_metadata(
+    doc_ids,
+    summary_values,
+    num_rows,
+    region_columns,
+    feature_list,
+    compute_raw,
+    compute_monthly,
+    compute_annual,
+    compute_tiles,
+    month_ts_size,
+    year_ts_size,
+    elastic_url,
+    elastic_index,
+):
+    data = {
+        "doc": {
+            "status": "READY",
+            "data_info": {
+                "num_rows": num_rows,
+                "region_levels": region_columns,
+                "features": feature_list,
+                "has_raw_data": compute_raw,
+                "has_tiles": compute_tiles,
+                "has_monthly": compute_monthly,
+                "has_annual": compute_annual,
+            },
+        }
+    }
     if summary_values is not None:
         data["doc"]["output_agg_values"] = summary_values
 
-    for doc_id in doc_ids:
-        r = requests.post(f"{elastic_url}/{elastic_index}/_update/{doc_id}", json=data)
-        print(r.text)
-        r.raise_for_status()
+    if compute_monthly and month_ts_size is not None:
+        data["doc"]["data_info"]["month_timeseries_size"] = json.loads(month_ts_size)
+
+    if compute_annual and year_ts_size is not None:
+        data["doc"]["data_info"]["year_timeseries_size"] = json.loads(year_ts_size)
+
+    if ELASTIC_URL:
+        for doc_id in doc_ids:
+            r = requests.post(f"{elastic_url}/{elastic_index}/_update/{doc_id}", json=data)
+            print(r.text)
+            r.raise_for_status()
+    else:
+        print("Metadata update payload:", data)
 
 
 @task(log_stdout=True)
-def record_region_hierarchy(df, dest, model_id, run_id):
-    region_cols = extract_region_columns(df)
-    if len(region_cols) == 0:
-        raise SKIP("No regional information available")
-
-    hierarchy = {}
-    # This builds the hierarchy
-    for _, row in df.iterrows():
-        feature = row["feature"]
-        if feature not in hierarchy:
-            hierarchy[feature] = {}
-        current_hierarchy_position = hierarchy[feature]
-
-        # Not all rows will have values for all regions, find the last good region level
-        last_region = None
-        for region in reversed(region_cols):
-            if row[region] is not None:
-                last_region = region
-                break
-        if last_region is None:
-            continue
-        # Create list ending at the last good region. These are the levels we will have in our hierarchy
-        last_level = REGION_LEVELS.index(last_region)
-
-        # Add valid regions
-        for level in range(last_level + 1):
-            current_region = join_region_columns(row, region_cols, level)
-            if (
-                current_region not in current_hierarchy_position
-                or current_hierarchy_position[current_region] is None
-            ):
-                current_hierarchy_position[current_region] = None if level == last_level else {}
-            current_hierarchy_position = current_hierarchy_position[current_region]
-
-    for feature in hierarchy:
-        feature_to_json(
-            hierarchy[feature], dest, model_id, run_id, feature, "hierarchy", WRITE_TYPES[DEST_TYPE]
-        )
-
-
-@task(log_stdout=True)
-def record_region_lists(df, dest, model_id, run_id):
-    feature_to_regions = get_feature_to_regions(df)
-    for feature in feature_to_regions:
-        current_feature_map = feature_to_regions[feature]
-        regions_for_feature = {
-            region: list(current_feature_map[region]) for region in current_feature_map
-        }
-        feature_to_json(
-            regions_for_feature,
+def record_region_lists(df, dest, model_id, run_id) -> Tuple[list, list]:
+    def cols_to_lists(df, id_cols, feature):
+        lists = {region: [] for region in REGION_LEVELS}
+        for index, id_col in enumerate(id_cols):
+            lists[REGION_LEVELS[index]] = df[id_col].unique().tolist()
+        info_to_json(
+            lists,
             dest,
             model_id,
             run_id,
@@ -749,36 +693,85 @@ def record_region_lists(df, dest, model_id, run_id):
             "region_lists",
             WRITE_TYPES[DEST_TYPE],
         )
-
-
-def get_feature_to_regions(df):
-    def process_row(row, feature_to_regions):
-        indices = list(row.index)
-        row = {indices[index]: row[index] for index, _ in enumerate(list(row))}
-        feature = row["feature"]
-        if feature not in feature_to_regions:
-            feature_to_regions[feature] = {r: set() for r in region_cols}
-        feature_region_lists = feature_to_regions[feature]
-        all_regions = []
-        for region in region_cols:
-            all_regions.append(row[region])
-            all_region_str = ["None" if i is None else i for i in all_regions]
-            feature_region_lists[region].add("__".join(all_region_str))
+        return feature
 
     region_cols = extract_region_columns(df)
     if len(region_cols) == 0:
         raise SKIP("No regional information available")
-    feature_to_regions = {}
-    # This builds the hierarchy
-    df.apply(lambda row: process_row(row, feature_to_regions), axis=1, meta=(None, "object"))
-    feature_to_regions_lists = {
-        feature: {
-            admin_level: list(feature_to_regions[feature][admin_level])
-            for admin_level in feature_to_regions[feature]
+
+    save_df = df.copy()
+
+    # ["__region_id_0", "__region_id_1", "__region_id_2", "__region_id_3"]
+    id_cols = [f"__region_id_{level}" for level in range(len(region_cols))]
+    for index, id_col in enumerate(id_cols):
+        save_df[id_col] = join_region_columns(save_df, region_cols, index)
+
+    features = (
+        save_df[["feature"] + id_cols]
+        .groupby(["feature"])
+        .apply(
+            lambda x: cols_to_lists(x, id_cols, x["feature"].values[0]),
+            meta=(None, "str"),
+        )
+    )
+
+    # As a side effect, return the regions available, and the list of features
+    feature_list = features.compute().unique().tolist()
+    return region_cols, feature_list
+
+
+@task(log_stdout=True)
+def record_qualifier_lists(df, dest, model_id, run_id, qualifiers, thresholds):
+    def save_qualifier_lists(df):
+        feature = df["feature"].values[0]
+        qualifier_counts = {
+            "thresholds": thresholds,
+            "counts": {},
         }
-        for feature in feature_to_regions
-    }
-    return feature_to_regions_lists
+        for col in qualifier_columns:
+            values = df[col].unique().tolist()
+            qualifier_counts["counts"][col] = len(values)
+
+            # Write one list of qualifier values per file
+            info_to_json(
+                values,
+                dest,
+                model_id,
+                run_id,
+                feature,
+                f"qualifiers/{col}",
+                WRITE_TYPES[DEST_TYPE],
+            )
+
+        # Write a file that holds the counts of the above qualifier lists
+        info_to_json(
+            qualifier_counts,
+            dest,
+            model_id,
+            run_id,
+            feature,
+            f"qualifier_counts",
+            WRITE_TYPES[DEST_TYPE],
+        )
+        return qualifier_counts["counts"]
+
+    save_df = df.copy()
+    qualifier_columns = sum(qualifiers, [])
+
+    counts = (
+        save_df[["feature"] + qualifier_columns]
+        .groupby(["feature"])
+        .apply(lambda x: save_qualifier_lists(x), meta=(None, "object"))
+    )
+    pdf_counts = counts.compute()
+    json_str = pdf_counts.to_json(orient="index")
+    return json.loads(json_str)
+
+
+@task(log_stdout=True)
+def apply_qualifier_thresholds(qualifier_map, columns, counts, thresholds) -> Tuple[dict, list]:
+    max_count = thresholds["max_count"]
+    return apply_qualifier_count_limit(qualifier_map, columns, counts, max_count)
 
 
 ###########################################################################
@@ -818,11 +811,19 @@ with Flow(FLOW_NAME) as flow:
     qualifier_map = Parameter("qualifier_map", default={})
     indicator_bucket = Parameter("indicator_bucket", default=S3_DEFAULT_INDICATOR_BUCKET)
     model_bucket = Parameter("model_bucket", default=S3_DEFAULT_MODEL_BUCKET)
+    # The thresholds are values that the pipeline uses for processing qualifiers
+    # It tells the user what sort of data they can expect to be available
+    # For ex, no regional_timeseries for qualifier with more than 100 values
+    qualifier_thresholds = Parameter(
+        "qualifier_thresholds",
+        default={
+            "max_count": 10000,
+            "regional_timeseries_count": 10000,
+            "regional_timeseries_max_level": 1,
+        },
+    )
 
-    # skip write to elastic if URL unset - we define this and don't use it prefect
-    # errors
-    if ELASTIC_URL:
-        elastic_url = Parameter("elastic_url", default=ELASTIC_URL)
+    elastic_url = Parameter("elastic_url", default=ELASTIC_URL)
 
     source = Parameter(
         "source",
@@ -844,7 +845,7 @@ with Flow(FLOW_NAME) as flow:
         },
     )
 
-    raw_df = download_data(source, data_paths)
+    (raw_df, num_rows) = download_data(source, data_paths)
 
     # ==== Set parameters that determine which tasks should run based on the type of data we're ingesting ====
     (
@@ -864,28 +865,39 @@ with Flow(FLOW_NAME) as flow:
 
     df = process_null_columns(raw_df)
 
-    # ==== Compute high level features for current run =====
-    record_region_hierarchy(df, dest, model_id, run_id)
-    record_region_lists(df, dest, model_id, run_id)
-
     qualifier_columns = get_qualifier_columns(df)
+
+    # ==== Compute lists of all gadm regions and qualifier values =====
+    (region_columns, feature_list) = record_region_lists(df, dest, model_id, run_id)
+    qualifier_counts = record_qualifier_lists(
+        df, dest, model_id, run_id, qualifier_columns, qualifier_thresholds
+    )
+    (qualifier_map, qualifier_columns) = apply_qualifier_thresholds(
+        qualifier_map, qualifier_columns, qualifier_counts, qualifier_thresholds
+    )
 
     # ==== Run aggregations based on monthly time resolution =====
     monthly_data = temporal_aggregation(df, "month", compute_monthly)
-    month_ts_done = compute_timeseries(monthly_data, dest, "month", model_id, run_id)
-    month_csv_ts_done = compute_timeseries_as_csv(
+    month_ts_size = compute_timeseries_as_csv(
         monthly_data, dest, "month", model_id, run_id, qualifier_map, qualifier_columns
     )
-    compute_regional_timeseries(monthly_data, dest, "month", model_id, run_id)
-    monthly_regional_df = compute_regional_aggregation(
-        monthly_data, dest, "month", model_id, run_id
+    compute_regional_timeseries(
+        monthly_data,
+        dest,
+        "month",
+        model_id,
+        run_id,
+        qualifier_map,
+        qualifier_columns,
+        qualifier_counts,
+        qualifier_thresholds,
     )
     monthly_csv_regional_df = compute_regional_aggregation_to_csv(
         monthly_data, dest, "month", model_id, run_id, qualifier_map, qualifier_columns
     )
 
     monthly_spatial_data = subtile_aggregation(
-        monthly_data, compute_tiles, upstream_tasks=[month_ts_done, month_csv_ts_done]
+        monthly_data, compute_tiles, upstream_tasks=[month_ts_size]
     )
     month_stats_done = compute_stats(monthly_spatial_data, dest, "month", model_id, run_id, "stats")
     month_done = compute_tiling(
@@ -894,20 +906,28 @@ with Flow(FLOW_NAME) as flow:
 
     # ==== Run aggregations based on annual time resolution =====
     annual_data = temporal_aggregation(
-        df, "year", compute_annual, upstream_tasks=[month_done, month_ts_done]
+        df, "year", compute_annual, upstream_tasks=[monthly_csv_regional_df, month_done]
     )
-    year_ts_done = compute_timeseries(annual_data, dest, "year", model_id, run_id)
-    year_csv_ts_done = compute_timeseries_as_csv(
+    year_ts_size = compute_timeseries_as_csv(
         annual_data, dest, "year", model_id, run_id, qualifier_map, qualifier_columns
     )
-    compute_regional_timeseries(annual_data, dest, "year", model_id, run_id)
-    annual_regional_df = compute_regional_aggregation(annual_data, dest, "year", model_id, run_id)
+    compute_regional_timeseries(
+        annual_data,
+        dest,
+        "year",
+        model_id,
+        run_id,
+        qualifier_map,
+        qualifier_columns,
+        qualifier_counts,
+        qualifier_thresholds,
+    )
     annual_csv_regional_df = compute_regional_aggregation_to_csv(
         annual_data, dest, "year", model_id, run_id, qualifier_map, qualifier_columns
     )
 
     annual_spatial_data = subtile_aggregation(
-        annual_data, compute_tiles, upstream_tasks=[year_ts_done, year_csv_ts_done]
+        annual_data, compute_tiles, upstream_tasks=[year_ts_size]
     )
     year_stats_done = compute_stats(annual_spatial_data, dest, "year", model_id, run_id, "stats")
     year_done = compute_tiling(
@@ -919,13 +939,26 @@ with Flow(FLOW_NAME) as flow:
         df,
         "all",
         compute_summary,
-        upstream_tasks=[year_done, year_ts_done, year_csv_ts_done, annual_csv_regional_df],
+        upstream_tasks=[year_done, year_ts_size, annual_csv_regional_df],
     )
     summary_values = compute_output_summary(summary_data)
 
     # ==== Update document in ES setting the status to READY =====
-    if ELASTIC_URL:
-        update_metadata(doc_ids, summary_values, elastic_url, elastic_index)
+    update_metadata(
+        doc_ids,
+        summary_values,
+        num_rows,
+        region_columns,
+        feature_list,
+        compute_raw,
+        compute_monthly,
+        compute_annual,
+        compute_tiles,
+        month_ts_size,
+        year_ts_size,
+        elastic_url,
+        elastic_index,
+    )
 
     # TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful.
     # Then same data can be used for producing tiles and also used for doing regional aggregation and other computation in other tasks.
@@ -957,20 +990,44 @@ if __name__ == "__main__" and LOCAL_RUN:
         #      run_id='db68a592-e456-465f-9785-86440f49e838',
         #      data_paths=['https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/db68a592-e456-465f-9785-86440f49e838/db68a592-e456-465f-9785-86440f49e838_425f58a4-bbba-44d3-83f3-aba353fc7c64.parquet.gzip']
         # ))
-        # flow.run(parameters=dict( # Maxhop
-        #      compute_tiles=True,
-        #      model_id='maxhop-v0.2',
-        #      run_id='4675d89d-904c-466f-a588-354c047ecf72',
-        #      data_paths=['https://jataware-world-modelers.s3.amazonaws.com/dmc_results/4675d89d-904c-466f-a588-354c047ecf72/4675d89d-904c-466f-a588-354c047ecf72_maxhop-v0.2.parquet.gzip']
-        # ))
         flow.run(
-            parameters=dict(
-                is_indicator=True,
-                qualifier_map={"fatalities": ["event_type", "sub_event_type", "source_scale"]},
-                model_id="_qualifier-test",
-                run_id="indicator",
+            parameters=dict(  # Maxhop
+                compute_tiles=True,
+                model_id="maxhop-v0.2",
+                run_id="4675d89d-904c-466f-a588-354c047ecf72",
                 data_paths=[
-                    "/Users/mkozlowski/_Git/slow-tortoise/flows/12ecb553-9c50-4f3e-b175-4e3819a2f37b.parquet.gzip"
+                    "https://jataware-world-modelers.s3.amazonaws.com/dmc_results/4675d89d-904c-466f-a588-354c047ecf72/4675d89d-904c-466f-a588-354c047ecf72_maxhop-v0.2.parquet.gzip"
                 ],
             )
         )
+        # flow.run(
+        #     parameters=dict(
+        #         is_indicator=True,
+        #         qualifier_map={
+        #             "fatalities": [
+        #                 "event_type",
+        #                 "sub_event_type",
+        #                 "source_scale",
+        #                 "country_non_primary",
+        #                 "admin1_non_primary",
+        #             ]
+        #         },
+        #         model_id="_qualifier-test",
+        #         run_id="indicator",
+        #         data_paths=[
+        #             "/Users/mkozlowski/_Git/12ecb553-9c50-4f3e-b175-4e3819a2f37b.parquet.gzip"
+        #         ],
+        #     )
+        # )
+        # LPJmL
+        # flow.run(
+        #     parameters=dict(
+        #         is_indicator=True,
+        #         qualifier_map={},
+        #         model_id="_hierarchy-test",
+        #         run_id="indicator",
+        #         data_paths=[
+        #             "/Users/mkozlowski/_Git/f9ee6dc2-ef3b-46d6-90cb-ba317b926629_9f407b82-d2d2-4c38-a2c3-ae1bb483f476.1.parquet.gzip"
+        #         ],
+        #     )
+        # )
