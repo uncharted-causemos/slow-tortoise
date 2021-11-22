@@ -22,6 +22,7 @@ from flows.common import (
     save_timeseries_as_csv,
     stats_to_json,
     info_to_json,
+    results_to_json,
     to_proto,
     extract_region_columns,
     join_region_columns,
@@ -72,9 +73,6 @@ PUSH_IMAGE = os.getenv("WM_PUSH_IMAGE", "False").lower() in TRUE_TOKENS
 #
 # TODO: Safer to set these to reasonable dev values (or leave them empty) so that nothing is accidentally overwritten?
 
-# elastic search output URL
-ELASTIC_URL = os.getenv("WM_ELASTIC_URL", "http://10.65.18.34:9200")
-
 # S3 data source URL
 S3_SOURCE_URL = os.getenv("WM_S3_SOURCE_URL", "http://10.65.18.73:9000")
 
@@ -105,9 +103,6 @@ MIN_SUBTILE_PRECISION = (
 
 # Maximum zoom level for a main tile
 MAX_ZOOM = MAX_SUBTILE_PRECISION - LEVEL_DIFF
-
-ELASTIC_MODEL_RUN_INDEX = "data-model-run"
-ELASTIC_INDICATOR_INDEX = "data-datacube"
 
 LAT_LONG_COLUMNS = ["lat", "lng"]
 
@@ -167,20 +162,18 @@ def download_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
 @task(log_stdout=True)
 def configure_pipeline(
     df, dest, indicator_bucket, model_bucket, compute_tiles, is_indicator
-) -> Tuple[dict, str, bool, bool, bool, bool, bool]:
+) -> Tuple[dict, bool, bool, bool, bool, bool]:
     all_cols = df.columns.to_list()
     compute_tiles = compute_tiles and set(LAT_LONG_COLUMNS).issubset(all_cols)
 
     if is_indicator:
         dest["bucket"] = indicator_bucket
-        elastic_index = ELASTIC_INDICATOR_INDEX
         compute_raw = True
         compute_monthly = True
         compute_annual = True
         compute_summary = False
     else:
         dest["bucket"] = model_bucket
-        elastic_index = ELASTIC_MODEL_RUN_INDEX
         compute_raw = False
         compute_monthly = True
         compute_annual = True
@@ -188,7 +181,6 @@ def configure_pipeline(
 
     return (
         dest,
-        elastic_index,
         compute_raw,
         compute_monthly,
         compute_annual,
@@ -631,8 +623,7 @@ def compute_output_summary(df):
 
 
 @task(skip_on_upstream_skip=False, log_stdout=True)
-def update_metadata(
-    doc_ids,
+def record_results(
     summary_values,
     num_rows,
     region_columns,
@@ -643,39 +634,34 @@ def update_metadata(
     compute_tiles,
     month_ts_size,
     year_ts_size,
-    elastic_url,
-    elastic_index,
 ):
     data = {
-        "doc": {
-            "status": "READY",
-            "data_info": {
-                "num_rows": num_rows,
-                "region_levels": region_columns,
-                "features": feature_list,
-                "has_raw_data": compute_raw,
-                "has_tiles": compute_tiles,
-                "has_monthly": compute_monthly,
-                "has_annual": compute_annual,
-            },
-        }
+        "data_info": {
+            "num_rows": num_rows,
+            "region_levels": region_columns,
+            "features": feature_list,
+            "has_raw_data": compute_raw,
+            "has_tiles": compute_tiles,
+            "has_monthly": compute_monthly,
+            "has_annual": compute_annual,
+        },
     }
     if summary_values is not None:
-        data["doc"]["output_agg_values"] = summary_values
+        data["output_agg_values"] = summary_values
 
     if compute_monthly and month_ts_size is not None:
-        data["doc"]["data_info"]["month_timeseries_size"] = json.loads(month_ts_size)
+        data["data_info"]["month_timeseries_size"] = json.loads(month_ts_size)
 
     if compute_annual and year_ts_size is not None:
-        data["doc"]["data_info"]["year_timeseries_size"] = json.loads(year_ts_size)
+        data["data_info"]["year_timeseries_size"] = json.loads(year_ts_size)
 
-    if ELASTIC_URL:
-        for doc_id in doc_ids:
-            r = requests.post(f"{elastic_url}/{elastic_index}/_update/{doc_id}", json=data)
-            print(r.text)
-            r.raise_for_status()
-    else:
-        print("Metadata update payload:", data)
+    results_to_json(
+        data,
+        dest,
+        model_id,
+        run_id,
+        WRITE_TYPES[DEST_TYPE],
+    )
 
 
 @task(log_stdout=True)
@@ -804,7 +790,6 @@ with Flow(FLOW_NAME) as flow:
     # Parameters
     model_id = Parameter("model_id", default="geo-test-data")
     run_id = Parameter("run_id", default="test-run")
-    doc_ids = Parameter("doc_ids", default=[])
     data_paths = Parameter("data_paths", default=["s3://test/geo-test-data.parquet"])
     compute_tiles = Parameter("compute_tiles", default=False)
     is_indicator = Parameter("is_indicator", default=False)
@@ -818,12 +803,10 @@ with Flow(FLOW_NAME) as flow:
         "qualifier_thresholds",
         default={
             "max_count": 10000,
-            "regional_timeseries_count": 10000,
+            "regional_timeseries_count": 100,
             "regional_timeseries_max_level": 1,
         },
     )
-
-    elastic_url = Parameter("elastic_url", default=ELASTIC_URL)
 
     source = Parameter(
         "source",
@@ -850,7 +833,6 @@ with Flow(FLOW_NAME) as flow:
     # ==== Set parameters that determine which tasks should run based on the type of data we're ingesting ====
     (
         dest,
-        elastic_index,
         compute_raw,
         compute_monthly,
         compute_annual,
@@ -943,9 +925,8 @@ with Flow(FLOW_NAME) as flow:
     )
     summary_values = compute_output_summary(summary_data)
 
-    # ==== Update document in ES setting the status to READY =====
-    update_metadata(
-        doc_ids,
+    # ==== Record the results in Minio =====
+    record_results(
         summary_values,
         num_rows,
         region_columns,
@@ -956,8 +937,6 @@ with Flow(FLOW_NAME) as flow:
         compute_tiles,
         month_ts_size,
         year_ts_size,
-        elastic_url,
-        elastic_index,
     )
 
     # TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful.
@@ -990,35 +969,33 @@ if __name__ == "__main__" and LOCAL_RUN:
         #      run_id='db68a592-e456-465f-9785-86440f49e838',
         #      data_paths=['https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/db68a592-e456-465f-9785-86440f49e838/db68a592-e456-465f-9785-86440f49e838_425f58a4-bbba-44d3-83f3-aba353fc7c64.parquet.gzip']
         # ))
-        flow.run(
-            parameters=dict(  # Maxhop
-                compute_tiles=True,
-                model_id="maxhop-v0.2",
-                run_id="4675d89d-904c-466f-a588-354c047ecf72",
-                data_paths=[
-                    "https://jataware-world-modelers.s3.amazonaws.com/dmc_results/4675d89d-904c-466f-a588-354c047ecf72/4675d89d-904c-466f-a588-354c047ecf72_maxhop-v0.2.parquet.gzip"
-                ],
-            )
-        )
         # flow.run(
-        #     parameters=dict(
-        #         is_indicator=True,
-        #         qualifier_map={
-        #             "fatalities": [
-        #                 "event_type",
-        #                 "sub_event_type",
-        #                 "source_scale",
-        #                 "country_non_primary",
-        #                 "admin1_non_primary",
-        #             ]
-        #         },
-        #         model_id="_qualifier-test",
-        #         run_id="indicator",
+        #     parameters=dict(  # Maxhop
+        #         compute_tiles=True,
+        #         model_id="maxhop-v0.2",
+        #         run_id="4675d89d-904c-466f-a588-354c047ecf72",
         #         data_paths=[
-        #             "/Users/mkozlowski/_Git/12ecb553-9c50-4f3e-b175-4e3819a2f37b.parquet.gzip"
+        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results/4675d89d-904c-466f-a588-354c047ecf72/4675d89d-904c-466f-a588-354c047ecf72_maxhop-v0.2.parquet.gzip"
         #         ],
         #     )
         # )
+        flow.run(
+            parameters=dict(
+                is_indicator=True,
+                qualifier_map={
+                    "fatalities": [
+                        "event_type",
+                        "sub_event_type",
+                        "source_scale",
+                        "country_non_primary",
+                        "admin1_non_primary",
+                    ]
+                },
+                model_id="_qualifier-test",
+                run_id="indicator",
+                data_paths=["s3://test/_qualifier-test.bin"],
+            )
+        )
         # LPJmL
         # flow.run(
         #     parameters=dict(
@@ -1026,8 +1003,6 @@ if __name__ == "__main__" and LOCAL_RUN:
         #         qualifier_map={},
         #         model_id="_hierarchy-test",
         #         run_id="indicator",
-        #         data_paths=[
-        #             "/Users/mkozlowski/_Git/f9ee6dc2-ef3b-46d6-90cb-ba317b926629_9f407b82-d2d2-4c38-a2c3-ae1bb483f476.1.parquet.gzip"
-        #         ],
+        #         data_paths=["s3://test/_hierarchy-test.bin"],
         #     )
         # )

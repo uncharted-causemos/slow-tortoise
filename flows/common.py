@@ -286,6 +286,13 @@ def info_to_json(contents, dest, model_id, run_id, feature, filename, writer):
     writer(body, path, dest)
 
 
+# save the results file
+def results_to_json(contents, dest, model_id, run_id, writer):
+    path = f"{model_id}/{run_id}/results/results.json"
+    body = str(json.dumps(contents))
+    writer(body, path, dest)
+
+
 # transform given row to tile protobuf
 def to_proto(row):
     z, x, y = row.tile
