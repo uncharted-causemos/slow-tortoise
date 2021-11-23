@@ -625,6 +625,8 @@ def compute_output_summary(df):
 @task(skip_on_upstream_skip=False, log_stdout=True)
 def record_results(
     dest,
+    model_id,
+    run_id,
     summary_values,
     num_rows,
     region_columns,
@@ -929,6 +931,8 @@ with Flow(FLOW_NAME) as flow:
     # ==== Record the results in Minio =====
     record_results(
         dest,
+        model_id,
+        run_id,
         summary_values,
         num_rows,
         region_columns,
