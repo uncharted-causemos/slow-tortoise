@@ -148,6 +148,8 @@ def download_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
     if len(set(LAT_LONG_COLUMNS) & null_cols) > 0:
         print("No lat/long data. Dropping columns.")
         df = df.drop(columns=LAT_LONG_COLUMNS)
+    else:
+        df = df.astype({"lat": "float64", "lng": "float64"})
 
     num_rows = len(df.index)
     print(f"Read {num_rows} rows of data")
@@ -155,7 +157,7 @@ def download_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
         raise FAIL("DataFrame has no rows")
 
     # Ensure types
-    df = df.astype({"value": "float64", "lat": "float64", "lng": "float64"})
+    df = df.astype({"value": "float64"})
     return (df, num_rows)
 
 
