@@ -30,16 +30,19 @@ def populate_es_with_gadm():
             filtered_rows = []
             for row in list_of_rows:
                 new_row = {}
+                full_path = ""
                 for column_datum in column_data:
                     input = column_datum["input"]
                     output = column_datum["output"]
                     if input in row:
+                        full_path += row[input] + "__"
                         new_row[output] = row[input]
                         new_row["level"] = output
                 for code_column in code_columns:
                     if code_column in row:
                         new_row["code"] = row[code_column]
                 new_row["_id"] = new_row["code"]
+                new_row["full_path"] = full_path[:-2] # cut off the last __
                 filtered_rows.append(new_row)
             try:
                 # make the bulk call, and get a response
