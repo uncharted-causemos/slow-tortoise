@@ -178,6 +178,9 @@ def write_to_file(body, path, dest):
 
 # save proto tile file
 def save_tile(tile, dest, model_id, run_id, feature, time_res, timestamp, writer):
+    if tile is None:
+        return None
+
     z = tile.coord.z
     x = tile.coord.x
     y = tile.coord.y
@@ -296,6 +299,8 @@ def results_to_json(contents, dest, model_id, run_id, writer):
 # transform given row to tile protobuf
 def to_proto(row):
     z, x, y = row.tile
+    if z < 0 or x < 0 or y < 0:
+        return None
 
     tile = tiles_pb2.Tile()
     tile.coord.z = z
