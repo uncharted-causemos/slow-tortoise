@@ -80,10 +80,10 @@ S3_SOURCE_URL = os.getenv("WM_S3_SOURCE_URL", "http://10.65.18.73:9000")
 S3_DEST_URL = os.getenv("WM_S3_DEST_URL", "http://10.65.18.9:9000")
 
 # default s3 indicator write bucket
-S3_DEFAULT_INDICATOR_BUCKET = os.getenv("WM_S3_DEFAULT_INDICATOR_BUCKET", "indicators")
+S3_DEFAULT_INDICATOR_BUCKET = os.getenv("WM_S3_DEFAULT_INDICATOR_BUCKET", "new-indicators")
 
 # default model s3 write bucket
-S3_DEFAULT_MODEL_BUCKET = os.getenv("WM_S3_DEFAULT_MODEL_BUCKET", "models")
+S3_DEFAULT_MODEL_BUCKET = os.getenv("WM_S3_DEFAULT_MODEL_BUCKET", "new-models")
 
 # This determines the number of bins(subtiles) per tile. Eg. Each tile has 4^6=4096 grid cells (subtiles) when LEVEL_DIFF is 6
 # Tile (z, x, y) will have a sutbile where its zoom level is z + LEVEL_DIFF
@@ -155,7 +155,7 @@ def download_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
         raise FAIL("DataFrame has no rows")
 
     # Ensure types
-    df = df.astype({"value": "float64"})
+    df = df.astype({"value": "float64", "lat": "float64", "lng": "float64"})
     return (df, num_rows)
 
 
