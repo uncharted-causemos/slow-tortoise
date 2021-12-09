@@ -151,11 +151,7 @@ def write_to_s3(body, path, dest):
             aws_secret_access_key=dest["secret"],
         )
 
-    try:
-        s3.put_object(Body=body, Bucket=dest["bucket"], Key=path)
-    except Exception as e:
-        logging.error(f"failed to write bucket: {dest['bucket']} key: {path}")
-        logging.error(e)
+    s3.put_object(Body=body, Bucket=dest["bucket"], Key=path)
 
 
 # no-op on write to help with debugging/profiling
