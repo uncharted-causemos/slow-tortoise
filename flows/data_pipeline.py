@@ -279,14 +279,14 @@ def validate_and_fix(df, fill_timestamp) -> Tuple[dd.DataFrame, int, int, int]:
     df[remaining_columns] = df[remaining_columns].fillna(value="None", axis=1).astype("str")
 
     # Fill missing timestamp values (0 by default)
-    num_missing_ts = df["timestamp"].isna().sum().compute()
+    num_missing_ts = int(df["timestamp"].isna().sum().compute().item())
     df["timestamp"] = df["timestamp"].fillna(value=fill_timestamp)
 
     # Remove extreme timestamps
-    num_invalid_ts = (df['timestamp'] >= MAX_TIMESTAMP).sum().compute()
+    num_invalid_ts = int((df['timestamp'] >= MAX_TIMESTAMP).sum().compute().item())
     df = df[df['timestamp'] < MAX_TIMESTAMP]
 
-    num_missing_val = df["value"].isna().sum().compute()
+    num_missing_val = int(df["value"].isna().sum().compute().item())
     return (df, num_missing_ts, num_invalid_ts, num_missing_val)
 
 
