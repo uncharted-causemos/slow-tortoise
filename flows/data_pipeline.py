@@ -107,7 +107,7 @@ MAX_ZOOM = MAX_SUBTILE_PRECISION - LEVEL_DIFF
 LAT_LONG_COLUMNS = ["lat", "lng"]
 
 # Pandas internally uses ns for timestamps and cannot represent time larger than int64.max nanoseconds
-# This is the max number of ms we can represent 
+# This is the max number of ms we can represent
 MAX_TIMESTAMP = np.iinfo(np.int64).max / 1_000_000
 
 
@@ -160,14 +160,14 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
                 cols_to_add = list(all_extra_cols - extra_cols[i])
                 for col in cols_to_add:
                     dfs[i][col] = ""
-                    dfs[i] = dfs[i].astype({ col: "str"})
-                
+                    dfs[i] = dfs[i].astype({col: "str"})
+
                 # Force the new columns as well as 'feature' to type "str"
-                type_dict = { col:"str" for col in cols_to_add + ["feature"] }
+                type_dict = {col: "str" for col in cols_to_add + ["feature"]}
                 dfs[i] = dfs[i].astype(type_dict)
-                
+
                 # Create a mapping of REGION_LEVELS to their actual types
-                df_col_types.append({ col: dfs[i][col].dtype.kind for col in REGION_LEVELS })
+                df_col_types.append({col: dfs[i][col].dtype.kind for col in REGION_LEVELS})
 
             # REGION_LEVELS types must match, if they do not, fill with "None" and re-type to "str"
             cols_to_retype = []
@@ -176,9 +176,11 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
                 if len(unique_types) > 1:
                     print(f"Column {col} has types {unique_types}")
                     cols_to_retype.append(col)
-            
+
             for i in range(len(dfs)):
-                dfs[i][cols_to_retype] = dfs[i][cols_to_retype].fillna(value="None", axis=1).astype("str")
+                dfs[i][cols_to_retype] = (
+                    dfs[i][cols_to_retype].fillna(value="None", axis=1).astype("str")
+                )
 
             df = dd.concat(dfs, ignore_unknown_divisions=True).repartition(npartitions=12)
 
@@ -283,8 +285,8 @@ def validate_and_fix(df, fill_timestamp) -> Tuple[dd.DataFrame, int, int, int]:
     df["timestamp"] = df["timestamp"].fillna(value=fill_timestamp)
 
     # Remove extreme timestamps
-    num_invalid_ts = int((df['timestamp'] >= MAX_TIMESTAMP).sum().compute().item())
-    df = df[df['timestamp'] < MAX_TIMESTAMP]
+    num_invalid_ts = int((df["timestamp"] >= MAX_TIMESTAMP).sum().compute().item())
+    df = df[df["timestamp"] < MAX_TIMESTAMP]
 
     num_missing_val = int(df["value"].isna().sum().compute().item())
     return (df, num_missing_ts, num_invalid_ts, num_missing_val)
@@ -1093,14 +1095,14 @@ if __name__ == "__main__" and LOCAL_RUN:
         #         "run_id": "9d7db850-0abe-486f-8979-b1e9ad2ef6ad"
         #     }
         # )
-        flow.run( # Test combining multiple parquet files with different columns
-            parameters= {
+        flow.run(  # Test combining multiple parquet files with different columns
+            parameters={
                 "compute_tiles": True,
                 "data_paths": [
                     "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/f2818712-09f7-49c6-b920-ea21c764d1c7/f2818712-09f7-49c6-b920-ea21c764d1c7_84fd427f-3a7d-473f-aa25-0c0a150ca216.3.parquet.gzip",
                     "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/f2818712-09f7-49c6-b920-ea21c764d1c7/f2818712-09f7-49c6-b920-ea21c764d1c7_84fd427f-3a7d-473f-aa25-0c0a150ca216.2.parquet.gzip",
-                    "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/f2818712-09f7-49c6-b920-ea21c764d1c7/f2818712-09f7-49c6-b920-ea21c764d1c7_84fd427f-3a7d-473f-aa25-0c0a150ca216.1.parquet.gzip"
-                    ],
+                    "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/f2818712-09f7-49c6-b920-ea21c764d1c7/f2818712-09f7-49c6-b920-ea21c764d1c7_84fd427f-3a7d-473f-aa25-0c0a150ca216.1.parquet.gzip",
+                ],
                 "is_indicator": False,
                 "model_id": "84fd427f-3a7d-473f-aa25-0c0a150ca216",
                 "qualifier_map": {
@@ -1115,15 +1117,15 @@ if __name__ == "__main__" and LOCAL_RUN:
                     "export per capita [kcal pc]": [],
                     "import per capita [kcal pc]": [],
                     "supply per capita [kcal pc]": [],
-                    "production change per capita [kcal pc]": []
+                    "production change per capita [kcal pc]": [],
                 },
                 "qualifier_thresholds": {
                     "max_count": 10000,
                     "regional_timeseries_count": 100,
-                    "regional_timeseries_max_level": 1
+                    "regional_timeseries_max_level": 1,
                 },
                 "run_id": "f2818712-09f7-49c6-b920-ea21c764d1c7",
-            } 
+            }
         )
         # flow.run(
         #     parameters=dict(  # Invalid timestamps
