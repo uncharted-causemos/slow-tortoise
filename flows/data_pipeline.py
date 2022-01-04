@@ -3,7 +3,7 @@ from typing import Tuple
 import dask.dataframe as dd
 import dask.bytes as db
 import pandas as pd
-import requests
+import numpy as np
 import os
 import json
 import re
@@ -106,6 +106,10 @@ MAX_ZOOM = MAX_SUBTILE_PRECISION - LEVEL_DIFF
 
 LAT_LONG_COLUMNS = ["lat", "lng"]
 
+# Pandas internally uses ns for timestamps and cannot represent time larger than int64.max nanoseconds
+# This is the max number of ms we can represent 
+MAX_TIMESTAMP = np.iinfo(np.int64).max / 1_000_000
+
 
 @task(log_stdout=True)
 def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
@@ -170,7 +174,7 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
             for col in REGION_LEVELS:
                 unique_types = set([type_dict[col] for type_dict in df_col_types])
                 if len(unique_types) > 1:
-                    print(f">> Column {col} has types {unique_types}")
+                    print(f"Column {col} has types {unique_types}")
                     cols_to_retype.append(col)
             
             for i in range(len(dfs)):
@@ -183,7 +187,7 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
 
     # Remove lat/lng columns if they are null
     ll_df = df[LAT_LONG_COLUMNS]
-    null_cols = set(ll_df.columns[ll_df.isnull().all()])
+    null_cols = get_null_or_empty_cols(ll_df)
     if len(set(LAT_LONG_COLUMNS) & null_cols) > 0:
         print("No lat/long data. Dropping columns.")
         df = df.drop(columns=LAT_LONG_COLUMNS)
@@ -200,6 +204,12 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
     # Ensure types
     df = df.astype({"value": "float64"})
     return (df, num_rows)
+
+
+def get_null_or_empty_cols(df):
+    null_cols = set(df.columns[df.isnull().all()])
+    empty_cols = set(df.columns[df.eq("").all()])
+    return null_cols | empty_cols
 
 
 @task(log_stdout=True)
@@ -256,10 +266,10 @@ def save_raw_data(df, dest, time_res, model_id, run_id, should_run):
 
 
 @task(log_stdout=True)
-def process_null_columns(df, fill_timestamp):
+def validate_and_fix(df, fill_timestamp) -> Tuple[dd.DataFrame, int, int, int]:
     # Drop a column if all values are null
     exclude_columns = set(["timestamp", "lat", "lng", "feature", "value"])
-    null_cols = set(df.columns[df.isnull().all()])
+    null_cols = get_null_or_empty_cols(df)
     cols_to_drop = list(null_cols - exclude_columns)
     df = df.drop(columns=cols_to_drop)
 
@@ -269,8 +279,15 @@ def process_null_columns(df, fill_timestamp):
     df[remaining_columns] = df[remaining_columns].fillna(value="None", axis=1).astype("str")
 
     # Fill missing timestamp values (0 by default)
+    num_missing_ts = df["timestamp"].isna().sum().compute()
     df["timestamp"] = df["timestamp"].fillna(value=fill_timestamp)
-    return df
+
+    # Remove extreme timestamps
+    num_invalid_ts = (df['timestamp'] >= MAX_TIMESTAMP).sum().compute()
+    df = df[df['timestamp'] < MAX_TIMESTAMP]
+
+    num_missing_val = df["value"].isna().sum().compute()
+    return (df, num_missing_ts, num_invalid_ts, num_missing_val)
 
 
 @task(skip_on_upstream_skip=False)
@@ -680,10 +697,16 @@ def record_results(
     compute_tiles,
     month_ts_size,
     year_ts_size,
+    num_missing_ts,
+    num_invalid_ts,
+    num_missing_val,
 ):
     data = {
         "data_info": {
             "num_rows": num_rows,
+            "num_missing_ts": num_missing_ts,
+            "num_invalid_ts": num_invalid_ts,
+            "num_missing_val": num_missing_val,
             "region_levels": region_columns,
             "features": feature_list,
             "has_raw_data": compute_raw,
@@ -892,7 +915,7 @@ with Flow(FLOW_NAME) as flow:
     # ==== Save raw data =====
     save_raw_data(raw_df, dest, "raw", model_id, "indicator", compute_raw)
 
-    df = process_null_columns(raw_df, fill_timestamp)
+    (df, num_missing_ts, num_invalid_ts, num_missing_val) = validate_and_fix(raw_df, fill_timestamp)
 
     qualifier_columns = get_qualifier_columns(df)
 
@@ -987,6 +1010,9 @@ with Flow(FLOW_NAME) as flow:
         compute_tiles,
         month_ts_size,
         year_ts_size,
+        num_missing_ts,
+        num_invalid_ts,
+        num_missing_val,
     )
 
     # TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful.
@@ -1099,6 +1125,16 @@ if __name__ == "__main__" and LOCAL_RUN:
                 "run_id": "f2818712-09f7-49c6-b920-ea21c764d1c7",
             } 
         )
+        # flow.run(
+        #     parameters=dict(  # Invalid timestamps
+        #         compute_tiles=True,
+        #         model_id="087c3e5a-cd3d-4ebc-bc5e-e13a4654005c",
+        #         run_id="9e1100d5-06e8-48b6-baea-56b3b820f82d",
+        #         data_paths=[
+        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/9e1100d5-06e8-48b6-baea-56b3b820f82d/9e1100d5-06e8-48b6-baea-56b3b820f82d_087c3e5a-cd3d-4ebc-bc5e-e13a4654005c.1.parquet.gzip"
+        #         ],
+        #     )
+        # )
         # flow.run( # LPJmL
         #     parameters=dict(
         #         is_indicator=True,
