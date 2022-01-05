@@ -3,7 +3,7 @@ from typing import Tuple
 import dask.dataframe as dd
 import dask.bytes as db
 import pandas as pd
-import requests
+import numpy as np
 import os
 import json
 import re
@@ -106,11 +106,16 @@ MAX_ZOOM = MAX_SUBTILE_PRECISION - LEVEL_DIFF
 
 LAT_LONG_COLUMNS = ["lat", "lng"]
 
+# Pandas internally uses ns for timestamps and cannot represent time larger than int64.max nanoseconds
+# This is the max number of ms we can represent
+MAX_TIMESTAMP = np.iinfo(np.int64).max / 1_000_000
+
 
 @task(log_stdout=True)
-def download_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
+def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
     df = None
     # if source is from s3 bucket
+    # used for testing
     if "s3://" in data_paths[0]:
         df = dd.read_parquet(
             data_paths,
@@ -136,19 +141,61 @@ def download_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
                 numeric_files.append(path)
 
         # Note: dask read_parquet doesn't work for gzip files. So here is the work around using pandas read_parquet
-        dfs = [delayed(pd.read_parquet)(path) for path in numeric_files]
-        df = dd.from_delayed(dfs).repartition(npartitions=12)
+        # Read each parquet file in separately, and ensure that all columns match before joining together
+        delayed_dfs = [delayed(pd.read_parquet)(path) for path in numeric_files]
+        dfs = [dd.from_delayed(d) for d in delayed_dfs]
+
+        if len(dfs) == 0:
+            raise FAIL("No numeric parquet files")
+        elif len(dfs) == 1:
+            df = dfs[0]
+        else:
+            # Add missing columns into all dataframes and ensure all are strings
+            extra_cols = [set(d.columns.to_list()) - REQUIRED_COLS for d in dfs]
+            all_extra_cols = set.union(*extra_cols)
+
+            df_col_types = []
+            for i in range(len(dfs)):
+                # Add missing columns
+                cols_to_add = list(all_extra_cols - extra_cols[i])
+                for col in cols_to_add:
+                    dfs[i][col] = ""
+                    dfs[i] = dfs[i].astype({col: "str"})
+
+                # Force the new columns as well as 'feature' to type "str"
+                type_dict = {col: "str" for col in cols_to_add + ["feature"]}
+                dfs[i] = dfs[i].astype(type_dict)
+
+                # Create a mapping of REGION_LEVELS to their actual types
+                df_col_types.append({col: dfs[i][col].dtype.kind for col in REGION_LEVELS})
+
+            # REGION_LEVELS types must match, if they do not, fill with "None" and re-type to "str"
+            cols_to_retype = []
+            for col in REGION_LEVELS:
+                unique_types = set([type_dict[col] for type_dict in df_col_types])
+                if len(unique_types) > 1:
+                    print(f"Column {col} has types {unique_types}")
+                    cols_to_retype.append(col)
+
+            for i in range(len(dfs)):
+                dfs[i][cols_to_retype] = (
+                    dfs[i][cols_to_retype].fillna(value="None", axis=1).astype("str")
+                )
+
+            df = dd.concat(dfs, ignore_unknown_divisions=True).repartition(npartitions=12)
 
     print(df.dtypes)
     print(df.head())
 
     # Remove lat/lng columns if they are null
     ll_df = df[LAT_LONG_COLUMNS]
-    null_cols = set(ll_df.columns[ll_df.isnull().all()])
+    null_cols = get_null_or_empty_cols(ll_df)
     if len(set(LAT_LONG_COLUMNS) & null_cols) > 0:
         print("No lat/long data. Dropping columns.")
         df = df.drop(columns=LAT_LONG_COLUMNS)
     else:
+        df["lat"] = dd.to_numeric(df["lat"], errors="coerce")
+        df["lng"] = dd.to_numeric(df["lng"], errors="coerce")
         df = df.astype({"lat": "float64", "lng": "float64"})
 
     num_rows = len(df.index)
@@ -159,6 +206,12 @@ def download_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
     # Ensure types
     df = df.astype({"value": "float64"})
     return (df, num_rows)
+
+
+def get_null_or_empty_cols(df):
+    null_cols = set(df.columns[df.isnull().all()])
+    empty_cols = set(df.columns[df.eq("").all()])
+    return null_cols | empty_cols
 
 
 @task(log_stdout=True)
@@ -215,10 +268,10 @@ def save_raw_data(df, dest, time_res, model_id, run_id, should_run):
 
 
 @task(log_stdout=True)
-def process_null_columns(df):
+def validate_and_fix(df, fill_timestamp) -> Tuple[dd.DataFrame, int, int, int]:
     # Drop a column if all values are null
     exclude_columns = set(["timestamp", "lat", "lng", "feature", "value"])
-    null_cols = set(df.columns[df.isnull().all()])
+    null_cols = get_null_or_empty_cols(df)
     cols_to_drop = list(null_cols - exclude_columns)
     df = df.drop(columns=cols_to_drop)
 
@@ -227,9 +280,16 @@ def process_null_columns(df):
     remaining_columns = list(set(df.columns.to_list()) - exclude_columns - null_cols)
     df[remaining_columns] = df[remaining_columns].fillna(value="None", axis=1).astype("str")
 
-    # Fill missing timestamp values with 0
-    df["timestamp"] = df["timestamp"].fillna(value=0)
-    return df
+    # Fill missing timestamp values (0 by default)
+    num_missing_ts = int(df["timestamp"].isna().sum().compute().item())
+    df["timestamp"] = df["timestamp"].fillna(value=fill_timestamp)
+
+    # Remove extreme timestamps
+    num_invalid_ts = int((df["timestamp"] >= MAX_TIMESTAMP).sum().compute().item())
+    df = df[df["timestamp"] < MAX_TIMESTAMP]
+
+    num_missing_val = int(df["value"].isna().sum().compute().item())
+    return (df, num_missing_ts, num_invalid_ts, num_missing_val)
 
 
 @task(skip_on_upstream_skip=False)
@@ -639,10 +699,16 @@ def record_results(
     compute_tiles,
     month_ts_size,
     year_ts_size,
+    num_missing_ts,
+    num_invalid_ts,
+    num_missing_val,
 ):
     data = {
         "data_info": {
             "num_rows": num_rows,
+            "num_missing_ts": num_missing_ts,
+            "num_invalid_ts": num_invalid_ts,
+            "num_missing_val": num_missing_val,
             "region_levels": region_columns,
             "features": feature_list,
             "has_raw_data": compute_raw,
@@ -801,6 +867,7 @@ with Flow(FLOW_NAME) as flow:
     qualifier_map = Parameter("qualifier_map", default={})
     indicator_bucket = Parameter("indicator_bucket", default=S3_DEFAULT_INDICATOR_BUCKET)
     model_bucket = Parameter("model_bucket", default=S3_DEFAULT_MODEL_BUCKET)
+    fill_timestamp = Parameter("fill_timestamp", default=0)
     # The thresholds are values that the pipeline uses for processing qualifiers
     # It tells the user what sort of data they can expect to be available
     # For ex, no regional_timeseries for qualifier with more than 100 values
@@ -833,7 +900,7 @@ with Flow(FLOW_NAME) as flow:
         },
     )
 
-    (raw_df, num_rows) = download_data(source, data_paths)
+    (raw_df, num_rows) = read_data(source, data_paths)
 
     # ==== Set parameters that determine which tasks should run based on the type of data we're ingesting ====
     (
@@ -850,7 +917,7 @@ with Flow(FLOW_NAME) as flow:
     # ==== Save raw data =====
     save_raw_data(raw_df, dest, "raw", model_id, "indicator", compute_raw)
 
-    df = process_null_columns(raw_df)
+    (df, num_missing_ts, num_invalid_ts, num_missing_val) = validate_and_fix(raw_df, fill_timestamp)
 
     qualifier_columns = get_qualifier_columns(df)
 
@@ -945,6 +1012,9 @@ with Flow(FLOW_NAME) as flow:
         compute_tiles,
         month_ts_size,
         year_ts_size,
+        num_missing_ts,
+        num_invalid_ts,
+        num_missing_val,
     )
 
     # TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful.
@@ -987,25 +1057,87 @@ if __name__ == "__main__" and LOCAL_RUN:
         #         ],
         #     )
         # )
-        flow.run(
-            parameters=dict(
-                is_indicator=True,
-                qualifier_map={
-                    "fatalities": [
-                        "event_type",
-                        "sub_event_type",
-                        "source_scale",
-                        "country_non_primary",
-                        "admin1_non_primary",
-                    ]
+        # flow.run( # Test qualifiers
+        #     parameters=dict(
+        #         is_indicator=True,
+        #         qualifier_map={
+        #             "fatalities": [
+        #                 "event_type",
+        #                 "sub_event_type",
+        #                 "source_scale",
+        #                 "country_non_primary",
+        #                 "admin1_non_primary",
+        #             ]
+        #         },
+        #         model_id="_qualifier-test",
+        #         run_id="indicator",
+        #         data_paths=["s3://test/_qualifier-test.bin"],
+        #     )
+        # )
+        # flow.run( # Test combining multiple parquet files with different columns
+        #     parameters={
+        #         "compute_tiles": True,
+        #         "data_paths": [
+        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/9d7db850-0abe-486f-8979-b1e9ad2ef6ad/9d7db850-0abe-486f-8979-b1e9ad2ef6ad_7b1ceeb4-95a3-4bfd-b7cd-e2a89391742f.1.parquet.gzip",
+        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/9d7db850-0abe-486f-8979-b1e9ad2ef6ad/9d7db850-0abe-486f-8979-b1e9ad2ef6ad_7b1ceeb4-95a3-4bfd-b7cd-e2a89391742f.2.parquet.gzip"
+        #             ],
+        #         "is_indicator": False,
+        #         "model_id": "7b1ceeb4-95a3-4bfd-b7cd-e2a89391742f",
+        #         "qualifier_map": {
+        #             "yield_loss_risk": ["longitude", "latitude", "time"],
+        #             "harvested_area_at_risk": ["NameCrop", "NameIrrigation", "NameCategory"]
+        #         },
+        #         "qualifier_thresholds": {
+        #             "max_count": 10000,
+        #             "regional_timeseries_count": 100,
+        #             "regional_timeseries_max_level": 1
+        #         },
+        #         "run_id": "9d7db850-0abe-486f-8979-b1e9ad2ef6ad"
+        #     }
+        # )
+        flow.run(  # Test combining multiple parquet files with different columns
+            parameters={
+                "compute_tiles": True,
+                "data_paths": [
+                    "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/f2818712-09f7-49c6-b920-ea21c764d1c7/f2818712-09f7-49c6-b920-ea21c764d1c7_84fd427f-3a7d-473f-aa25-0c0a150ca216.3.parquet.gzip",
+                    "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/f2818712-09f7-49c6-b920-ea21c764d1c7/f2818712-09f7-49c6-b920-ea21c764d1c7_84fd427f-3a7d-473f-aa25-0c0a150ca216.2.parquet.gzip",
+                    "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/f2818712-09f7-49c6-b920-ea21c764d1c7/f2818712-09f7-49c6-b920-ea21c764d1c7_84fd427f-3a7d-473f-aa25-0c0a150ca216.1.parquet.gzip",
+                ],
+                "is_indicator": False,
+                "model_id": "84fd427f-3a7d-473f-aa25-0c0a150ca216",
+                "qualifier_map": {
+                    "export [kcal]": [],
+                    "import [kcal]": [],
+                    "supply [kcal]": [],
+                    "Production [mt]": ["Year"],
+                    "Consumption [mt]": ["Year"],
+                    "Ending_stock [mt]": ["Year"],
+                    "production [kcal]": [],
+                    "World market_price [US$/mt]": ["Year"],
+                    "export per capita [kcal pc]": [],
+                    "import per capita [kcal pc]": [],
+                    "supply per capita [kcal pc]": [],
+                    "production change per capita [kcal pc]": [],
                 },
-                model_id="_qualifier-test",
-                run_id="indicator",
-                data_paths=["s3://test/_qualifier-test.bin"],
-            )
+                "qualifier_thresholds": {
+                    "max_count": 10000,
+                    "regional_timeseries_count": 100,
+                    "regional_timeseries_max_level": 1,
+                },
+                "run_id": "f2818712-09f7-49c6-b920-ea21c764d1c7",
+            }
         )
-        # LPJmL
         # flow.run(
+        #     parameters=dict(  # Invalid timestamps
+        #         compute_tiles=True,
+        #         model_id="087c3e5a-cd3d-4ebc-bc5e-e13a4654005c",
+        #         run_id="9e1100d5-06e8-48b6-baea-56b3b820f82d",
+        #         data_paths=[
+        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/9e1100d5-06e8-48b6-baea-56b3b820f82d/9e1100d5-06e8-48b6-baea-56b3b820f82d_087c3e5a-cd3d-4ebc-bc5e-e13a4654005c.1.parquet.gzip"
+        #         ],
+        #     )
+        # )
+        # flow.run( # LPJmL
         #     parameters=dict(
         #         is_indicator=True,
         #         qualifier_map={},

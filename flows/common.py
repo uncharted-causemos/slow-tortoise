@@ -38,7 +38,7 @@ def run_temporal_aggregation(df, time_res):
     columns.remove("value")
 
     # Monthly temporal aggregation (compute for both sum and mean)
-    t = dd.to_datetime(df["timestamp"], unit="ms").apply(
+    t = dd.to_datetime(df["timestamp"], unit="ms", errors="coerce").apply(
         lambda x: to_normalized_time(x, time_res), meta=(None, "int")
     )
     temporal_df = df.assign(timestamp=t).groupby(columns)["value"].agg(["sum", "mean"])
@@ -151,11 +151,7 @@ def write_to_s3(body, path, dest):
             aws_secret_access_key=dest["secret"],
         )
 
-    try:
-        s3.put_object(Body=body, Bucket=dest["bucket"], Key=path)
-    except Exception as e:
-        logging.error(f"failed to write bucket: {dest['bucket']} key: {path}")
-        logging.error(e)
+    s3.put_object(Body=body, Bucket=dest["bucket"], Key=path)
 
 
 # no-op on write to help with debugging/profiling
@@ -321,7 +317,10 @@ def to_proto(row):
 
 # convert given datetime object to monthly epoch timestamp
 def to_normalized_time(date, time_res):
-    def time_in_seconds():
+    def time_in_seconds(date, time_res):
+        if date is pd.NaT:
+            return 0
+
         if time_res == "month":
             return int(
                 datetime.datetime(
@@ -335,7 +334,7 @@ def to_normalized_time(date, time_res):
         else:
             raise ValueError("time_res must be 'month' or 'year'")
 
-    return time_in_seconds() * 1000
+    return time_in_seconds(date, time_res) * 1000
 
 
 # Get storage option
