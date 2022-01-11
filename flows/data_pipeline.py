@@ -29,7 +29,7 @@ from flows.common import (
     save_regional_qualifiers_to_csv,
     write_regional_aggregation_csv,
     output_values_to_json_array,
-    raw_data_to_json,
+    raw_data_to_csv,
     compute_timeseries_by_region,
     write_to_file,
     write_to_null,
@@ -217,26 +217,23 @@ def get_null_or_empty_cols(df):
 @task(log_stdout=True)
 def configure_pipeline(
     df, dest, indicator_bucket, model_bucket, compute_tiles, is_indicator
-) -> Tuple[dict, bool, bool, bool, bool, bool]:
+) -> Tuple[dict, bool, bool, bool, bool]:
     all_cols = df.columns.to_list()
     compute_tiles = compute_tiles and set(LAT_LONG_COLUMNS).issubset(all_cols)
 
     if is_indicator:
         dest["bucket"] = indicator_bucket
-        compute_raw = True
         compute_monthly = True
         compute_annual = True
         compute_summary = False
     else:
         dest["bucket"] = model_bucket
-        compute_raw = False
         compute_monthly = True
         compute_annual = True
         compute_summary = True
 
     return (
         dest,
-        compute_raw,
         compute_monthly,
         compute_annual,
         compute_summary,
@@ -245,26 +242,27 @@ def configure_pipeline(
 
 
 @task(log_stdout=True)
-def save_raw_data(df, dest, time_res, model_id, run_id, should_run):
-    if should_run is False:
-        raise SKIP("Saving raw data was not requested")
-
+def save_raw_data(df, dest, time_res, model_id, run_id, raw_count_threshold):
     raw_df = df.copy()
-    output_columns = ["timestamp", "country", "admin1", "admin2", "admin3", "value"]
+    output_columns = raw_df.columns.drop("feature")
 
     raw_df = raw_df.groupby(["feature"]).apply(
-        lambda x: raw_data_to_json(
+        lambda x: raw_data_to_csv(
             x[output_columns],
             dest,
             model_id,
             run_id,
             time_res,
+            raw_count_threshold,
             x["feature"].values[0],
             WRITE_TYPES[DEST_TYPE],
         ),
-        meta=(None, "object"),
+        meta=(None, "int"),
     )
-    raw_df.compute()
+
+    rows_per_feature = raw_df.compute().to_json(orient="index")
+
+    return rows_per_feature
 
 
 @task(log_stdout=True)
@@ -691,9 +689,10 @@ def record_results(
     run_id,
     summary_values,
     num_rows,
+    rows_per_feature,
     region_columns,
     feature_list,
-    compute_raw,
+    raw_count_threshold,
     compute_monthly,
     compute_annual,
     compute_tiles,
@@ -706,12 +705,13 @@ def record_results(
     data = {
         "data_info": {
             "num_rows": num_rows,
+            "num_rows_per_feature": json.loads(rows_per_feature),
             "num_missing_ts": num_missing_ts,
             "num_invalid_ts": num_invalid_ts,
             "num_missing_val": num_missing_val,
             "region_levels": region_columns,
             "features": feature_list,
-            "has_raw_data": compute_raw,
+            "raw_count_threshold": raw_count_threshold,
             "has_tiles": compute_tiles,
             "has_monthly": compute_monthly,
             "has_annual": compute_annual,
@@ -862,7 +862,8 @@ with Flow(FLOW_NAME) as flow:
     model_id = Parameter("model_id", default="geo-test-data")
     run_id = Parameter("run_id", default="test-run")
     data_paths = Parameter("data_paths", default=["s3://test/geo-test-data.parquet"])
-    compute_tiles = Parameter("compute_tiles", default=False)
+    compute_tiles = Parameter("compute_tiles", default=True)
+    raw_count_threshold = Parameter("raw_count_threshold", default=10000)
     is_indicator = Parameter("is_indicator", default=False)
     qualifier_map = Parameter("qualifier_map", default={})
     indicator_bucket = Parameter("indicator_bucket", default=S3_DEFAULT_INDICATOR_BUCKET)
@@ -905,7 +906,6 @@ with Flow(FLOW_NAME) as flow:
     # ==== Set parameters that determine which tasks should run based on the type of data we're ingesting ====
     (
         dest,
-        compute_raw,
         compute_monthly,
         compute_annual,
         compute_summary,
@@ -915,7 +915,7 @@ with Flow(FLOW_NAME) as flow:
     )
 
     # ==== Save raw data =====
-    save_raw_data(raw_df, dest, "raw", model_id, "indicator", compute_raw)
+    rows_per_feature = save_raw_data(raw_df, dest, "raw", model_id, run_id, raw_count_threshold)
 
     (df, num_missing_ts, num_invalid_ts, num_missing_val) = validate_and_fix(raw_df, fill_timestamp)
 
@@ -1004,9 +1004,10 @@ with Flow(FLOW_NAME) as flow:
         run_id,
         summary_values,
         num_rows,
+        rows_per_feature,
         region_columns,
         feature_list,
-        compute_raw,
+        raw_count_threshold,
         compute_monthly,
         compute_annual,
         compute_tiles,

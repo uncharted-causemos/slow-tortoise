@@ -258,10 +258,13 @@ def qualifier_timeseries_to_csv(
 
 
 # write raw data to json file in S3
-def raw_data_to_json(df, dest, model_id, run_id, time_res, feature, writer):
-    body = df.to_json(orient="records")
-    path = f"{model_id}/{run_id}/{time_res}/{feature}/raw/raw.json"
-    writer(body, path, dest)
+def raw_data_to_csv(df, dest, model_id, run_id, time_res, threshold, feature, writer):
+    num_rows = len(df.index)
+    if num_rows <= threshold:
+        body = df.to_csv(index=False)
+        path = f"{model_id}/{run_id}/{time_res}/{feature}/raw/raw.csv"
+        writer(body, path, dest)
+    return num_rows
 
 
 # save output values to json array
