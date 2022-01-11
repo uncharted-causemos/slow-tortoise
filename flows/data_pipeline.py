@@ -909,13 +909,7 @@ with Flow(FLOW_NAME) as flow:
     (raw_df, num_rows) = read_data(source, data_paths)
 
     # ==== Set parameters that determine which tasks should run based on the type of data we're ingesting ====
-    (
-        dest,
-        compute_monthly,
-        compute_annual,
-        compute_summary,
-        compute_tiles,
-    ) = configure_pipeline(
+    (dest, compute_monthly, compute_annual, compute_summary, compute_tiles,) = configure_pipeline(
         raw_df, dest, indicator_bucket, model_bucket, compute_tiles, is_indicator
     )
 
