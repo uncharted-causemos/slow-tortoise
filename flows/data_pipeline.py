@@ -278,6 +278,11 @@ def validate_and_fix(df, fill_timestamp) -> Tuple[dd.DataFrame, int, int, int]:
     remaining_columns = list(set(df.columns.to_list()) - exclude_columns - null_cols)
     df[remaining_columns] = df[remaining_columns].fillna(value="None", axis=1).astype("str")
 
+    # Remove characters that Minio can't handle
+    for col in REGION_LEVELS:
+        if col not in cols_to_drop:
+            df[col] = df[col].str.replace("//", "")
+
     # Fill missing timestamp values (0 by default)
     num_missing_ts = int(df["timestamp"].isna().sum().compute().item())
     df["timestamp"] = df["timestamp"].fillna(value=fill_timestamp)
