@@ -1,14 +1,15 @@
 import requests
 import json
 from requests.auth import HTTPBasicAuth
-import time
 import sys
 import os
 
-DOJO_USER = os.getenv("DOJO_USER", "")
-DOJO_PWD = os.getenv("DOJO_PWD", "")
+DOJO_USER = os.getenv("DOJO_USER", "") # required
+DOJO_PWD = os.getenv("DOJO_PWD", "") # required
 
+# Fetch all indicator metadata from Dojo and write it to stdout
 # Usage: DOJO_USER=... DOJO_PWD=... python fetch-all-indicators.py >all-indicators-08-12.json
+
 all_results = []
 scroll_id = None
 hits = 1

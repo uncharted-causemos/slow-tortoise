@@ -1,6 +1,5 @@
 import os
 import json
-import sys
 import time
 import requests
 from requests.auth import HTTPBasicAuth
@@ -8,15 +7,18 @@ from requests.auth import HTTPBasicAuth
 DOJO_USER = os.getenv("DOJO_USER", "")
 DOJO_PWD = os.getenv("DOJO_PWD", "")
 
+ES_URL = os.getenv("ES_URL", "http://10.65.18.34:9200")
+ES_USER = os.getenv("ES_USER", "") # required
+ES_PWD = os.getenv("ES_PWD", "") # required
+
 DOJO_URL = "https://dojo-test.com"
 CAUSEMOS_URL = "http://localhost:3000"
-ES_URL = "http://10.65.18.34:9200"
 
 
 def get_model_run_from_es(run_id, es_url=ES_URL):
     # Fetch existing model run metadata
     try:
-        res = requests.get(f"{es_url}/data-model-run/_doc/{run_id}")
+        res = requests.get(f"{es_url}/data-model-run/_doc/{run_id}", auth=HTTPBasicAuth(ES_USER, ES_PWD))
         res.raise_for_status()
         run_metadata = res.json()["_source"]
     except Exception as exc:
@@ -39,6 +41,16 @@ def process_model_run(run_metadata, causemos_url=CAUSEMOS_URL):
         raise
 
 
+def get_id_list_from_es_response(es_response):
+    ids = []
+    for model in es_response["hits"]["hits"]:
+        id = model["_source"]["id"]
+        ids.append(id)
+
+    json_str = json.dumps(ids, indent=2)
+    return json_str
+
+
 def get_indicator_metadata_from_dojo(indicator_id, dojo_url=DOJO_URL):
     try:
         res = requests.get(
@@ -56,7 +68,7 @@ def delete_indicator_from_es(indicator_id, es_url=ES_URL):
     # Remove existing indicator metadata in ES
     try:
         payload = {"query": {"term": {"data_id": indicator_id}}}
-        res = requests.post(f"{es_url}/data-datacube/_delete_by_query", json=payload)
+        res = requests.post(f"{es_url}/data-datacube/_delete_by_query", auth=HTTPBasicAuth(ES_USER, ES_PWD), json=payload)
         res.raise_for_status()
         result = res.json()
         # explicitly wait for index to be refreshed since delete_by_query doesn't support refresh=wait_for
@@ -66,6 +78,17 @@ def delete_indicator_from_es(indicator_id, es_url=ES_URL):
         print(f">> ES: Error removing existing indicator metadata for {indicator_id}")
         raise
 
+def delete_by_query_string_from_es(index, field, query, es_url=ES_URL):
+    # Remove documents from ES using query string to allow wildcards (ex. query="UAZ_VUAZ-*")
+    try:
+        payload = {"query_string": {"fields": [field], "query": query}}
+        res = requests.post(f"{es_url}/{index}/_delete_by_query", auth=HTTPBasicAuth(ES_USER, ES_PWD), json=payload)
+        res.raise_for_status()
+        result = res.json()
+        print(result)
+    except Exception as exc:
+        print(f">> ES: Error removing documents")
+        raise
 
 def reprocess_indicator(indicator_metadata, causemos_url=CAUSEMOS_URL):
     indicator_id = indicator_metadata["id"]

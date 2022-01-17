@@ -1,7 +1,8 @@
 import sys
 import common
 
-# Usage python prefect_reprocess_indicator.py {indicator id}
+# Reprocess a single indicator
+# Usage: python prefect_reprocess_indicator.py {indicator id}
 
 
 def reprocess_indicator(indicator_id):

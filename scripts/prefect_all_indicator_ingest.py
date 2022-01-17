@@ -5,7 +5,9 @@ import requests
 
 CAUSEMOS_URL = "http://localhost:3000"
 
-# Usage python prefect_all_indicator_ingest.py non-datamart-indicators.json
+# Sumbit all indicators from the input file for post-processing.
+# The input file can be created with `fetch-all-indicators.py` and optionally filtered with `filter_mitre_indicators.py`
+# Usage: python prefect_all_indicator_ingest.py non-datamart-indicators.json
 
 total_start_time = time.time()
 

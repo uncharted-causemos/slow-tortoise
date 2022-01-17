@@ -1,7 +1,8 @@
 import sys
 import common
 
-# Usage python prefect_reprocess_model_run.py {run id}
+# Reprocess a single model run
+# Usage: python prefect_reprocess_model_run.py {run id}
 
 
 def reprocess_model_run(run_id):
