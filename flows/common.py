@@ -350,9 +350,12 @@ def to_tile_csv(row):
         stats[bin_index]["s_sum_t_sum"] += row.s_sum_t_sum[i]
         stats[bin_index]["s_sum_t_mean"] += row.s_sum_t_mean[i]
         stats[bin_index]["weight"] += row.s_count[i]
-    
-    tableRows = [[key, value["s_sum_t_sum"], value["s_sum_t_mean"], value["weight"]] for key, value in stats.items()]
-    table = pd.DataFrame(tableRows, columns = ["bin_index", "s_sum_t_sum", "s_sum_t_mean", "weight"])
+
+    tableRows = [
+        [key, value["s_sum_t_sum"], value["s_sum_t_mean"], value["weight"]]
+        for key, value in stats.items()
+    ]
+    table = pd.DataFrame(tableRows, columns=["bin_index", "s_sum_t_sum", "s_sum_t_mean", "weight"])
     return [z, x, y, table, totalBins]
 
 

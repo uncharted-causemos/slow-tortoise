@@ -573,8 +573,8 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
         .reset_index()
         .repartition(npartitions=200)
         .apply(
-            lambda x: save_tile( # To test use: save_tile_to_csv
-                to_proto(x), # To test use: to_tile_csv
+            lambda x: save_tile(  # To test use: save_tile_to_csv
+                to_proto(x),  # To test use: to_tile_csv
                 dest,
                 model_id,
                 run_id,
