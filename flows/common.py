@@ -188,6 +188,20 @@ def save_tile(tile, dest, model_id, run_id, feature, time_res, timestamp, writer
     return tile
 
 
+# only used for testing
+def save_tile_to_csv(tile, dest, model_id, run_id, feature, time_res, timestamp, writer):
+    if tile is None:
+        return None
+
+    [z, x, y, table, totalBins] = tile
+
+    path = f"{model_id}/{run_id}/{time_res}/{feature}/tiles/{timestamp}-{z}-{x}-{y}-{totalBins}.csv"
+    body = table.to_csv(index=False)
+    writer(body, path, dest)
+
+    return tile
+
+
 # write timeseries to json in S3
 def timeseries_to_json(df, dest, model_id, run_id, feature, time_res, column, writer):
     col_map = {}
@@ -316,6 +330,30 @@ def to_proto(row):
         tile.bins.stats[bin_index].s_sum_t_mean += row.s_sum_t_mean[i]
         tile.bins.stats[bin_index].weight += row.s_count[i]
     return tile
+
+
+# transform given row to tile csv, only used for testing
+def to_tile_csv(row):
+    z, x, y = row.tile
+    if z < 0 or x < 0 or y < 0:
+        return None
+
+    totalBins = int(
+        math.pow(4, row.subtile[0][0] - z)
+    )  # Total number of bins (subtile) for the tile
+
+    stats = {}
+    for i in range(len(row.subtile)):
+        bin_index = project(row.subtile[i], row.tile)
+        if bin_index not in stats:
+            stats[bin_index] = {"s_sum_t_sum": 0, "s_sum_t_mean": 0, "weight": 0}
+        stats[bin_index]["s_sum_t_sum"] += row.s_sum_t_sum[i]
+        stats[bin_index]["s_sum_t_mean"] += row.s_sum_t_mean[i]
+        stats[bin_index]["weight"] += row.s_count[i]
+    
+    tableRows = [[key, value["s_sum_t_sum"], value["s_sum_t_mean"], value["weight"]] for key, value in stats.items()]
+    table = pd.DataFrame(tableRows, columns = ["bin_index", "s_sum_t_sum", "s_sum_t_mean", "weight"])
+    return [z, x, y, table, totalBins]
 
 
 # convert given datetime object to monthly epoch timestamp

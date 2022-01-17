@@ -573,8 +573,8 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
         .reset_index()
         .repartition(npartitions=200)
         .apply(
-            lambda x: save_tile(
-                to_proto(x),
+            lambda x: save_tile( # To test use: save_tile_to_csv
+                to_proto(x), # To test use: to_tile_csv
                 dest,
                 model_id,
                 run_id,
@@ -909,7 +909,7 @@ with Flow(FLOW_NAME) as flow:
     (raw_df, num_rows) = read_data(source, data_paths)
 
     # ==== Set parameters that determine which tasks should run based on the type of data we're ingesting ====
-    (dest, compute_monthly, compute_annual, compute_summary, compute_tiles,) = configure_pipeline(
+    (dest, compute_monthly, compute_annual, compute_summary, compute_tiles) = configure_pipeline(
         raw_df, dest, indicator_bucket, model_bucket, compute_tiles, is_indicator
     )
 
