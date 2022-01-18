@@ -9,10 +9,12 @@ import os
 
 from scripts.gadm.scripts.common_gadm import MAX_GADM_INDEX, get_csv_filename
 
-ES_URL = os.getenv("ES_URL", "10.65.18.69")
+ES_URL = os.getenv("ES_URL", "10.65.18.34")
+ES_USER = os.getenv("ES_USER", "") # required
+ES_PWD = os.getenv("ES_PWD", "") # required
 
 def populate_es_with_gadm():
-    elastic = Elasticsearch(ES_URL)
+    elastic = Elasticsearch(ES_URL, http_auth=(ES_USER, ES_PWD))
 
     files = [get_csv_filename(i) for i in range(MAX_GADM_INDEX)]
     # column_data and code_columns must be ordered from broadest region to most specific region (largest to smallest)

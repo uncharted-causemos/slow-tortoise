@@ -5,6 +5,9 @@ import requests
 
 CAUSEMOS_URL = "http://localhost:3000"
 
+# Read a list of indicators and a list of datamart indicators.
+# Submit all datamart indicators between start and end for processing.
+# The input file can be created with `fetch-all-indicators.py`, datamart.txt should already exist.
 # Usage python prefect_indicator_ingest.py all-indicators-once.json datamart.txt (start (end))
 
 total_start_time = time.time()

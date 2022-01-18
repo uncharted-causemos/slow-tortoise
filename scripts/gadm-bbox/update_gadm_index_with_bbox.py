@@ -4,18 +4,21 @@ import glob
 import json
 import os
 import requests
+from requests.auth import HTTPBasicAuth
 import pathlib
 
 # Update ES with geo codes
 headers = {"Accept": "application/json", "Content-type": "application/json"}
 headers_bulk = {"Accept": "application/json", "Content-type": "application/x-ndjson"}
 
-ELASTIC_URL = os.getenv("WM_ELASTIC_URL", "http://10.65.18.69:9200")
-ELASTIC_GADM_INDEX = "gadm-name"
+ES_URL = os.getenv("ES_URL", "http://10.65.18.34:9200")
+ES_USER = os.getenv("ES_USER", "") # required
+ES_PWD = os.getenv("ES_PWD", "") # required
+ES_INDEX = "gadm-name"
 
 #update the metadata one doc at a time
 def update_metadata(code, bbox):
-    url = ELASTIC_URL + "/" + ELASTIC_GADM_INDEX + "/_update_by_query"
+    url = ES_URL + "/" + ES_INDEX + "/_update_by_query"
     query = json.dumps(
         {
             "script": {
@@ -25,11 +28,11 @@ def update_metadata(code, bbox):
             "query": {"bool": {"must": [{"match": {"code": code}}]}},
         }
     )
-    res = requests.post(url, data=query, headers=headers)
+    res = requests.post(url, auth=HTTPBasicAuth(ES_USER, ES_PWD), data=query, headers=headers)
     print(res.json())
 
 def bulk_update(all_items):
-    url = ELASTIC_URL + "/" + ELASTIC_GADM_INDEX + "/_bulk"
+    url = ES_URL + "/" + ES_INDEX + "/_bulk"
     body = []
     for item in all_items:
         action = { "update" : {"_id" : item["code"]} }
@@ -40,7 +43,7 @@ def bulk_update(all_items):
     for l in body:
         payload = payload + f"{l} \n"
     data = payload.encode('utf-8')
-    res = requests.post(url, data=data, headers=headers_bulk)
+    res = requests.post(url, auth=HTTPBasicAuth(ES_USER, ES_PWD), data=data, headers=headers_bulk)
     print(res.json())
 
 dir_path = str(pathlib.Path(__file__).parent.resolve()) + '/.tmp/'

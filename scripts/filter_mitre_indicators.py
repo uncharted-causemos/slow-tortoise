@@ -1,11 +1,11 @@
 import json
 import sys
 import time
-import requests
 
-CAUSEMOS_URL = "http://localhost:3000"
+# Reads a list of indicators and a list of datamart indicators. Contains a list of indicators that shouldn't be ingested.
+# Writes to stdout a list of all indicators not found in the datamart indicator text or the list of indicators to reject.
+# Usage: python filter_mitre_indicators.py all-indicators-once.json datamart.txt >output.json
 
-# Usage python filter_mitre_indicators.py all-indicators-once.json datamart.txt >output.json
 total_start_time = time.time()
 
 with open(sys.argv[1]) as indicators_file:

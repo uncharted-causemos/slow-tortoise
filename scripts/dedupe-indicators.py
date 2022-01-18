@@ -1,10 +1,24 @@
-import requests
-import json
-import time
 import sys
+import os
+import requests
+from requests.auth import HTTPBasicAuth
+
+ES_URL = os.getenv("ES_URL", "http://10.65.18.34:9200")
+ES_USER = os.getenv("ES_USER", "") # required
+ES_PWD = os.getenv("ES_PWD", "") # required
+
+#                                                   WARNING
+#                                                   vvvvvvv
+#                                                 ___________
+# Reads all indicators registered in Causemos and ! DELETES ! duplicates based on data_id and default_feature.
+#                                                 -----------
+# When duplicated are encountered, the first READY indicator is preserved, and all others are deleted. If none
+# are READY, the first PROCESSING indicator is preserved. Indicators with all other statuses are ignored.
+# NOTE: You must uncomment the block at the bottom of the file to delete. By default this only dry runs.
+# Usage: ES_USER=... ES_PWD=... python dedupe-indicators.py
 
 try:
-    resp = requests.get("http://10.65.18.34:9200/data-datacube/_search?q=type:indicator&size=5000")
+    resp = requests.get("{ES_URL}/data-datacube/_search?q=type:indicator&size=10000", auth=HTTPBasicAuth(ES_USER, ES_PWD))
     resp.raise_for_status()
     ret = resp.json()
     indicators = ret["hits"]["hits"]
@@ -48,7 +62,7 @@ for duplicate in dupes:
     #
     # if duplicate[1] != 'PROCESSING':
     #     print(f'##### Deleted non-proc {duplicate[0]}')
-    # resp = requests.delete(f'http://10.65.18.34:9200/data-datacube/_doc/{duplicate[0]}')
+    # resp = requests.delete(f'{ES_URL}/data-datacube/_doc/{duplicate[0]}', auth=HTTPBasicAuth(ES_USER, ES_PWD))
     # resp.raise_for_status()
     # print(resp.json())
     print("------------------------------------------")
