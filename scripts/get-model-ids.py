@@ -26,4 +26,4 @@ res = requests.post(f"{ES_URL}/data-datacube/_search?size=1000", auth=HTTPBasicA
 res.raise_for_status()
 runs = res.json()["hits"]["hits"]
 
-print(json.dumps([run["_source"]["id"] for run in runs], indent=2))
+print(json.dumps([run["_source"] for run in runs], indent=2))
