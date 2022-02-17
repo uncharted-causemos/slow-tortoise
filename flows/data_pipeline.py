@@ -248,13 +248,13 @@ def save_raw_data(df, dest, time_res, model_id, run_id, raw_count_threshold):
 
     raw_df = raw_df.groupby(["feature"]).apply(
         lambda x: raw_data_to_csv(
-            x[output_columns],
+            x,
             dest,
             model_id,
             run_id,
             time_res,
             raw_count_threshold,
-            x["feature"].values[0],
+            output_columns,
             WRITE_TYPES[DEST_TYPE],
         ),
         meta=(None, "int"),
