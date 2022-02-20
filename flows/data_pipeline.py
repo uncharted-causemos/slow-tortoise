@@ -707,6 +707,9 @@ def record_results(
     num_invalid_ts,
     num_missing_val,
 ):
+    if compute_tiles == True:
+        region_columns.append("grid data")
+
     data = {
         "data_info": {
             "num_rows": num_rows,
