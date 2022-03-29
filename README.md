@@ -52,7 +52,7 @@ This assumes you have SSH access to both dask swarms. The script does the follow
 
 1. Re-build the base docker image by running [infra/docker/docker_build.sh](./infra/docker/docker_build.sh)
 2. Push the base image [infra/docker/docker_push.sh](./infra/docker/docker_push.sh)
-3. Register flows by running [infra/prefect/register_flows.sh](./infra/prefect/register_flows.sh) or executing similar commands for individual flows.
+3. Register flows by running [flows/prefect/register_flows.sh](./flows/prefect/register_flows.sh) or executing similar commands for individual flows.
 4. Log into the Dask swarm and restart with the updated image (see [here](./infra/dask/setup.md))
 
 ---
