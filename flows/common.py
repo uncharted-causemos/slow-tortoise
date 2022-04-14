@@ -2,10 +2,10 @@ import datetime
 from typing import Tuple
 import pandas as pd
 import dask.dataframe as dd
+import numpy as np
 import math
 import boto3
 import json
-import logging
 import sys
 import os
 import pathlib
@@ -33,7 +33,7 @@ REQUIRED_COLS = {
 }
 
 # Run temporal aggregation on given provided dataframe
-def run_temporal_aggregation(df, time_res):
+def run_temporal_aggregation(df, time_res, weight_column):
     columns = df.columns.tolist()  # includes qualifier columns
     columns.remove("value")
 
@@ -41,13 +41,39 @@ def run_temporal_aggregation(df, time_res):
     t = dd.to_datetime(df["timestamp"], unit="ms", errors="coerce").apply(
         lambda x: to_normalized_time(x, time_res), meta=(None, "int")
     )
-    temporal_df = df.assign(timestamp=t).groupby(columns)["value"].agg(["sum", "mean"])
+    temporal_df = df.assign(timestamp=t)
 
-    # Rename agg column names
-    temporal_df.columns = temporal_df.columns.str.replace("sum", "t_sum").str.replace(
-        "mean", "t_mean"
-    )
-    temporal_df = temporal_df.reset_index()
+    aggs = {"value": ["sum", "mean"]}
+    rename_map = {
+        ("value", "sum"): "t_sum",
+        ("value", "mean"): "t_mean",
+    }
+    # A few temporary columns
+    values_col = "_weighted_value"
+    weights_col = "_weight_sum"
+
+    if weight_column != "" and weight_column in columns:
+        temporal_df[values_col] = temporal_df["value"] * temporal_df[weight_column]
+
+        columns.remove(weight_column)
+        aggs[values_col] = ["sum"]
+        aggs[weight_column] = ["sum", "mean"]
+        rename_map.update(
+            {
+                (values_col, "sum"): values_col,
+                (weight_column, "sum"): weights_col,
+                (weight_column, "mean"): weight_column,
+            }
+        )
+
+    temporal_df = temporal_df.groupby(columns).agg(aggs)
+    temporal_df.columns = temporal_df.columns.to_flat_index()
+    temporal_df = temporal_df.rename(columns=rename_map).reset_index()
+
+    if weight_column != "":
+        temporal_df["t_wavg"] = temporal_df[values_col] / temporal_df[weights_col]
+        temporal_df = temporal_df.drop(columns=[values_col, weights_col])
+
     return temporal_df
 
 
@@ -292,6 +318,7 @@ def output_values_to_json_array(df):
 # save stats as a json file
 def stats_to_json(x, dest, model_id, run_id, feature, time_res, filename, writer):
     path = f"{model_id}/{run_id}/{time_res}/{feature}/stats/{filename}.json"
+    # print(x)
     body = x.to_json(orient="index")
     writer(body, path, dest)
 
@@ -413,7 +440,7 @@ def join_region_columns(df, columns, level=3, deli="__"):
 
 
 def write_regional_aggregation_csv(
-    x, dest, model_id, run_id, time_res, writer, region_level="admin3"
+    x, dest, model_id, run_id, time_res, weight_column, writer, region_level="admin3"
 ):
     feature = x.feature
     timestamp = x.timestamp
@@ -423,13 +450,28 @@ def write_regional_aggregation_csv(
     for i in range(len(x.region_id)):
         region_id = x.region_id[i]
         if region_id not in region_agg:
-            region_agg[region_id] = {"s_sum_t_sum": 0, "s_sum_t_mean": 0, "s_count": 0}
+            region_agg[region_id] = {
+                "s_sum_t_sum": 0,
+                "s_sum_t_mean": 0,
+                "s_sum_t_wavg": 0,
+                "s_count": 0,
+                "_weighted_sum": 0,
+                "_weighted_mean": 0,
+                "_weighted_wavg": 0,
+                "_weight_sum": 0,
+            }
 
         region_agg[region_id]["s_sum_t_sum"] += x["s_sum_t_sum"][i]
         region_agg[region_id]["s_sum_t_mean"] += x["s_sum_t_mean"][i]
+        region_agg[region_id]["s_sum_t_wavg"] += x["s_sum_t_wavg"][i]
         region_agg[region_id]["s_count"] += x["s_count"][i]
+        if weight_column != "":
+            region_agg[region_id]["_weighted_sum"] += x["_weighted_sum"][i]
+            region_agg[region_id]["_weighted_mean"] += x["_weighted_mean"][i]
+            region_agg[region_id]["_weighted_wavg"] += x["_weighted_wavg"][i]
+            region_agg[region_id]["_weight_sum"] += x["_weight_sum"][i]
 
-    # Compute mean
+    # Compute mean and wavg
     for key in region_agg:
         region_agg[key]["s_mean_t_sum"] = (
             region_agg[key]["s_sum_t_sum"] / region_agg[key]["s_count"]
@@ -437,22 +479,32 @@ def write_regional_aggregation_csv(
         region_agg[key]["s_mean_t_mean"] = (
             region_agg[key]["s_sum_t_mean"] / region_agg[key]["s_count"]
         )
+        region_agg[key]["s_mean_t_wavg"] = (
+            region_agg[key]["s_sum_t_wavg"] / region_agg[key]["s_count"]
+        )
+        if weight_column != "":
+            weight = np.where(
+                region_agg[key]["_weight_sum"] != 0, region_agg[key]["_weight_sum"], np.nan
+            )
+            region_agg[key]["s_wavg_t_sum"] = region_agg[key]["_weighted_sum"] / weight
+            region_agg[key]["s_wavg_t_mean"] = region_agg[key]["_weighted_mean"] / weight
+            region_agg[key]["s_wavg_t_wavg"] = region_agg[key]["_weighted_wavg"] / weight
 
     # to Json
     data = []
-    for key in region_agg:
-        data.append(
-            [
-                key,
-                region_agg[key]["s_sum_t_mean"],
-                region_agg[key]["s_mean_t_mean"],
-                region_agg[key]["s_sum_t_sum"],
-                region_agg[key]["s_mean_t_sum"],
-            ]
+    cols = ["s_sum_t_mean", "s_mean_t_mean", "s_sum_t_sum", "s_mean_t_sum"]
+    if weight_column != "":
+        cols.extend(
+            ["s_sum_t_wavg", "s_mean_t_wavg", "s_wavg_t_sum", "s_wavg_t_mean", "s_wavg_t_wavg"]
         )
-    df = pd.DataFrame(
-        data, columns=["id", "s_sum_t_mean", "s_mean_t_mean", "s_sum_t_sum", "s_mean_t_sum"]
-    )
+
+    for key in region_agg:
+        data_cols = [
+            key,
+            *[region_agg[key][col] for col in cols],  # add each column in cols
+        ]
+        data.append(data_cols)
+    df = pd.DataFrame(data, columns=["id", *cols])
 
     # Save the result to s3
     path = f"{model_id}/{run_id}/{time_res}/{feature}/regional/{region_level}/aggs/{timestamp}/default/default.csv"
@@ -463,18 +515,26 @@ def write_regional_aggregation_csv(
 
 
 def save_regional_qualifiers_to_csv(
-    x, qualifier, dest, model_id, run_id, time_res, qualifier_map, writer, region_level="admin3"
+    x,
+    qualifier,
+    dest,
+    model_id,
+    run_id,
+    time_res,
+    weight_column,
+    qualifier_map,
+    writer,
+    region_level="admin3",
 ):
     feature = x.feature
-    # print('------------ in common')
     if feature in qualifier_map and qualifier in qualifier_map[feature]:
         write_regional_qualifiers_csv(
-            x, qualifier, dest, model_id, run_id, time_res, writer, region_level
+            x, qualifier, dest, model_id, run_id, time_res, weight_column, writer, region_level
         )
 
 
 def write_regional_qualifiers_csv(
-    x, qualifier, dest, model_id, run_id, time_res, writer, region_level="admin3"
+    x, qualifier, dest, model_id, run_id, time_res, weight_column, writer, region_level="admin3"
 ):
     feature = x.feature
     timestamp = x.timestamp
@@ -490,12 +550,22 @@ def write_regional_qualifiers_csv(
             region_agg[region_id][qualifier_value] = {
                 "s_sum_t_sum": 0,
                 "s_sum_t_mean": 0,
+                "s_sum_t_wavg": 0,
                 "s_count": 0,
+                "_weighted_sum": 0,
+                "_weighted_mean": 0,
+                "_weighted_wavg": 0,
+                "_weight_sum": 0,
             }
 
         region_agg[region_id][qualifier_value]["s_sum_t_sum"] += x["s_sum_t_sum"][i]
         region_agg[region_id][qualifier_value]["s_sum_t_mean"] += x["s_sum_t_mean"][i]
         region_agg[region_id][qualifier_value]["s_count"] += x["s_count"][i]
+        if weight_column != "":
+            region_agg[region_id][qualifier_value]["_weighted_sum"] += x["_weighted_sum"][i]
+            region_agg[region_id][qualifier_value]["_weighted_mean"] += x["_weighted_mean"][i]
+            region_agg[region_id][qualifier_value]["_weighted_wavg"] += x["_weighted_wavg"][i]
+            region_agg[region_id][qualifier_value]["_weight_sum"] += x["_weight_sum"][i]
 
     # Compute mean
     for key in region_agg:
@@ -506,25 +576,41 @@ def write_regional_qualifiers_csv(
             region_agg[key][qkey]["s_mean_t_mean"] = (
                 region_agg[key][qkey]["s_sum_t_mean"] / region_agg[key][qkey]["s_count"]
             )
+            region_agg[key][qkey]["s_mean_t_wavg"] = (
+                region_agg[key][qkey]["s_sum_t_wavg"] / region_agg[key][qkey]["s_count"]
+            )
+            if weight_column != "":
+                weight = np.where(
+                    region_agg[key][qkey]["_weight_sum"] != 0,
+                    region_agg[key][qkey]["_weight_sum"],
+                    np.nan,
+                )
+                region_agg[key][qkey]["s_wavg_t_sum"] = (
+                    region_agg[key][qkey]["_weighted_sum"] / weight
+                )
+                region_agg[key][qkey]["s_wavg_t_mean"] = (
+                    region_agg[key][qkey]["_weighted_mean"] / weight
+                )
+                region_agg[key][qkey]["s_wavg_t_wavg"] = (
+                    region_agg[key][qkey]["_weighted_wavg"] / weight
+                )
 
     # to Json
     data = []
+    cols = ["s_sum_t_mean", "s_mean_t_mean", "s_sum_t_sum", "s_mean_t_sum"]
+    if weight_column != "":
+        cols.extend(
+            ["s_sum_t_wavg", "s_mean_t_wavg", "s_wavg_t_sum", "s_wavg_t_mean", "s_wavg_t_wavg"]
+        )
     for key in region_agg:
         for qkey in region_agg[key]:
-            data.append(
-                [
-                    key,
-                    qkey,
-                    region_agg[key][qkey]["s_sum_t_mean"],
-                    region_agg[key][qkey]["s_mean_t_mean"],
-                    region_agg[key][qkey]["s_sum_t_sum"],
-                    region_agg[key][qkey]["s_mean_t_sum"],
-                ]
-            )
-    df = pd.DataFrame(
-        data,
-        columns=["id", "qualifier", "s_sum_t_mean", "s_mean_t_mean", "s_sum_t_sum", "s_mean_t_sum"],
-    )
+            data_cols = [
+                key,
+                qkey,
+                *[region_agg[key][qkey][col] for col in cols],  # add each column in cols
+            ]
+            data.append(data_cols)
+    df = pd.DataFrame(data, columns=["id", "qualifier", *cols])
 
     # Save the result to s3
     # qualifier_value = x[qualifier]
@@ -589,6 +675,7 @@ def compute_timeseries_by_region(
     region_level,
     qualifier_map,
     qualifier_cols,
+    weight_column,
     writer,
 ):
     admin_level = REGION_LEVELS.index(region_level)
@@ -627,11 +714,67 @@ def compute_timeseries_by_region(
             "s_count",
         ]
 
+        columns_to_agg = {"t_sum": timeseries_aggs, "t_mean": timeseries_aggs}
+        if weight_column != "":
+            timeseries_df["_weighted_sum"] = timeseries_df["t_sum"] * timeseries_df[weight_column]
+            timeseries_df["_weighted_mean"] = timeseries_df["t_mean"] * timeseries_df[weight_column]
+            timeseries_df["_weighted_wavg"] = timeseries_df["t_wavg"] * timeseries_df[weight_column]
+
+            columns_to_agg["_weighted_sum"] = ["sum"]
+            columns_to_agg["_weighted_mean"] = ["sum"]
+            columns_to_agg["_weighted_wavg"] = ["sum"]
+            columns_to_agg[weight_column] = ["sum"]
+            columns_to_agg["t_wavg"] = timeseries_aggs
+
+            timeseries_lookup.update(
+                {
+                    # wavg of temporal
+                    ("_weighted_sum", "sum"): "_weighted_sum",
+                    ("_weighted_mean", "sum"): "_weighted_mean",
+                    ("_weighted_wavg", "sum"): "_weighted_wavg",
+                    (weight_column, "sum"): "_weight_sum",
+                    # spatial agg of wavg
+                    ("t_wavg", "min"): "s_min_t_wavg",
+                    ("t_wavg", "max"): "s_max_t_wavg",
+                    ("t_wavg", "sum"): "s_sum_t_wavg",
+                    ("t_wavg", "mean"): "s_mean_t_wavg",
+                    ("t_wavg", "count"): "s_count_t_wavg",
+                }
+            )
+            timeseries_agg_columns.extend(
+                [
+                    "s_min_t_wavg",
+                    "s_max_t_wavg",
+                    "s_sum_t_wavg",
+                    "s_mean_t_wavg",
+                    "s_count_t_wavg",
+                    # next 3 columns are computed below
+                    "s_wavg_t_sum",
+                    "s_wavg_t_mean",
+                    "s_wavg_t_wavg",
+                ]
+            )
+
         timeseries_df = timeseries_df.groupby(
             ["feature", "region_id", "timestamp"] + qualifier_col
-        ).agg({"t_sum": timeseries_aggs, "t_mean": timeseries_aggs})
+        ).agg(columns_to_agg)
         timeseries_df.columns = timeseries_df.columns.to_flat_index()
         timeseries_df = timeseries_df.rename(columns=timeseries_lookup).reset_index()
+
+        if weight_column != "":
+            timeseries_df["s_wavg_t_sum"] = (
+                timeseries_df["_weighted_sum"] / timeseries_df["_weight_sum"]
+            )
+            timeseries_df["s_wavg_t_mean"] = (
+                timeseries_df["_weighted_mean"] / timeseries_df["_weight_sum"]
+            )
+            timeseries_df["s_wavg_t_wavg"] = (
+                timeseries_df["_weighted_wavg"] / timeseries_df["_weight_sum"]
+            )
+            timeseries_df = timeseries_df.drop(
+                columns=["_weighted_sum", "_weighted_mean", "_weighted_wavg", "_weight_sum"]
+            )
+
         timeseries_df = (
             timeseries_df.repartition(npartitions=12)
             .groupby(["feature", "region_id"] + qualifier_col)
@@ -684,6 +827,7 @@ def compute_subtile_stats(subtile_df, dest, model_id, run_id, time_res, min_prec
     df = df.reset_index()
 
     # Compute mean from sum and count
+    # Note that s_mean_t_wavg is calulated in subtile_aggregation
     df = df.assign(
         s_mean_t_sum=df["s_sum_t_sum"] / df["s_count"],
         s_mean_t_mean=df["s_sum_t_mean"] / df["s_count"],

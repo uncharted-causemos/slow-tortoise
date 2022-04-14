@@ -1,7 +1,6 @@
 from dask import delayed
 from typing import Tuple
 import dask.dataframe as dd
-import dask.bytes as db
 import pandas as pd
 import numpy as np
 import os
@@ -266,7 +265,7 @@ def save_raw_data(df, dest, time_res, model_id, run_id, raw_count_threshold):
 
 
 @task(log_stdout=True)
-def validate_and_fix(df, fill_timestamp) -> Tuple[dd.DataFrame, int, int, int]:
+def validate_and_fix(df, weight_column, fill_timestamp) -> Tuple[dd.DataFrame, str, int, int, int]:
     # Drop a column if all values are null
     exclude_columns = set(["timestamp", "lat", "lng", "feature", "value"])
     null_cols = get_null_or_empty_cols(df)
@@ -283,6 +282,12 @@ def validate_and_fix(df, fill_timestamp) -> Tuple[dd.DataFrame, int, int, int]:
         if col not in cols_to_drop:
             df[col] = df[col].str.replace("//", "")
 
+    if weight_column not in df.columns.to_list():
+        weight_column = ""  # rest of the checks in the script will use this
+    elif weight_column != "":
+        df[weight_column] = dd.to_numeric(df[weight_column], errors="coerce")
+        df = df.fillna(value={weight_column: 0}).astype({weight_column: "float64"})
+
     # Fill missing timestamp values (0 by default)
     num_missing_ts = int(df["timestamp"].isna().sum().compute().item())
     df["timestamp"] = df["timestamp"].fillna(value=fill_timestamp)
@@ -292,19 +297,19 @@ def validate_and_fix(df, fill_timestamp) -> Tuple[dd.DataFrame, int, int, int]:
     df = df[df["timestamp"] < MAX_TIMESTAMP]
 
     num_missing_val = int(df["value"].isna().sum().compute().item())
-    return (df, num_missing_ts, num_invalid_ts, num_missing_val)
+    return (df, weight_column, num_missing_ts, num_invalid_ts, num_missing_val)
 
 
-@task(skip_on_upstream_skip=False)
-def temporal_aggregation(df, time_res, should_run):
+@task(log_stdout=True, skip_on_upstream_skip=False)
+def temporal_aggregation(df, time_res, should_run, weight_column):
     if should_run is False:
         raise SKIP(f"Aggregating for resolution {time_res} was not requested")
-    return run_temporal_aggregation(df, time_res)
+    return run_temporal_aggregation(df, time_res, weight_column)
 
 
 @task(log_stdout=True)
 def compute_timeseries_as_csv(
-    df, dest, time_res, model_id, run_id, qualifier_map, qualifer_columns
+    df, dest, time_res, model_id, run_id, qualifier_map, qualifer_columns, weight_column
 ):
     qualifier_cols = [*qualifer_columns, []]  # [] is the default case of ignoring qualifiers
 
@@ -337,11 +342,65 @@ def compute_timeseries_as_csv(
             "s_mean_t_mean",
         ]
 
+        aggregates_to_compute = {"t_sum": timeseries_aggs, "t_mean": timeseries_aggs}
+        if weight_column != "":
+            timeseries_df["_weighted_sum"] = timeseries_df["t_sum"] * timeseries_df[weight_column]
+            timeseries_df["_weighted_mean"] = timeseries_df["t_mean"] * timeseries_df[weight_column]
+            timeseries_df["_weighted_wavg"] = timeseries_df["t_wavg"] * timeseries_df[weight_column]
+
+            aggregates_to_compute["_weighted_sum"] = ["sum"]
+            aggregates_to_compute["_weighted_mean"] = ["sum"]
+            aggregates_to_compute["_weighted_wavg"] = ["sum"]
+            aggregates_to_compute[weight_column] = ["sum"]
+            aggregates_to_compute["t_wavg"] = timeseries_aggs
+
+            timeseries_lookup.update(
+                {
+                    # wavg of temporal
+                    ("_weighted_sum", "sum"): "_weighted_sum",
+                    ("_weighted_mean", "sum"): "_weighted_mean",
+                    ("_weighted_wavg", "sum"): "_weighted_wavg",
+                    (weight_column, "sum"): "_weight_sum",
+                    # spatial agg of wavg
+                    ("t_wavg", "min"): "s_min_t_wavg",
+                    ("t_wavg", "max"): "s_max_t_wavg",
+                    ("t_wavg", "sum"): "s_sum_t_wavg",
+                    ("t_wavg", "mean"): "s_mean_t_wavg",
+                }
+            )
+            timeseries_agg_columns.extend(
+                [
+                    "s_min_t_wavg",
+                    "s_max_t_wavg",
+                    "s_sum_t_wavg",
+                    "s_mean_t_wavg",
+                    # next 3 columns are computed below
+                    "s_wavg_t_sum",
+                    "s_wavg_t_mean",
+                    "s_wavg_t_wavg",
+                ]
+            )
+
         timeseries_df = timeseries_df.groupby(["feature", "timestamp"] + qualifier_col).agg(
-            {"t_sum": timeseries_aggs, "t_mean": timeseries_aggs}
+            aggregates_to_compute
         )
         timeseries_df.columns = timeseries_df.columns.to_flat_index()
         timeseries_df = timeseries_df.rename(columns=timeseries_lookup).reset_index()
+
+        if weight_column != "":
+            timeseries_df["s_wavg_t_sum"] = (
+                timeseries_df["_weighted_sum"] / timeseries_df["_weight_sum"]
+            )
+            timeseries_df["s_wavg_t_mean"] = (
+                timeseries_df["_weighted_mean"] / timeseries_df["_weight_sum"]
+            )
+            timeseries_df["s_wavg_t_wavg"] = (
+                timeseries_df["_weighted_wavg"] / timeseries_df["_weight_sum"]
+            )
+            timeseries_df = timeseries_df.drop(
+                columns=["_weighted_sum", "_weighted_mean", "_weighted_wavg", "_weight_sum"]
+            )
+
         timeseries_df = timeseries_df.groupby(["feature"]).apply(
             lambda x: save_timeseries_as_csv(
                 x,
@@ -366,7 +425,7 @@ def compute_timeseries_as_csv(
 
 @task(log_stdout=True)
 def compute_regional_aggregation_to_csv(
-    input_df, dest, time_res, model_id, run_id, qualifier_map, qualifer_columns
+    input_df, dest, time_res, model_id, run_id, qualifier_map, qualifer_columns, weight_column
 ):
     qualifier_cols = [*qualifer_columns, []]  # [] is the default case of ignoring qualifiers
 
@@ -376,6 +435,11 @@ def compute_regional_aggregation_to_csv(
     df.columns = df.columns.str.replace("t_sum", "s_sum_t_sum").str.replace(
         "t_mean", "s_sum_t_mean"
     )
+    if weight_column != "":
+        df.columns = df.columns.str.replace("t_wavg", "s_sum_t_wavg")
+    else:
+        df["s_sum_t_wavg"] = 0
+
     df["s_count"] = 1
     df = df.reset_index()
 
@@ -391,18 +455,71 @@ def compute_regional_aggregation_to_csv(
     for qualifier_col in qualifier_cols:
         qualifier_df = df.copy()
 
+        aggregates_to_compute = {
+            "s_sum_t_sum": ["sum"],
+            "s_sum_t_mean": ["sum"],
+            "s_sum_t_wavg": ["sum"],
+            "s_count": ["sum"],
+        }
+
+        rename_lookup = {
+            ("s_sum_t_sum", "sum"): "s_sum_t_sum",
+            ("s_sum_t_mean", "sum"): "s_sum_t_mean",
+            ("s_sum_t_wavg", "sum"): "s_sum_t_wavg",
+            ("s_count", "sum"): "s_count",
+        }
+
+        select_cols = (
+            ["feature", "timestamp", "s_sum_t_sum", "s_sum_t_mean", "s_sum_t_wavg", "s_count"]
+            + regions_cols
+            + qualifier_col
+        )
+
+        if weight_column != "":
+            qualifier_df["_weighted_sum"] = (
+                qualifier_df["s_sum_t_sum"] * qualifier_df[weight_column]
+            )
+            qualifier_df["_weighted_mean"] = (
+                qualifier_df["s_sum_t_mean"] * qualifier_df[weight_column]
+            )
+            qualifier_df["_weighted_wavg"] = (
+                qualifier_df["s_sum_t_wavg"] * qualifier_df[weight_column]
+            )
+
+            aggregates_to_compute["_weighted_sum"] = ["sum"]
+            aggregates_to_compute["_weighted_mean"] = ["sum"]
+            aggregates_to_compute["_weighted_wavg"] = ["sum"]
+            aggregates_to_compute[weight_column] = ["sum"]
+
+            rename_lookup.update(
+                {
+                    ("_weighted_sum", "sum"): "_weighted_sum",
+                    ("_weighted_mean", "sum"): "_weighted_mean",
+                    ("_weighted_wavg", "sum"): "_weighted_wavg",
+                    (weight_column, "sum"): "_weight_sum",
+                }
+            )
+            select_cols.extend(["_weighted_sum", "_weighted_mean", "_weighted_wavg", weight_column])
+
         # Region aggregation at the highest admin level
         qualifier_df = (
-            qualifier_df[
-                ["feature", "timestamp", "s_sum_t_sum", "s_sum_t_mean", "s_count"]
-                + regions_cols
-                + qualifier_col
-            ]
+            qualifier_df[select_cols]
             .groupby(["feature", "timestamp"] + regions_cols + qualifier_col)
-            .agg(["sum"])
+            .agg(aggregates_to_compute)
         )
-        qualifier_df.columns = qualifier_df.columns.droplevel(1)
-        qualifier_df = qualifier_df.reset_index()
+
+        # Rename columns
+        qualifier_df.columns = qualifier_df.columns.to_flat_index()
+        qualifier_df = qualifier_df.rename(columns=rename_lookup).reset_index()
+
+        # This is done later in write_regional_aggregation_csv and save_regional_qualifiers_to_csv
+        # if weight_column != "":
+        #     timeseries_df["s_wavg_t_sum"] = timeseries_df["_weighted_sum"] / timeseries_df["_weight_sum"]
+        #     timeseries_df["s_wavg_t_mean"] = timeseries_df["_weighted_mean"] / timeseries_df["_weight_sum"]
+        #     timeseries_df["s_wavg_t_wavg"] = timeseries_df["_weighted_wavg"] / timeseries_df["_weight_sum"]
+        #     timeseries_df = timeseries_df.drop(
+        #         columns=["_weighted_sum", "_weighted_mean", "_weighted_wavg", "_weight_sum"]
+        #     )
 
         # persist the result in memory at this point since this df is going to be used multiple times to compute for different regional levels
         qualifier_df = qualifier_df.persist()
@@ -421,6 +538,7 @@ def compute_regional_aggregation_to_csv(
                     time_res,
                     model_id,
                     run_id,
+                    weight_column,
                     f"regional/{regions_cols[level]}",
                 )
 
@@ -430,8 +548,14 @@ def compute_regional_aggregation_to_csv(
                 "region_id",
                 "s_sum_t_sum",
                 "s_sum_t_mean",
+                "s_sum_t_wavg",
                 "s_count",
             ] + qualifier_col
+            if weight_column != "":
+                desired_columns.extend(
+                    ["_weighted_sum", "_weighted_mean", "_weighted_wavg", "_weight_sum"]
+                )
+
             save_df = save_df[desired_columns].groupby(["feature", "timestamp"]).agg(list)
 
             save_df = save_df.reset_index()
@@ -448,6 +572,7 @@ def compute_regional_aggregation_to_csv(
                         model_id,
                         run_id,
                         time_res,
+                        weight_column,
                         WRITE_TYPES[DEST_TYPE],
                         region_level=regions_cols[level],
                     ),
@@ -464,6 +589,7 @@ def compute_regional_aggregation_to_csv(
                         model_id,
                         run_id,
                         time_res,
+                        weight_column,
                         qualifier_map,
                         WRITE_TYPES[DEST_TYPE],
                         region_level=regions_cols[level],
@@ -475,10 +601,13 @@ def compute_regional_aggregation_to_csv(
 
 
 @task(log_stdout=True)
-def get_qualifier_columns(df):
+def get_qualifier_columns(df, weight_col):
     base_cols = REQUIRED_COLS
     all_cols = df.columns.to_list()
+    if weight_col in all_cols:
+        all_cols.remove(weight_col)
     qualifier_cols = [[col] for col in set(all_cols) - base_cols]
+
     return qualifier_cols
 
 
@@ -493,6 +622,7 @@ def compute_regional_timeseries(
     qualifier_columns,
     qualifier_counts,
     qualifier_thresholds,
+    weight_column,
 ):
     max_qualifier_count = qualifier_thresholds["regional_timeseries_count"]
     max_level = qualifier_thresholds["regional_timeseries_max_level"]
@@ -517,12 +647,13 @@ def compute_regional_timeseries(
             region_level,
             new_qualifier_map,
             qualifier_cols,
+            weight_column,
             WRITE_TYPES[DEST_TYPE],
         )
 
 
 @task(log_stdout=True)
-def subtile_aggregation(df, should_run):
+def subtile_aggregation(df, weight_column, should_run):
     if should_run is False:
         raise SKIP("Tiling was not requested")
 
@@ -532,11 +663,9 @@ def subtile_aggregation(df, should_run):
         lambda x: deg2num(x.lat, x.lng, MAX_SUBTILE_PRECISION), axis=1, meta=(None, "object")
     )
     subtile_df = df.assign(subtile=stile)
-    subtile_df = (
-        subtile_df[["feature", "timestamp", "subtile", "t_sum", "t_mean"]]
-        .groupby(["feature", "timestamp", "subtile"])
-        .agg(["sum", "count"])
-    )
+
+    subset_cols = ["feature", "timestamp", "subtile", "t_sum", "t_mean"]
+    aggregates_to_compute = {"t_sum": ["sum", "count"], "t_mean": ["sum", "count"]}
 
     # Rename columns
     spatial_lookup = {
@@ -545,10 +674,52 @@ def subtile_aggregation(df, should_run):
         ("t_mean", "sum"): "s_sum_t_mean",
         ("t_mean", "count"): "s_count",
     }
+
+    if weight_column != "":
+        subtile_df["_weighted_sum"] = subtile_df["t_sum"] * subtile_df[weight_column]
+        subtile_df["_weighted_mean"] = subtile_df["t_mean"] * subtile_df[weight_column]
+        subtile_df["_weighted_wavg"] = subtile_df["t_wavg"] * subtile_df[weight_column]
+
+        aggregates_to_compute["_weighted_sum"] = ["sum"]
+        aggregates_to_compute["_weighted_mean"] = ["sum"]
+        aggregates_to_compute["_weighted_wavg"] = ["sum"]
+        aggregates_to_compute[weight_column] = ["sum"]
+        aggregates_to_compute["t_wavg"] = ["sum", "mean"]  # mean can be caluculated here directly
+
+        spatial_lookup.update(
+            {
+                # wavg of temporal
+                ("_weighted_sum", "sum"): "_weighted_sum",
+                ("_weighted_mean", "sum"): "_weighted_mean",
+                ("_weighted_wavg", "sum"): "_weighted_wavg",
+                (weight_column, "sum"): "_weight_sum",
+                # spatial agg of wavg
+                ("t_wavg", "sum"): "s_sum_t_wavg",
+                ("t_wavg", "mean"): "s_mean_t_wavg",
+            }
+        )
+        subset_cols.extend(
+            ["t_wavg", "_weighted_sum", "_weighted_mean", "_weighted_wavg", weight_column]
+        )
+
+    subtile_df = (
+        subtile_df[subset_cols]
+        .groupby(["feature", "timestamp", "subtile"])
+        .agg(aggregates_to_compute)
+    )
     subtile_df.columns = subtile_df.columns.to_flat_index()
     subtile_df = (
-        subtile_df.rename(columns=spatial_lookup).drop(columns="s_count_t_sum").reset_index()
+        subtile_df.rename(columns=spatial_lookup).drop(columns=["s_count_t_sum"]).reset_index()
     )
+
+    if weight_column != "":
+        subtile_df["s_wavg_t_sum"] = subtile_df["_weighted_sum"] / subtile_df["_weight_sum"]
+        subtile_df["s_wavg_t_mean"] = subtile_df["_weighted_mean"] / subtile_df["_weight_sum"]
+        subtile_df["s_wavg_t_wavg"] = subtile_df["_weighted_wavg"] / subtile_df["_weight_sum"]
+        subtile_df = subtile_df.drop(
+            columns=["_weighted_sum", "_weighted_mean", "_weighted_wavg", "_weight_sum"]
+        )
+
     return subtile_df
 
 
@@ -591,18 +762,30 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
 
 
 @task(log_stdout=True)
-def compute_stats(df, dest, time_res, model_id, run_id, filename):
+def compute_stats(df, dest, time_res, model_id, run_id):
     compute_subtile_stats(
-        df, dest, model_id, run_id, time_res, MIN_SUBTILE_PRECISION, WRITE_TYPES[DEST_TYPE]
+        df,
+        dest,
+        model_id,
+        run_id,
+        time_res,
+        MIN_SUBTILE_PRECISION,
+        WRITE_TYPES[DEST_TYPE],
     )
 
 
-def assist_compute_stats(df, dest, time_res, model_id, run_id, filename):
+def assist_compute_stats(df, dest, time_res, model_id, run_id, weight_column, filename):
     # Compute mean and get new dataframe with mean columns added
     stats_df = df.assign(
         s_mean_t_sum=df["s_sum_t_sum"] / df["s_count"],
         s_mean_t_mean=df["s_sum_t_mean"] / df["s_count"],
+        s_mean_t_wavg=df["s_sum_t_wavg"] / df["s_count"],
     )
+    if weight_column != "":
+        stats_df["s_wavg_t_sum"] = stats_df["_weighted_sum"] / stats_df["_weight_sum"]
+        stats_df["s_wavg_t_mean"] = stats_df["_weighted_mean"] / stats_df["_weight_sum"]
+        stats_df["s_wavg_t_wavg"] = stats_df["_weighted_wavg"] / stats_df["_weight_sum"]
+
     # Stats aggregation
     stats_aggs = ["min", "max"]
     stats_lookup = {
@@ -626,14 +809,53 @@ def assist_compute_stats(df, dest, time_res, model_id, run_id, filename):
         "max_s_mean_t_mean",
     ]
 
-    stats_df = stats_df.groupby(["feature"]).agg(
-        {
-            "s_sum_t_sum": stats_aggs,
-            "s_mean_t_sum": stats_aggs,
-            "s_sum_t_mean": stats_aggs,
-            "s_mean_t_mean": stats_aggs,
-        }
-    )
+    aggregations_to_compute = {
+        "s_sum_t_sum": stats_aggs,
+        "s_mean_t_sum": stats_aggs,
+        "s_sum_t_mean": stats_aggs,
+        "s_mean_t_mean": stats_aggs,
+    }
+
+    if weight_column != "":
+        stats_lookup.update(
+            {
+                ("s_wavg_t_mean", "min"): "min_s_wavg_t_mean",
+                ("s_wavg_t_mean", "max"): "max_s_wavg_t_mean",
+                ("s_wavg_t_sum", "min"): "min_s_wavg_t_sum",
+                ("s_wavg_t_sum", "max"): "max_s_wavg_t_sum",
+                ("s_sum_t_wavg", "min"): "min_s_sum_t_wavg",
+                ("s_sum_t_wavg", "max"): "max_s_sum_t_wavg",
+                ("s_mean_t_wavg", "min"): "min_s_mean_t_wavg",
+                ("s_mean_t_wavg", "max"): "max_s_mean_t_wavg",
+                ("s_wavg_t_wavg", "min"): "min_s_wavg_t_wavg",
+                ("s_wavg_t_wavg", "max"): "max_s_wavg_t_wavg",
+            }
+        )
+        stats_agg_columns.extend(
+            [
+                "min_s_wavg_t_sum",
+                "max_s_wavg_t_sum",
+                "min_s_wavg_t_mean",
+                "max_s_wavg_t_mean",
+                "min_s_sum_t_wavg",
+                "max_s_sum_t_wavg",
+                "min_s_mean_t_wavg",
+                "max_s_mean_t_wavg",
+                "min_s_wavg_t_wavg",
+                "max_s_wavg_t_wavg",
+            ]
+        )
+        aggregations_to_compute.update(
+            {
+                "s_wavg_t_sum": stats_aggs,
+                "s_wavg_t_mean": stats_aggs,
+                "s_sum_t_wavg": stats_aggs,
+                "s_mean_t_wavg": stats_aggs,
+                "s_wavg_t_wavg": stats_aggs,
+            }
+        )
+
+    stats_df = stats_df.groupby(["feature"]).agg(aggregations_to_compute)
     stats_df.columns = stats_df.columns.to_flat_index()
     stats_df = stats_df.rename(columns=stats_lookup).reset_index()
     stats_df = stats_df.groupby(["feature"]).apply(
@@ -653,7 +875,9 @@ def assist_compute_stats(df, dest, time_res, model_id, run_id, filename):
 
 
 @task(log_stdout=True)
-def compute_output_summary(df):
+def compute_output_summary(df, weight_column):
+    timeseries_df = df.copy()
+
     # Timeseries aggregation
     timeseries_aggs = ["min", "max", "sum", "mean"]
     timeseries_lookup = {
@@ -677,11 +901,62 @@ def compute_output_summary(df):
         "s_mean_t_mean",
     ]
 
-    timeseries_df = df.groupby(["feature", "timestamp"]).agg(
-        {"t_sum": timeseries_aggs, "t_mean": timeseries_aggs}
-    )
+    aggregations_to_compute = {"t_sum": timeseries_aggs, "t_mean": timeseries_aggs}
+    if weight_column != "":
+        timeseries_df["_weighted_sum"] = timeseries_df["t_sum"] * timeseries_df[weight_column]
+        timeseries_df["_weighted_mean"] = timeseries_df["t_mean"] * timeseries_df[weight_column]
+        timeseries_df["_weighted_wavg"] = timeseries_df["t_wavg"] * timeseries_df[weight_column]
+
+        aggregations_to_compute["_weighted_sum"] = ["sum"]
+        aggregations_to_compute["_weighted_mean"] = ["sum"]
+        aggregations_to_compute["_weighted_wavg"] = ["sum"]
+        aggregations_to_compute[weight_column] = ["sum"]
+        aggregations_to_compute["t_wavg"] = timeseries_aggs
+
+        timeseries_lookup.update(
+            {
+                # wavg of temporal
+                ("_weighted_sum", "sum"): "_weighted_sum",
+                ("_weighted_mean", "sum"): "_weighted_mean",
+                ("_weighted_wavg", "sum"): "_weighted_wavg",
+                (weight_column, "sum"): "_weight_sum",
+                # spatial agg of wavg
+                ("t_wavg", "min"): "s_min_t_wavg",
+                ("t_wavg", "max"): "s_max_t_wavg",
+                ("t_wavg", "sum"): "s_sum_t_wavg",
+                ("t_wavg", "mean"): "s_mean_t_wavg",
+            }
+        )
+        timeseries_agg_columns.extend(
+            [
+                "s_min_t_wavg",
+                "s_max_t_wavg",
+                "s_sum_t_wavg",
+                "s_mean_t_wavg",
+                # next 3 columns are computed below
+                "s_wavg_t_sum",
+                "s_wavg_t_mean",
+                "s_wavg_t_wavg",
+            ]
+        )
+
+    timeseries_df = timeseries_df.groupby(["feature", "timestamp"]).agg(aggregations_to_compute)
     timeseries_df.columns = timeseries_df.columns.to_flat_index()
     timeseries_df = timeseries_df.rename(columns=timeseries_lookup).reset_index()
+
+    if weight_column != "":
+        timeseries_df["s_wavg_t_sum"] = (
+            timeseries_df["_weighted_sum"] / timeseries_df["_weight_sum"]
+        )
+        timeseries_df["s_wavg_t_mean"] = (
+            timeseries_df["_weighted_mean"] / timeseries_df["_weight_sum"]
+        )
+        timeseries_df["s_wavg_t_wavg"] = (
+            timeseries_df["_weighted_wavg"] / timeseries_df["_weight_sum"]
+        )
+        timeseries_df = timeseries_df.drop(
+            columns=["_weighted_sum", "_weighted_mean", "_weighted_wavg", "_weight_sum"]
+        )
 
     summary = output_values_to_json_array(timeseries_df[["feature"] + timeseries_agg_columns])
     return summary
@@ -706,7 +981,11 @@ def record_results(
     num_missing_ts,
     num_invalid_ts,
     num_missing_val,
+    weight_column,
 ):
+    if compute_tiles == True:
+        region_columns.append("grid data")
+
     data = {
         "data_info": {
             "num_rows": num_rows,
@@ -720,6 +999,7 @@ def record_results(
             "has_tiles": compute_tiles,
             "has_monthly": compute_monthly,
             "has_annual": compute_annual,
+            "has_weights": weight_column != "",
         },
     }
     if summary_values is not None:
@@ -874,6 +1154,7 @@ with Flow(FLOW_NAME) as flow:
     indicator_bucket = Parameter("indicator_bucket", default=S3_DEFAULT_INDICATOR_BUCKET)
     model_bucket = Parameter("model_bucket", default=S3_DEFAULT_MODEL_BUCKET)
     fill_timestamp = Parameter("fill_timestamp", default=0)
+    weight_column = Parameter("weight_column", default="")
     # The thresholds are values that the pipeline uses for processing qualifiers
     # It tells the user what sort of data they can expect to be available
     # For ex, no regional_timeseries for qualifier with more than 100 values
@@ -916,9 +1197,11 @@ with Flow(FLOW_NAME) as flow:
     # ==== Save raw data =====
     rows_per_feature = save_raw_data(raw_df, dest, "raw", model_id, run_id, raw_count_threshold)
 
-    (df, num_missing_ts, num_invalid_ts, num_missing_val) = validate_and_fix(raw_df, fill_timestamp)
+    (df, weight_column, num_missing_ts, num_invalid_ts, num_missing_val) = validate_and_fix(
+        raw_df, weight_column, fill_timestamp
+    )
 
-    qualifier_columns = get_qualifier_columns(df)
+    qualifier_columns = get_qualifier_columns(df, weight_column)
 
     # ==== Compute lists of all gadm regions and qualifier values =====
     (region_columns, feature_list) = record_region_lists(df, dest, model_id, run_id)
@@ -930,9 +1213,16 @@ with Flow(FLOW_NAME) as flow:
     )
 
     # ==== Run aggregations based on monthly time resolution =====
-    monthly_data = temporal_aggregation(df, "month", compute_monthly)
+    monthly_data = temporal_aggregation(df, "month", compute_monthly, weight_column)
     month_ts_size = compute_timeseries_as_csv(
-        monthly_data, dest, "month", model_id, run_id, qualifier_map, qualifier_columns
+        monthly_data,
+        dest,
+        "month",
+        model_id,
+        run_id,
+        qualifier_map,
+        qualifier_columns,
+        weight_column,
     )
     compute_regional_timeseries(
         monthly_data,
@@ -944,25 +1234,37 @@ with Flow(FLOW_NAME) as flow:
         qualifier_columns,
         qualifier_counts,
         qualifier_thresholds,
+        weight_column,
     )
     monthly_csv_regional_df = compute_regional_aggregation_to_csv(
-        monthly_data, dest, "month", model_id, run_id, qualifier_map, qualifier_columns
+        monthly_data,
+        dest,
+        "month",
+        model_id,
+        run_id,
+        qualifier_map,
+        qualifier_columns,
+        weight_column,
     )
 
     monthly_spatial_data = subtile_aggregation(
-        monthly_data, compute_tiles, upstream_tasks=[month_ts_size]
+        monthly_data, weight_column, compute_tiles, upstream_tasks=[month_ts_size]
     )
-    month_stats_done = compute_stats(monthly_spatial_data, dest, "month", model_id, run_id, "stats")
+    month_stats_done = compute_stats(monthly_spatial_data, dest, "month", model_id, run_id)
     month_done = compute_tiling(
         monthly_spatial_data, dest, "month", model_id, run_id, upstream_tasks=[month_stats_done]
     )
 
     # ==== Run aggregations based on annual time resolution =====
     annual_data = temporal_aggregation(
-        df, "year", compute_annual, upstream_tasks=[monthly_csv_regional_df, month_done]
+        df,
+        "year",
+        compute_annual,
+        weight_column,
+        upstream_tasks=[monthly_csv_regional_df, month_done],
     )
     year_ts_size = compute_timeseries_as_csv(
-        annual_data, dest, "year", model_id, run_id, qualifier_map, qualifier_columns
+        annual_data, dest, "year", model_id, run_id, qualifier_map, qualifier_columns, weight_column
     )
     compute_regional_timeseries(
         annual_data,
@@ -974,15 +1276,16 @@ with Flow(FLOW_NAME) as flow:
         qualifier_columns,
         qualifier_counts,
         qualifier_thresholds,
+        weight_column,
     )
     annual_csv_regional_df = compute_regional_aggregation_to_csv(
-        annual_data, dest, "year", model_id, run_id, qualifier_map, qualifier_columns
+        annual_data, dest, "year", model_id, run_id, qualifier_map, qualifier_columns, weight_column
     )
 
     annual_spatial_data = subtile_aggregation(
-        annual_data, compute_tiles, upstream_tasks=[year_ts_size]
+        annual_data, weight_column, compute_tiles, upstream_tasks=[year_ts_size]
     )
-    year_stats_done = compute_stats(annual_spatial_data, dest, "year", model_id, run_id, "stats")
+    year_stats_done = compute_stats(annual_spatial_data, dest, "year", model_id, run_id)
     year_done = compute_tiling(
         annual_spatial_data, dest, "year", model_id, run_id, upstream_tasks=[year_stats_done]
     )
@@ -992,9 +1295,10 @@ with Flow(FLOW_NAME) as flow:
         df,
         "all",
         compute_summary,
+        weight_column,
         upstream_tasks=[year_done, year_ts_size, annual_csv_regional_df],
     )
-    summary_values = compute_output_summary(summary_data)
+    summary_values = compute_output_summary(summary_data, weight_column)
 
     # ==== Record the results in Minio =====
     record_results(
@@ -1015,6 +1319,7 @@ with Flow(FLOW_NAME) as flow:
         num_missing_ts,
         num_invalid_ts,
         num_missing_val,
+        weight_column,
     )
 
     # TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful.
@@ -1095,38 +1400,38 @@ if __name__ == "__main__" and LOCAL_RUN:
         #         "run_id": "9d7db850-0abe-486f-8979-b1e9ad2ef6ad"
         #     }
         # )
-        flow.run(  # Test combining multiple parquet files with different columns
-            parameters={
-                "compute_tiles": True,
-                "data_paths": [
-                    "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/f2818712-09f7-49c6-b920-ea21c764d1c7/f2818712-09f7-49c6-b920-ea21c764d1c7_84fd427f-3a7d-473f-aa25-0c0a150ca216.3.parquet.gzip",
-                    "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/f2818712-09f7-49c6-b920-ea21c764d1c7/f2818712-09f7-49c6-b920-ea21c764d1c7_84fd427f-3a7d-473f-aa25-0c0a150ca216.2.parquet.gzip",
-                    "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/f2818712-09f7-49c6-b920-ea21c764d1c7/f2818712-09f7-49c6-b920-ea21c764d1c7_84fd427f-3a7d-473f-aa25-0c0a150ca216.1.parquet.gzip",
-                ],
-                "is_indicator": False,
-                "model_id": "84fd427f-3a7d-473f-aa25-0c0a150ca216",
-                "qualifier_map": {
-                    "export [kcal]": [],
-                    "import [kcal]": [],
-                    "supply [kcal]": [],
-                    "Production [mt]": ["Year"],
-                    "Consumption [mt]": ["Year"],
-                    "Ending_stock [mt]": ["Year"],
-                    "production [kcal]": [],
-                    "World market_price [US$/mt]": ["Year"],
-                    "export per capita [kcal pc]": [],
-                    "import per capita [kcal pc]": [],
-                    "supply per capita [kcal pc]": [],
-                    "production change per capita [kcal pc]": [],
-                },
-                "qualifier_thresholds": {
-                    "max_count": 10000,
-                    "regional_timeseries_count": 100,
-                    "regional_timeseries_max_level": 1,
-                },
-                "run_id": "f2818712-09f7-49c6-b920-ea21c764d1c7",
-            }
-        )
+        # flow.run(  # Test combining multiple parquet files with different columns
+        #     parameters={
+        #         "compute_tiles": True,
+        #         "data_paths": [
+        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/f2818712-09f7-49c6-b920-ea21c764d1c7/f2818712-09f7-49c6-b920-ea21c764d1c7_84fd427f-3a7d-473f-aa25-0c0a150ca216.3.parquet.gzip",
+        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/f2818712-09f7-49c6-b920-ea21c764d1c7/f2818712-09f7-49c6-b920-ea21c764d1c7_84fd427f-3a7d-473f-aa25-0c0a150ca216.2.parquet.gzip",
+        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/f2818712-09f7-49c6-b920-ea21c764d1c7/f2818712-09f7-49c6-b920-ea21c764d1c7_84fd427f-3a7d-473f-aa25-0c0a150ca216.1.parquet.gzip",
+        #         ],
+        #         "is_indicator": False,
+        #         "model_id": "84fd427f-3a7d-473f-aa25-0c0a150ca216",
+        #         "qualifier_map": {
+        #             "export [kcal]": [],
+        #             "import [kcal]": [],
+        #             "supply [kcal]": [],
+        #             "Production [mt]": ["Year"],
+        #             "Consumption [mt]": ["Year"],
+        #             "Ending_stock [mt]": ["Year"],
+        #             "production [kcal]": [],
+        #             "World market_price [US$/mt]": ["Year"],
+        #             "export per capita [kcal pc]": [],
+        #             "import per capita [kcal pc]": [],
+        #             "supply per capita [kcal pc]": [],
+        #             "production change per capita [kcal pc]": [],
+        #         },
+        #         "qualifier_thresholds": {
+        #             "max_count": 10000,
+        #             "regional_timeseries_count": 100,
+        #             "regional_timeseries_max_level": 1,
+        #         },
+        #         "run_id": "f2818712-09f7-49c6-b920-ea21c764d1c7",
+        #     }
+        # )
         # flow.run(
         #     parameters=dict(  # Invalid timestamps
         #         compute_tiles=True,
@@ -1144,5 +1449,50 @@ if __name__ == "__main__" and LOCAL_RUN:
         #         model_id="_hierarchy-test",
         #         run_id="indicator",
         #         data_paths=["s3://test/_hierarchy-test.bin"],
+        #     )
+        # )
+        flow.run(  # For testing weight column
+            parameters=dict(  # Weights small
+                compute_tiles=True,
+                qualifier_map={"sam_rate": ["qual_1"], "gam_rate": ["qual_1"]},
+                weight_column="weights",
+                model_id="_weight-test-small",
+                run_id="indicator",
+                data_paths=["s3://test/weight-col.bin"],
+            )
+        )
+        # flow.run(
+        #     parameters=dict(  # Weights
+        #         compute_tiles=True,
+        #         is_indicator=True,
+        #         qualifier_map={
+        #             "Surveyed Area": ["Locust Presence", "Control Pesticide Name"],
+        #             "Control Area Treated": ["Control Pesticide Name"],
+        #             "Estimated Control Kill (Mortality Rate)": ["Control Pesticide Name"],
+        #         },
+        #         weight_column="Locust Breeding",
+        #         model_id="_weight-test-1",
+        #         run_id="indicator",
+        #         data_paths=[
+        #             "https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/39f7959d-a63e-4db4-a54d-24c66184cf82/39f7959d-a63e-4db4-a54d-24c66184cf82.parquet.gzip"
+        #         ],
+        #     )
+        # )
+        # flow.run(
+        #     parameters=dict(  # Real weights
+        #         compute_tiles=True,
+        #         is_indicator=False,
+        #         qualifier_map={
+        #             "HWAM_AVE": ["year", "mgn", "season"],
+        #             "production": ["year", "mgn", "season"],
+        #             "crop_failure_area": ["year", "mgn", "season"],
+        #             "TOTAL_NITROGEN_APPLIED": ["year", "mgn", "season"]
+        #         },
+        #         weight_column="HAREA_TOT",
+        #         model_id="2af38a88-aa34-4f4a-94f6-a3e1e6630833",
+        #         run_id="eba6ca6b-8c7f-44d1-b008-4349491cabf5",
+        #         data_paths=[
+        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/eba6ca6b-8c7f-44d1-b008-4349491cabf5/eba6ca6b-8c7f-44d1-b008-4349491cabf5_2af38a88-aa34-4f4a-94f6-a3e1e6630833.1.parquet.gzip"
+        #         ],
         #     )
         # )
