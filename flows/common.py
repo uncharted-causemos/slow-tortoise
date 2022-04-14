@@ -833,7 +833,7 @@ def compute_subtile_stats(subtile_df, dest, model_id, run_id, time_res, min_prec
         s_mean_t_mean=df["s_sum_t_mean"] / df["s_count"],
     )
     # Extract zoom level from subtile cooridnates
-    zoom = df["subtile"].apply(lambda x: x[0], meta=("subtile", "object"))
+    zoom = df["subtile"].apply(lambda x: x[0], meta=("subtile", "int8"))
     df = df.assign(zoom=zoom).drop(["subtile", "s_count"], axis=1)
     # Group by zoom level and compute min and max value
     df = df.groupby(["feature", "timestamp", "zoom"]).agg(["min", "max"])
