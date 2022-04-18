@@ -1,0 +1,10 @@
+{
+    "thresholds": {
+        "max_count": 10000,
+        "regional_timeseries_count": 100,
+        "regional_timeseries_max_level": 1
+    },
+    "counts": {
+        "camp": 9
+    }
+}

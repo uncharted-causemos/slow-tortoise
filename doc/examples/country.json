@@ -1,0 +1,12 @@
+{
+    "0": {
+        "min_s_sum_t_sum": 13,
+        "max_s_sum_t_sum": 17614,
+        "min_s_mean_t_sum": 13,
+        "max_s_mean_t_sum": 8807,
+        "min_s_sum_t_mean": 0.4814814815,
+        "max_s_sum_t_mean": 607.3793103448,
+        "min_s_mean_t_mean": 0.4814814815,
+        "max_s_mean_t_mean": 303.6896551724
+    }
+}
