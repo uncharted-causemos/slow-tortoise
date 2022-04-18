@@ -9,7 +9,7 @@ Note: our convention is that indicators always have a single `run_id` with the v
         \- info
           \- qualifiers
             -- {qualifier}.json
-          -- region_list.json
+          -- region_lists.json
           -- qualifier_counts.json
         \- raw
           -- raw.csv
@@ -52,7 +52,7 @@ Note: our convention is that indicators always have a single `run_id` with the v
 
 ### Examples
 - Qualifier list: [{qualifier}.json](./examples/camp.json)
-- Region list: [region_list.json](./examples/region_list.json)
+- Region lists: [region_lists.json](./examples/region_lists.json)
 - Qualifier counts: [qualifier_counts.json](./examples/qualifier_counts.json)
 - Raw data: [raw.csv](./examples/raw.csv)
 - Pipeline results: [results.json](./examples/results.json)

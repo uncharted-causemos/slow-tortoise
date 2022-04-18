@@ -31,7 +31,7 @@ In VS Code, you can configure it with the `Python: Select Linter` action.
 ---
 
 ## Development
-This will locally run the `flow.run` configurations at the bottom of [data_pipeline.py](./flows/data_pipeline.py). The results are written to minio-dev.
+This will locally run the `flow.run` configurations at the bottom of [data_pipeline.py](./flows/data_pipeline.py). The results are written to minio-dev. See the folder structure [here](./doc/minio-folder-structure.md).
 ```
 cd flows
 ./run_local.sh
