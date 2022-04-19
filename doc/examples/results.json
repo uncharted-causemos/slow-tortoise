@@ -1,0 +1,120 @@
+{
+    "data_info": {
+        "num_rows": 7803,
+        "num_rows_per_feature": {
+            "data": 1314,
+            "error": 1233,
+            "max": 1314,
+            "mean": 1314,
+            "median": 1314,
+            "min": 1314
+        },
+        "num_missing_ts": 0,
+        "num_invalid_ts": 0,
+        "num_missing_val": 0,
+        "region_levels": [
+            "country",
+            "admin1",
+            "admin2",
+            "admin3",
+            "grid data"
+        ],
+        "features": [
+            "data",
+            "error",
+            "max",
+            "mean",
+            "median",
+            "min"
+        ],
+        "raw_count_threshold": 10000,
+        "has_tiles": true,
+        "has_monthly": true,
+        "has_annual": true,
+        "has_weights": false,
+        "month_timeseries_size": {
+            "data": 5,
+            "error": 5,
+            "max": 5,
+            "mean": 5,
+            "median": 5,
+            "min": 5
+        },
+        "year_timeseries_size": {
+            "data": 2,
+            "error": 2,
+            "max": 2,
+            "mean": 2,
+            "median": 2,
+            "min": 2
+        }
+    },
+    "output_agg_values": [
+        {
+            "name": "data",
+            "s_min_t_sum": 132,
+            "s_max_t_sum": 53854,
+            "s_sum_t_sum": 76269,
+            "s_mean_t_sum": 8474.3333333333,
+            "s_min_t_mean": 0.904109589,
+            "s_max_t_mean": 368.8630136986,
+            "s_sum_t_mean": 522.3904109589,
+            "s_mean_t_mean": 58.0433789954
+        },
+        {
+            "name": "error",
+            "s_min_t_sum": 120.8636003733,
+            "s_max_t_sum": 12074,
+            "s_sum_t_sum": 49323.6918043345,
+            "s_mean_t_sum": 5480.4102004816,
+            "s_min_t_mean": 0.8335420715,
+            "s_max_t_mean": 91.4696969697,
+            "s_sum_t_mean": 372.9727462736,
+            "s_mean_t_mean": 41.4414162526
+        },
+        {
+            "name": "max",
+            "s_min_t_sum": 3908,
+            "s_max_t_sum": 14616,
+            "s_sum_t_sum": 79569,
+            "s_mean_t_sum": 8841,
+            "s_min_t_mean": 26.7671232877,
+            "s_max_t_mean": 100.1095890411,
+            "s_sum_t_mean": 544.9931506849,
+            "s_mean_t_mean": 60.5547945205
+        },
+        {
+            "name": "mean",
+            "s_min_t_sum": 2912.3999857455,
+            "s_max_t_sum": 12617.0000277162,
+            "s_sum_t_sum": 66696.9000423104,
+            "s_mean_t_sum": 7410.7666713678,
+            "s_min_t_mean": 19.9479451078,
+            "s_max_t_mean": 86.417808409,
+            "s_sum_t_mean": 456.8280824816,
+            "s_mean_t_mean": 50.7586758313
+        },
+        {
+            "name": "median",
+            "s_min_t_sum": 3008.5,
+            "s_max_t_sum": 12395.5,
+            "s_sum_t_sum": 66788,
+            "s_mean_t_sum": 7420.8888888889,
+            "s_min_t_mean": 20.6061643836,
+            "s_max_t_mean": 84.9006849315,
+            "s_sum_t_mean": 457.4520547945,
+            "s_mean_t_mean": 50.8280060883
+        },
+        {
+            "name": "min",
+            "s_min_t_sum": 1810,
+            "s_max_t_sum": 11168,
+            "s_sum_t_sum": 55621,
+            "s_mean_t_sum": 6180.1111111111,
+            "s_min_t_mean": 12.397260274,
+            "s_max_t_mean": 76.4931506849,
+            "s_sum_t_mean": 380.9657534247,
+            "s_mean_t_mean": 42.3295281583
+        }
+    ]
+}

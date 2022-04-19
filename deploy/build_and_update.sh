@@ -13,6 +13,9 @@ set -e
 SCRIPT_DIR="$(dirname "$0")"
 pushd $SCRIPT_DIR
 
+echo "Stopping request-queue"
+curl -X PUT http://10.65.18.52:4040/data-pipeline/stop
+
 echo "Stopping swarms..."
 ssh dask-swarm 'docker stack rm dask_swarm'
 ssh dask-swarm-big 'docker stack rm big_dask_swarm'
@@ -33,6 +36,9 @@ ssh dask-swarm-big 'docker stack deploy --compose-file docker-compose.yml big_da
 
 echo "Registering with Prefect..."
 ./register_flows.sh
+
+echo "Starting request-queue"
+curl -X PUT http://10.65.18.52:4040/data-pipeline/start
 
 popd
 echo "SUCCESS!"
