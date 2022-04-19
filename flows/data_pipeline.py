@@ -183,9 +183,6 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
 
             df = dd.concat(dfs, ignore_unknown_divisions=True).repartition(npartitions=12)
 
-    # Remove infinities because they cause problems in some aggregation types (e.g. mean)
-    df = df.replace({"value": [np.inf, -np.inf]}, np.nan)
-
     print(df.dtypes)
     print(df.head())
 
@@ -274,6 +271,9 @@ def validate_and_fix(df, weight_column, fill_timestamp) -> Tuple[dd.DataFrame, s
     null_cols = get_null_or_empty_cols(df)
     cols_to_drop = list(null_cols - exclude_columns)
     df = df.drop(columns=cols_to_drop)
+
+    # Remove infinities because they cause problems in some aggregation types (e.g. mean)
+    df = df.replace({"value": [np.inf, -np.inf]}, np.nan)
 
     # In the remaining columns, fill all null values with "None"
     # TODO: When adding support for different qualifier roles, we will need to fill numeric roles with something else
