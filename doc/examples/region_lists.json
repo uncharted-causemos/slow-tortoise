@@ -1,0 +1,35 @@
+{
+    "country": [
+        "Sudan",
+        "Ethiopia",
+        "Djibouti",
+        "Eritrea"
+    ],
+    "admin1": [
+        "Sudan__Al Qadarif",
+        "Ethiopia__Amhara",
+        "Djibouti__Dikhil",
+        "Eritrea__Maekel",
+        "Sudan__Blue Nile"
+    ],
+    "admin2": [
+        "Sudan__Al Qadarif__Al Galabat",
+        "Ethiopia__Amhara__Mirab Gojjam",
+        "Djibouti__Dikhil__Yoboki",
+        "Ethiopia__Amhara__Semen Gondar",
+        "Sudan__Al Qadarif__Al Fushqa",
+        "Eritrea__Maekel__Senafe",
+        "Eritrea__Maekel__Tsorena",
+        "Sudan__Blue Nile__Ad Damazin"
+    ],
+    "admin3": [
+        "Sudan__Al Qadarif__Al Galabat__El Mogran",
+        "Ethiopia__Amhara__Mirab Gojjam__Bahir Dar Zuria",
+        "Djibouti__Dikhil__Yoboki__None",
+        "Ethiopia__Amhara__Semen Gondar__Gonder Zuria",
+        "Sudan__Al Qadarif__Al Fushqa__Wad El Heilu",
+        "Eritrea__Maekel__Senafe__None",
+        "Eritrea__Maekel__Tsorena__None",
+        "Sudan__Blue Nile__Ad Damazin__Ed Damazin"
+    ]
+}

@@ -1,4 +1,8 @@
 ## GraphQL queries with cURL
+---
+### **NOTE: In the Causemos stack, it is much simpler to interact with the request-queue**.
+#### See the Causemos Confluence for more info.
+---
 
 Prefect documentation [here](https://docs.prefect.io/orchestration/concepts/api.html)  
 To write your own query with curl just replace the GraphQL query in the `query` variable and leave the rest of the bash dark magic alone.  
