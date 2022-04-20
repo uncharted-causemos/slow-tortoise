@@ -62,9 +62,9 @@ See some of the existing notebooks used to develop previous features in the [not
 
 ## Deployment
 
-To deploy the datacube pipeline to the production Prefect environment run [flows/scripts/build_and_update.sh](./flows/scripts/build_and_update.sh)  
+To deploy the datacube pipeline to the production Prefect environment run [deploy/build_and_update.sh](./deploy/build_and_update.sh)
 ```
-cd ./flows/scripts
+cd ./deploy
 ./build_and_update.sh
 ```
 **NOTES:**
