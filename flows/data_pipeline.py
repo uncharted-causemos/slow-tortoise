@@ -272,6 +272,9 @@ def validate_and_fix(df, weight_column, fill_timestamp) -> Tuple[dd.DataFrame, s
     cols_to_drop = list(null_cols - exclude_columns)
     df = df.drop(columns=cols_to_drop)
 
+    # Remove infinities because they cause problems in some aggregation types (e.g. mean)
+    df = df.replace({"value": [np.inf, -np.inf]}, np.nan)
+
     # In the remaining columns, fill all null values with "None"
     # TODO: When adding support for different qualifier roles, we will need to fill numeric roles with something else
     remaining_columns = list(set(df.columns.to_list()) - exclude_columns - null_cols)
@@ -1451,16 +1454,16 @@ if __name__ == "__main__" and LOCAL_RUN:
         #         data_paths=["s3://test/_hierarchy-test.bin"],
         #     )
         # )
-        flow.run(  # For testing weight column
-            parameters=dict(  # Weights small
-                compute_tiles=True,
-                qualifier_map={"sam_rate": ["qual_1"], "gam_rate": ["qual_1"]},
-                weight_column="weights",
-                model_id="_weight-test-small",
-                run_id="indicator",
-                data_paths=["s3://test/weight-col.bin"],
-            )
-        )
+        # flow.run(  # For testing weight column
+        #     parameters=dict(  # Weights small
+        #         compute_tiles=True,
+        #         qualifier_map={"sam_rate": ["qual_1"], "gam_rate": ["qual_1"]},
+        #         weight_column="weights",
+        #         model_id="_weight-test-small",
+        #         run_id="indicator",
+        #         data_paths=["s3://test/weight-col.bin"],
+        #     )
+        # )
         # flow.run(
         #     parameters=dict(  # Weights
         #         compute_tiles=True,
@@ -1496,3 +1499,23 @@ if __name__ == "__main__" and LOCAL_RUN:
         #         ],
         #     )
         # )
+        flow.run(
+            parameters=dict(
+                compute_tiles=True,
+                is_indicator=False,
+                model_id="2281e058-d521-4180-8216-54832700cedd",
+                run_id="22045d57-aa6a-4df6-a11d-793225878dab",
+                data_paths=[
+                    "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/22045d57-aa6a-4df6-a11d-793225878dab/22045d57-aa6a-4df6-a11d-793225878dab_2281e058-d521-4180-8216-54832700cedd.1.parquet.gzip"
+                ],
+                fill_timestamp=0,
+                qualifier_map={
+                    "max": ["Date", "camp"],
+                    "min": ["Date", "camp"],
+                    "data": ["Date", "camp"],
+                    "mean": ["Date", "camp"],
+                    "error": ["Date", "camp"],
+                    "median": ["Date", "camp"],
+                },
+            )
+        )

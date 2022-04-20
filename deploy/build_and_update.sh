@@ -21,7 +21,7 @@ ssh dask-swarm 'docker stack rm dask_swarm'
 ssh dask-swarm-big 'docker stack rm big_dask_swarm'
 
 echo "Building docker..."
-pushd ../../infra/docker
+pushd ../infra/docker
 ./docker_build.sh
 ./docker_push.sh
 popd

@@ -10,4 +10,4 @@ export WM_PUSH_IMAGE=true
 PROJECT="Production"
 
 # add calls to register flows here
-prefect register --project="$PROJECT" --label wm-prefect-server.openstack.uncharted.software --label docker --path ../data_pipeline.py
+prefect register --project="$PROJECT" --label wm-prefect-server.openstack.uncharted.software --label docker --path ../flows/data_pipeline.py
