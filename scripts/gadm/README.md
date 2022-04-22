@@ -1,7 +1,7 @@
 ## Populate gadm-name ES index
 This folder contains tools/scripts to process GADM csv files and populate the `gadm-name` ES index. A document is created for each GADM region at each admin level.  
 
-After the dosuments are generated, another set of scripts [here](../gadm-bbox/README.md) can update the documents with a bounding box for each region.
+After the documents are generated, another set of scripts [here](../gadm-bbox/README.md) can update the documents with a bounding box for each region.
 
 ### Prerequisite
 
