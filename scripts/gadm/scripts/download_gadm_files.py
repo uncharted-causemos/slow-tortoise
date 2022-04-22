@@ -6,7 +6,7 @@ import os
 # 1. download_gadm_files.py (this script)
 # 2. populate_with_region_names.py
 
-# NOTE: The .csv file on our internal file server is a chached version of
+# NOTE: The .csv file on our internal file server is a cached version of
 # # https://data.apps.fao.org/catalog/dataset/code-list-gadm36-global-admin-{index}
 def download_gadm():
     for index in range(MAX_GADM_INDEX):
