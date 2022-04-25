@@ -5,6 +5,8 @@ import pathlib
 import csv
 
 # get the list of countries
+# This is a chached version of
+# https://data.apps.fao.org/catalog/dataset/code-list-gadm36-global-admin-0
 csv_url = f"http://10.64.16.209:4005/gadm/gadm36_0.csv"
 req = requests.get(csv_url)
 url_content = req.content

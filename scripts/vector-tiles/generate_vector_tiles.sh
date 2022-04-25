@@ -14,7 +14,10 @@ set -e
 # South Sudan: SSD
 # Sudan: SDN
 # Ethiopia: ETH
-COUNTRIES=("DJI" "ERI" "SOM" "KEN" "UGA" "SSD" "SDN" "ETH")
+# COUNTRIES=("DJI" "ERI" "SOM" "KEN" "UGA" "SSD" "SDN" "ETH")
+
+# The file below sets COUNTRIES to all the countries defined in GADM. To process only a subset you can instead define COUNTRIES manually above
+source all_countries.sh
 
 # Ensure there's a folder to store shape files
 mkdir -p .tmp dist
