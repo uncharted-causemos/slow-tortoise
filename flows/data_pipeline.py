@@ -1121,6 +1121,7 @@ def apply_qualifier_thresholds(qualifier_map, columns, counts, thresholds) -> Tu
     max_count = thresholds["max_count"]
     return apply_qualifier_count_limit(qualifier_map, columns, counts, max_count)
 
+
 @task(skip_on_upstream_skip=False, log_stdout=True)
 def print_flow_metadata(
     model_id,
@@ -1133,7 +1134,7 @@ def print_flow_metadata(
     compute_tiles,
 ):
     # Print out useful/debugging information
-    print("===== Flow Summary =====");
+    print("===== Flow Summary =====")
     print(f"Run ID: {run_id}")
     print(f"Model ID: {model_id}")
     for path in data_paths:
@@ -1364,8 +1365,6 @@ with Flow(FLOW_NAME) as flow:
         compute_tiles,
         upstream_tasks=[summary_values],
     )
-
-
 
     # TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful.
     # Then same data can be used for producing tiles and also used for doing regional aggregation and other computation in other tasks.
