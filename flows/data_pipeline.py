@@ -183,7 +183,10 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
 
             df = dd.concat(dfs, ignore_unknown_divisions=True).repartition(npartitions=12)
 
+    print("Data types")
     print(df.dtypes)
+
+    print("Top N-rows")
     print(df.head())
 
     # Remove lat/lng columns if they are null
