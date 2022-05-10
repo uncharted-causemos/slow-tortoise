@@ -1,2 +1,2 @@
 #!/bin/bash
-prefect server start --use-volume
+prefect server start --use-volume --expose
