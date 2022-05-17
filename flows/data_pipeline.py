@@ -1140,7 +1140,7 @@ def print_flow_metadata(
     for path in data_paths:
         print(f"Data paths: {path}")
     print(f"Destination URL: {dest['endpoint_url']}")
-    print(f"Destnation bucket: {dest['bucket']}")
+    print(f"Destination bucket: {dest['bucket']}")
     print(f"Compute monthly: {compute_monthly}")
     print(f"Compute yearly: {compute_annual}")
     print(f"Compute summary: {compute_summary}")
