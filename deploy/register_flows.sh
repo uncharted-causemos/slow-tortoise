@@ -1,11 +1,13 @@
 #!/bin/bash
 
 # registration process reads this env var to find the prefect server
-export PREFECT__SERVER__HOST=http://10.65.18.52
+export PREFECT__SERVER__HOST=http://localhost
+export DASK_SCHEDULER=localhost:8786
 
 # set this to true if images should be pushed to the docker registry as part of the
 # registration process - not necessary if testing locally
 export WM_PUSH_IMAGE=true
+export WM_DATA_PIPELINE_IMAGE=docker.uncharted.software/worldmodeler/wm-data-pipeline:latest
 
 PROJECT="Production"
 
