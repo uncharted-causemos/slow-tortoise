@@ -90,7 +90,9 @@ BASE_IMAGE = os.getenv(
 )
 
 DOCKER_REGISTRY_URL = os.getenv("DOCKER_REGISTRY_URL", "docker.uncharted.software")
-DOCKER_RUN_IMAGE = os.getenv("DOCKER_RUN_IMAGE", "worldmodeler/wm-data-pipeline/prefect-datacube-ingest")
+DOCKER_RUN_IMAGE = os.getenv(
+    "DOCKER_RUN_IMAGE", "worldmodeler/wm-data-pipeline/prefect-datacube-ingest"
+)
 
 
 # This determines the number of bins(subtiles) per tile. Eg. Each tile has 4^6=4096 grid cells (subtiles) when LEVEL_DIFF is 6

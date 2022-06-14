@@ -49,7 +49,9 @@ else:
 
 # setup the flow storage - will build a docker image containing the flow from the base image
 # provided
-base_image = os.getenv("WM_DATA_PIPELINE_IMAGE", "docker.uncharted.software/worldmodeler/wm-data-pipeline:latest")
+base_image = os.getenv(
+    "WM_DATA_PIPELINE_IMAGE", "docker.uncharted.software/worldmodeler/wm-data-pipeline:latest"
+)
 registry_url = os.getenv("DOCKER_REGISTRY_URL", "docker.uncharted.software")
 image_name = os.getenv("DOCKER_RUN_IMAGE", "worldmodeler/wm-data-pipeline/test-flow")
 if not PUSH_IMAGE:
