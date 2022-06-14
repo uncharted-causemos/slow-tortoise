@@ -9,6 +9,11 @@ export WM_DASK_SCHEDULER=10.65.18.58:8786
 export WM_PUSH_IMAGE=true
 export WM_DATA_PIPELINE_IMAGE=docker.uncharted.software/worldmodeler/wm-data-pipeline:latest
 
+
+# Docker used by the agent, built on top of WM_DATA_PIPELINE_IMAGE
+export DOCKER_REGISTRY_URL=docker.uncharted.software
+export DOCKER_RUN_IMAGE=worldmodeler/wm-data-pipeline/prefect-datacube-ingest
+
 PROJECT="Production"
 
 # add calls to register flows here

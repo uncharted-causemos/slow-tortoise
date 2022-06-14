@@ -84,10 +84,14 @@ S3_DEFAULT_INDICATOR_BUCKET = os.getenv("WM_S3_DEFAULT_INDICATOR_BUCKET", "new-i
 # default model s3 write bucket
 S3_DEFAULT_MODEL_BUCKET = os.getenv("WM_S3_DEFAULT_MODEL_BUCKET", "new-models")
 
-# default base-image
+# default base-image, used to build docker image for the agent
 BASE_IMAGE = os.getenv(
     "WM_DATA_PIPELINE_IMAGE", "docker.uncharted.software/worldmodeler/wm-data-pipeline:latest"
 )
+
+DOCKER_REGISTRY_URL = os.getenv("DOCKER_REGISTRY_URL", "docker.uncharted.software")
+DOCKER_RUN_IMAGE = os.getenv("DOCKER_RUN_IMAGE", "worldmodeler/wm-data-pipeline/prefect-datacube-ingest")
+
 
 # This determines the number of bins(subtiles) per tile. Eg. Each tile has 4^6=4096 grid cells (subtiles) when LEVEL_DIFF is 6
 # Tile (z, x, y) will have a sutbile where its zoom level is z + LEVEL_DIFF
@@ -1163,8 +1167,8 @@ with Flow(FLOW_NAME) as flow:
 
     # setup the flow storage - will build a docker image containing the flow from the base image
     # provided
-    registry_url = "docker.uncharted.software"
-    image_name = "worldmodeler/wm-data-pipeline/datacube-ingest-docker-test"
+    registry_url = DOCKER_REGISTRY_URL
+    image_name = DOCKER_RUN_IMAGE
     if not PUSH_IMAGE:
         image_name = f"{registry_url}/{image_name}"
         registry_url = ""
