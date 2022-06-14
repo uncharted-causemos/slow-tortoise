@@ -11,10 +11,12 @@ export WM_DATA_PIPELINE_IMAGE=docker.uncharted.software/worldmodeler/wm-data-pip
 
 # Docker used by the agent, built on top of WM_DATA_PIPELINE_IMAGE
 export DOCKER_REGISTRY_URL=docker.uncharted.software
-export DOCKER_RUN_IMAGE=worldmodeler/wm-data-pipeline/test-flow
 
 PROJECT="project"
 
+export DOCKER_RUN_IMAGE=worldmodeler/wm-data-pipeline/test-flow
 prefect register --project="$PROJECT" --label wm-prefect-server.openstack.uncharted.software --label docker --path ../flows/test/flow_test.py
+
+export DOCKER_RUN_IMAGE=worldmodeler/wm-data-pipeline/test-dask-flow
 prefect register --project="$PROJECT" --label wm-prefect-server.openstack.uncharted.software --label docker --path ../flows/test/dask_flow_test.py
 

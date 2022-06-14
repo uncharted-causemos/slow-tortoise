@@ -38,7 +38,8 @@ flow.storage = Docker(
     image_name=image_name,
     local_image=True,
     stored_as_script=True,
-    path="/wm_data_pipeline/flows/flow_test.py",
+    path="/wm_data_pipeline/flows/test/flow_test.py",
+    ignore_healthchecks=True,
 )
 
 if __name__ == "__main__" and LOCAL_RUN:
