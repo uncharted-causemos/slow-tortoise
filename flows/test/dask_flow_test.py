@@ -7,8 +7,8 @@ import time
 import random
 
 
-@task
-def foo():
+@task(log_stdout=True)
+def simple_add():
     def inc(x):
         time.sleep(random.random())
         return x + 1
@@ -29,6 +29,7 @@ def foo():
     y = dec(2)
     z = add(x, y)
     result = z.compute()
+    print("result", result)
 
     return result
 
@@ -40,7 +41,7 @@ PUSH_IMAGE = os.getenv("WM_PUSH_IMAGE", "False").lower() in ("true", "1", "t")
 # DO NOT DECLARE FLOW IN MAIN.  During registration, prefect calls `exec` on this
 # script and looks for instances of `Flow` at the global level.
 with Flow("dask_flow") as flow:
-    foo_result = foo()
+    simple_add_result = simple_add()
 
 if not DASK_SCHEDULER:
     flow.executor = LocalDaskExecutor()
@@ -49,24 +50,28 @@ else:
 
 # setup the flow storage - will build a docker image containing the flow from the base image
 # provided
-registry_url = "docker.uncharted.software"
-image_name = "worldmodeler/wm-data-pipeline/dask-flow-test"
+base_image = os.getenv(
+    "WM_DATA_PIPELINE_IMAGE", "docker.uncharted.software/worldmodeler/wm-data-pipeline:latest"
+)
+registry_url = os.getenv("DOCKER_REGISTRY_URL", "docker.uncharted.software")
+image_name = os.getenv("DOCKER_RUN_IMAGE", "worldmodeler/wm-data-pipeline/test-dask-flow")
 if not PUSH_IMAGE:
     image_name = f"{registry_url}/{image_name}"
     registry_url = ""
 
 flow.storage = Docker(
     registry_url=registry_url,
-    base_image="docker.uncharted.software/worldmodeler/wm-data-pipeline:latest",
+    base_image=base_image,
     image_name=image_name,
     local_image=True,
     stored_as_script=True,
-    path="/wm_data_pipeline/flows/dask_flow_test.py",
+    path="/wm_data_pipeline/flows/test/dask_flow_test.py",
     ignore_healthchecks=True,
 )
+
 
 # For debugging support - local dask cluster needs to run in main otherwise process forking
 # fails.
 if __name__ == "__main__" and LOCAL_RUN:
     state = flow.run()
-    print(state.result[foo_result].result)
+    print(state.result[simple_add_result].result)
