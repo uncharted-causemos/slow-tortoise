@@ -6,6 +6,7 @@ import numpy as np
 import os
 import json
 import re
+import time
 
 from prefect import task, Flow, Parameter
 from prefect.engine.signals import SKIP, FAIL
@@ -757,18 +758,23 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
         meta=(None, "object"),
     )
     tiling_df = df.assign(subtile=stile)
-    tiling_df = tiling_df.explode("subtile").repartition(npartitions=100)
+    tiling_df = tiling_df.explode("subtile").repartition(npartitions=DEFAULT_PARTITIONS * 20)
+
+    print(f"\nexploded tiling dataframe length={len(tiling_df.index)}, npartitions={tiling_df.npartitions}\n");
 
     # Assign main tile coord for each subtile
     tiling_df["tile"] = tiling_df.apply(
         lambda x: tile_coord(x.subtile, LEVEL_DIFF), axis=1, meta=(None, "object")
     )
 
+    start = time.time()
+
+    # convert each row to protobuf and save
     tiling_df = (
         tiling_df.groupby(["feature", "timestamp", "tile"])
         .agg(list)
         .reset_index()
-        .repartition(npartitions=200)
+        .repartition(npartitions=DEFAULT_PARTITIONS * 20)
         .apply(
             lambda x: save_tile(  # To test use: save_tile_to_csv
                 to_proto(x),  # To test use: to_tile_csv
@@ -783,7 +789,8 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
             axis=1,
             meta=(None, "object"),
         )
-    )  # convert each row to protobuf and save
+    )
+    print(f"\ngrouped tiling dataframe length={len(tiling_df.index)}, npartitions={tiling_df.npartitions}\n");
     tiling_df.compute()
 
 
