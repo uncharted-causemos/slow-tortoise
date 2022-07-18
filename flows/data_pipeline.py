@@ -120,6 +120,8 @@ LAT_LONG_COLUMNS = ["lat", "lng"]
 # This is the max number of ms we can represent
 MAX_TIMESTAMP = np.iinfo(np.int64).max / 1_000_000
 
+DEFAULT_PARTITIONS = 24
+
 
 @task(log_stdout=True)
 def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
@@ -1387,26 +1389,6 @@ if __name__ == "__main__" and LOCAL_RUN:
     from prefect.utilities.debug import raise_on_exception
 
     with raise_on_exception():
-        # flow.run(parameters=dict(is_indicator=True, model_id='ACLED', run_id='indicator', data_paths=['s3://test/acled/acled-test.bin']))
-        # flow.run(parameters=dict(compute_tiles=True, model_id='geo-test-data', run_id='test-run', data_paths=['s3://test/geo-test-data.parquet']))
-        # flow.run(parameters=dict(
-        #      is_indicator=True,
-        #      model_id='1fb59bc8-a321-4981-8ec9-1041798ddb7e',
-        #      run_id='indicator',
-        #      data_paths=["https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/1fb59bc8-a321-4981-8ec9-1041798ddb7e/1fb59bc8-a321-4981-8ec9-1041798ddb7e.parquet.gzip"]
-        # ))
-        # flow.run(parameters=dict( # Conflict model
-        #      compute_tiles=True,
-        #      model_id="9e896392-2639-4df6-b4b4-e1b1d4cf46ae",
-        #      run_id="2dc64e9d-be17-471e-a24b-aeb9c1178313",
-        #      data_paths=["https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/2dc64e9d-be17-471e-a24b-aeb9c1178313/2dc64e9d-be17-471e-a24b-aeb9c1178313_9e896392-2639-4df6-b4b4-e1b1d4cf46ae.parquet.gzip"]
-        # ))
-        # flow.run(parameters=dict( # Malnutrition model
-        #      compute_tiles=True,
-        #      model_id='425f58a4-bbba-44d3-83f3-aba353fc7c64',
-        #      run_id='db68a592-e456-465f-9785-86440f49e838',
-        #      data_paths=['https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/db68a592-e456-465f-9785-86440f49e838/db68a592-e456-465f-9785-86440f49e838_425f58a4-bbba-44d3-83f3-aba353fc7c64.parquet.gzip']
-        # ))
         # flow.run(
         #     parameters=dict(  # Maxhop
         #         compute_tiles=True,
