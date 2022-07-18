@@ -120,7 +120,7 @@ LAT_LONG_COLUMNS = ["lat", "lng"]
 # This is the max number of ms we can represent
 MAX_TIMESTAMP = np.iinfo(np.int64).max / 1_000_000
 
-DEFAULT_PARTITIONS = 24
+DEFAULT_PARTITIONS = 4
 
 
 @task(log_stdout=True)
@@ -141,7 +141,7 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
                     "endpoint_url": source["endpoint_url"],
                 },
             },
-        ).repartition(npartitions=12)
+        ).repartition(npartitions=DEFAULT_PARTITIONS)
     else:
         # In some parquet files the value column will be type string. Filter out those parquet files and ignore for now
         numeric_files = []
@@ -160,7 +160,7 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
         if len(dfs) == 0:
             raise FAIL("No numeric parquet files")
         elif len(dfs) == 1:
-            df = dfs[0]
+            df = dfs[0].repartition(npartitions=DEFAULT_PARTITIONS)
         else:
             # Add missing columns into all dataframes and ensure all are strings
             extra_cols = [set(d.columns.to_list()) - REQUIRED_COLS for d in dfs]
@@ -194,7 +194,7 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
                     dfs[i][cols_to_retype].fillna(value="None", axis=1).astype("str")
                 )
 
-            df = dd.concat(dfs, ignore_unknown_divisions=True).repartition(npartitions=12)
+            df = dd.concat(dfs, ignore_unknown_divisions=True).repartition(npartitions=DEFAULT_PARTITIONS)
 
     print("Data types")
     print(df.dtypes)
@@ -282,6 +282,8 @@ def save_raw_data(df, dest, time_res, model_id, run_id, raw_count_threshold):
 
 @task(log_stdout=True)
 def validate_and_fix(df, weight_column, fill_timestamp) -> Tuple[dd.DataFrame, str, int, int, int]:
+    print(f"\nValidate and fix dataframe length={len(df.index)}, npartitions={df.npartitions}\n");
+
     # Drop a column if all values are null
     exclude_columns = set(["timestamp", "lat", "lng", "feature", "value"])
     null_cols = get_null_or_empty_cols(df)
@@ -330,6 +332,7 @@ def temporal_aggregation(df, time_res, should_run, weight_column):
 def compute_timeseries_as_csv(
     df, dest, time_res, model_id, run_id, qualifier_map, qualifer_columns, weight_column
 ):
+    print(f"\ncompute timeseries as csv dtaframe length={len(df.index)}, npartitions={df.npartitions}\n");
     qualifier_cols = [*qualifer_columns, []]  # [] is the default case of ignoring qualifiers
 
     # persist the result in memory since this df is going to be used for multiple qualifiers
@@ -446,6 +449,7 @@ def compute_timeseries_as_csv(
 def compute_regional_aggregation_to_csv(
     input_df, dest, time_res, model_id, run_id, qualifier_map, qualifer_columns, weight_column
 ):
+    print(f"\ncompute regional aggregate to csv dataframe length={len(input_df.index)}, npartitions={input_df.npartitions}\n");
     qualifier_cols = [*qualifer_columns, []]  # [] is the default case of ignoring qualifiers
 
     # Copy input df so that original df doesn't get mutated
@@ -643,6 +647,7 @@ def compute_regional_timeseries(
     qualifier_thresholds,
     weight_column,
 ):
+    print(f"\ncompute regional timeseries dataframe length={len(df.index)}, npartitions={df.npartitions}\n");
     max_qualifier_count = qualifier_thresholds["regional_timeseries_count"]
     max_level = qualifier_thresholds["regional_timeseries_max_level"]
     (new_qualifier_map, new_qualifier_columns) = apply_qualifier_count_limit(
@@ -673,6 +678,7 @@ def compute_regional_timeseries(
 
 @task(log_stdout=True)
 def subtile_aggregation(df, weight_column, should_run):
+    print(f"\nsubtile aggregation dataframe length={len(df.index)}, npartitions={df.npartitions}\n");
     if should_run is False:
         raise SKIP("Tiling was not requested")
 
@@ -724,7 +730,7 @@ def subtile_aggregation(df, weight_column, should_run):
     subtile_df = (
         subtile_df[subset_cols]
         .groupby(["feature", "timestamp", "subtile"])
-        .agg(aggregates_to_compute)
+        .agg(aggregates_to_compute, split_out=DEFAULT_PARTITIONS)
     )
     subtile_df.columns = subtile_df.columns.to_flat_index()
     subtile_df = (
@@ -744,6 +750,7 @@ def subtile_aggregation(df, weight_column, should_run):
 
 @task(log_stdout=True)
 def compute_tiling(df, dest, time_res, model_id, run_id):
+    print(f"\ncompute tiling dataframe length={len(df.index)}, npartitions={df.npartitions}\n");
     stile = df.apply(
         lambda x: filter_by_min_zoom(ancestor_tiles(x.subtile), MIN_SUBTILE_PRECISION),
         axis=1,
@@ -1041,6 +1048,7 @@ def record_results(
 
 @task(log_stdout=True)
 def record_region_lists(df, dest, model_id, run_id) -> Tuple[list, list]:
+    print(f"\nrecord region list dataframe length={len(df.index)}, npartitions={df.npartitions}\n");
     def cols_to_lists(df, id_cols, feature):
         lists = {region: [] for region in REGION_LEVELS}
         for index, id_col in enumerate(id_cols):
@@ -1061,6 +1069,7 @@ def record_region_lists(df, dest, model_id, run_id) -> Tuple[list, list]:
         raise SKIP("No regional information available")
 
     save_df = df.copy()
+    print(f"\nsave_df record region list dataframe length={len(save_df.index)}, npartitions={save_df.npartitions}\n");
 
     # ["__region_id_0", "__region_id_1", "__region_id_2", "__region_id_3"]
     id_cols = [f"__region_id_{level}" for level in range(len(region_cols))]
@@ -1083,6 +1092,8 @@ def record_region_lists(df, dest, model_id, run_id) -> Tuple[list, list]:
 
 @task(log_stdout=True)
 def record_qualifier_lists(df, dest, model_id, run_id, qualifiers, thresholds):
+    print(f"\nrecord qualifier list dataframe length={len(df.index)}, npartitions={df.npartitions}\n");
+
     def save_qualifier_lists(df):
         feature = df["feature"].values[0]
         qualifier_counts = {
