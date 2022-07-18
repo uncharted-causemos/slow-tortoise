@@ -215,7 +215,7 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
         df = df.astype({"lat": "float64", "lng": "float64"})
 
     num_rows = len(df.index)
-    print(f"Read {num_rows} rows of data")
+    print(f"\nRead {num_rows} rows of data\n")
     if num_rows == 0:
         raise FAIL("DataFrame has no rows")
 
@@ -1554,20 +1554,38 @@ if __name__ == "__main__" and LOCAL_RUN:
         flow.run(
             parameters=dict(
                 compute_tiles=True,
-                is_indicator=False,
-                model_id="2281e058-d521-4180-8216-54832700cedd",
-                run_id="22045d57-aa6a-4df6-a11d-793225878dab",
+                is_indicator=True,
+                model_id="3a013cd3-6064-4888-9cc6-0e9d637c690e",
+                run_id="indicator",
                 data_paths=[
-                    "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/22045d57-aa6a-4df6-a11d-793225878dab/22045d57-aa6a-4df6-a11d-793225878dab_2281e058-d521-4180-8216-54832700cedd.1.parquet.gzip"
+                    "https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/3a013cd3-6064-4888-9cc6-0e9d637c690e/3a013cd3-6064-4888-9cc6-0e9d637c690e.parquet.gzip", "https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/3a013cd3-6064-4888-9cc6-0e9d637c690e/3a013cd3-6064-4888-9cc6-0e9d637c690e_1.parquet.gzip", "https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/3a013cd3-6064-4888-9cc6-0e9d637c690e/3a013cd3-6064-4888-9cc6-0e9d637c690e_2.parquet.gzip"
                 ],
                 fill_timestamp=0,
                 qualifier_map={
-                    "max": ["Date", "camp"],
-                    "min": ["Date", "camp"],
-                    "data": ["Date", "camp"],
-                    "mean": ["Date", "camp"],
-                    "error": ["Date", "camp"],
-                    "median": ["Date", "camp"],
+                    "data_id": ["event_date"],
+                    "fatalities": ["event_date", "event_type", "sub_event_type", "actor1"]
                 },
             )
         )
+
+
+        # flow.run(
+        #     parameters=dict(
+        #         compute_tiles=True,
+        #         is_indicator=False,
+        #         model_id="2281e058-d521-4180-8216-54832700cedd",
+        #         run_id="22045d57-aa6a-4df6-a11d-793225878dab",
+        #         data_paths=[
+        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/22045d57-aa6a-4df6-a11d-793225878dab/22045d57-aa6a-4df6-a11d-793225878dab_2281e058-d521-4180-8216-54832700cedd.1.parquet.gzip"
+        #         ],
+        #         fill_timestamp=0,
+        #         qualifier_map={
+        #             "max": ["Date", "camp"],
+        #             "min": ["Date", "camp"],
+        #             "data": ["Date", "camp"],
+        #             "mean": ["Date", "camp"],
+        #             "error": ["Date", "camp"],
+        #             "median": ["Date", "camp"],
+        #         },
+        #     )
+        # )
