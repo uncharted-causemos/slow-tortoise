@@ -766,7 +766,7 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
         meta=(None, "object"),
     )
     tiling_df = df.assign(subtile=stile)
-    tiling_df = tiling_df.explode("subtile").repartition(npartitions=DEFAULT_PARTITIONS * 20)
+    tiling_df = tiling_df.explode("subtile").repartition(npartitions=DEFAULT_PARTITIONS)
 
     print(
         f"\nexploded tiling dataframe length={len(tiling_df.index)}, npartitions={tiling_df.npartitions}\n"
