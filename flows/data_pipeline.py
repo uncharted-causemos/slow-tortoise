@@ -121,7 +121,7 @@ LAT_LONG_COLUMNS = ["lat", "lng"]
 # This is the max number of ms we can represent
 MAX_TIMESTAMP = np.iinfo(np.int64).max / 1_000_000
 
-DEFAULT_PARTITIONS = 4
+DEFAULT_PARTITIONS = 8
 
 
 @task(log_stdout=True)
@@ -333,7 +333,7 @@ def temporal_aggregation(df, time_res, should_run, weight_column):
 def compute_timeseries_as_csv(
     df, dest, time_res, model_id, run_id, qualifier_map, qualifer_columns, weight_column
 ):
-    print(f"\ncompute timeseries as csv dtaframe length={len(df.index)}, npartitions={df.npartitions}\n");
+    print(f"\ncompute timeseries as csv dataframe length={len(df.index)}, npartitions={df.npartitions}\n");
     qualifier_cols = [*qualifer_columns, []]  # [] is the default case of ignoring qualifiers
 
     # persist the result in memory since this df is going to be used for multiple qualifiers
@@ -1285,6 +1285,7 @@ with Flow(FLOW_NAME) as flow:
         qualifier_map,
         qualifier_columns,
         weight_column,
+        upstream_tasks=[monthly_data],
     )
     compute_regional_timeseries(
         monthly_data,
@@ -1297,6 +1298,7 @@ with Flow(FLOW_NAME) as flow:
         qualifier_counts,
         qualifier_thresholds,
         weight_column,
+        upstream_tasks=[monthly_data],
     )
     monthly_csv_regional_df = compute_regional_aggregation_to_csv(
         monthly_data,
@@ -1307,6 +1309,7 @@ with Flow(FLOW_NAME) as flow:
         qualifier_map,
         qualifier_columns,
         weight_column,
+        upstream_tasks=[monthly_data],
     )
 
     monthly_spatial_data = subtile_aggregation(

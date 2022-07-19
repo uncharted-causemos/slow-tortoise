@@ -32,7 +32,7 @@ REQUIRED_COLS = {
     "value",
 }
 
-DEFAULT_PARTITIONS = 4
+DEFAULT_PARTITIONS = 8
 
 # Run temporal aggregation on given provided dataframe
 def run_temporal_aggregation(df, time_res, weight_column):
