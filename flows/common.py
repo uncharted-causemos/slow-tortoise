@@ -36,7 +36,9 @@ DEFAULT_PARTITIONS = 8
 
 # Run temporal aggregation on given provided dataframe
 def run_temporal_aggregation(df, time_res, weight_column):
-    print(f"\nrun temporal aggregation dataframe length={len(df.index)}, npartitions={df.npartitions}\n");
+    print(
+        f"\nrun temporal aggregation dataframe length={len(df.index)}, npartitions={df.npartitions}\n"
+    )
     columns = df.columns.tolist()  # includes qualifier columns
     columns.remove("value")
 
@@ -77,7 +79,9 @@ def run_temporal_aggregation(df, time_res, weight_column):
         temporal_df["t_wavg"] = temporal_df[values_col] / temporal_df[weights_col]
         temporal_df = temporal_df.drop(columns=[values_col, weights_col])
 
-    print(f"\nrun temporal aggregation dataframe!! length={len(temporal_df.index)}, npartitions={temporal_df.npartitions}\n");
+    print(
+        f"\nrun temporal aggregation dataframe!! length={len(temporal_df.index)}, npartitions={temporal_df.npartitions}\n"
+    )
     return temporal_df
 
 
@@ -817,7 +821,9 @@ def save_subtile_stats(df, dest, model_id, run_id, time_res, writer):
 # Compute min/max stats of subtiles (grid cells) at each zoom level
 def compute_subtile_stats(subtile_df, dest, model_id, run_id, time_res, min_precision, writer):
     df = subtile_df.copy()
-    print(f"\ncompute subtile stats dataframe length={len(df.index)}, npartitions={df.npartitions}\n");
+    print(
+        f"\ncompute subtile stats dataframe length={len(df.index)}, npartitions={df.npartitions}\n"
+    )
     # Get a list of all acestor tiles at different zoom level for each subtile
     tiles_series = df.apply(
         lambda x: filter_by_min_zoom(ancestor_tiles(x.subtile), min_precision),
