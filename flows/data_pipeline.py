@@ -6,6 +6,7 @@ import numpy as np
 import os
 import json
 import re
+import time
 
 from prefect import task, Flow, Parameter
 from prefect.engine.signals import SKIP, FAIL
@@ -120,6 +121,8 @@ LAT_LONG_COLUMNS = ["lat", "lng"]
 # This is the max number of ms we can represent
 MAX_TIMESTAMP = np.iinfo(np.int64).max / 1_000_000
 
+DEFAULT_PARTITIONS = 8
+
 
 @task(log_stdout=True)
 def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
@@ -139,7 +142,7 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
                     "endpoint_url": source["endpoint_url"],
                 },
             },
-        ).repartition(npartitions=12)
+        ).repartition(npartitions=DEFAULT_PARTITIONS)
     else:
         # In some parquet files the value column will be type string. Filter out those parquet files and ignore for now
         numeric_files = []
@@ -158,7 +161,7 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
         if len(dfs) == 0:
             raise FAIL("No numeric parquet files")
         elif len(dfs) == 1:
-            df = dfs[0]
+            df = dfs[0].repartition(npartitions=DEFAULT_PARTITIONS)
         else:
             # Add missing columns into all dataframes and ensure all are strings
             extra_cols = [set(d.columns.to_list()) - REQUIRED_COLS for d in dfs]
@@ -192,7 +195,9 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
                     dfs[i][cols_to_retype].fillna(value="None", axis=1).astype("str")
                 )
 
-            df = dd.concat(dfs, ignore_unknown_divisions=True).repartition(npartitions=12)
+            df = dd.concat(dfs, ignore_unknown_divisions=True).repartition(
+                npartitions=DEFAULT_PARTITIONS
+            )
 
     print("Data types")
     print(df.dtypes)
@@ -212,7 +217,7 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
         df = df.astype({"lat": "float64", "lng": "float64"})
 
     num_rows = len(df.index)
-    print(f"Read {num_rows} rows of data")
+    print(f"\nRead {num_rows} rows of data\n")
     if num_rows == 0:
         raise FAIL("DataFrame has no rows")
 
@@ -280,6 +285,8 @@ def save_raw_data(df, dest, time_res, model_id, run_id, raw_count_threshold):
 
 @task(log_stdout=True)
 def validate_and_fix(df, weight_column, fill_timestamp) -> Tuple[dd.DataFrame, str, int, int, int]:
+    print(f"\nValidate and fix dataframe length={len(df.index)}, npartitions={df.npartitions}\n")
+
     # Drop a column if all values are null
     exclude_columns = set(["timestamp", "lat", "lng", "feature", "value"])
     null_cols = get_null_or_empty_cols(df)
@@ -328,6 +335,9 @@ def temporal_aggregation(df, time_res, should_run, weight_column):
 def compute_timeseries_as_csv(
     df, dest, time_res, model_id, run_id, qualifier_map, qualifer_columns, weight_column
 ):
+    print(
+        f"\ncompute timeseries as csv dataframe length={len(df.index)}, npartitions={df.npartitions}\n"
+    )
     qualifier_cols = [*qualifer_columns, []]  # [] is the default case of ignoring qualifiers
 
     # persist the result in memory since this df is going to be used for multiple qualifiers
@@ -444,6 +454,9 @@ def compute_timeseries_as_csv(
 def compute_regional_aggregation_to_csv(
     input_df, dest, time_res, model_id, run_id, qualifier_map, qualifer_columns, weight_column
 ):
+    print(
+        f"\ncompute regional aggregate to csv dataframe length={len(input_df.index)}, npartitions={input_df.npartitions}\n"
+    )
     qualifier_cols = [*qualifer_columns, []]  # [] is the default case of ignoring qualifiers
 
     # Copy input df so that original df doesn't get mutated
@@ -641,6 +654,9 @@ def compute_regional_timeseries(
     qualifier_thresholds,
     weight_column,
 ):
+    print(
+        f"\ncompute regional timeseries dataframe length={len(df.index)}, npartitions={df.npartitions}\n"
+    )
     max_qualifier_count = qualifier_thresholds["regional_timeseries_count"]
     max_level = qualifier_thresholds["regional_timeseries_max_level"]
     (new_qualifier_map, new_qualifier_columns) = apply_qualifier_count_limit(
@@ -671,6 +687,7 @@ def compute_regional_timeseries(
 
 @task(log_stdout=True)
 def subtile_aggregation(df, weight_column, should_run):
+    print(f"\nsubtile aggregation dataframe length={len(df.index)}, npartitions={df.npartitions}\n")
     if should_run is False:
         raise SKIP("Tiling was not requested")
 
@@ -722,7 +739,7 @@ def subtile_aggregation(df, weight_column, should_run):
     subtile_df = (
         subtile_df[subset_cols]
         .groupby(["feature", "timestamp", "subtile"])
-        .agg(aggregates_to_compute)
+        .agg(aggregates_to_compute, split_out=DEFAULT_PARTITIONS)
     )
     subtile_df.columns = subtile_df.columns.to_flat_index()
     subtile_df = (
@@ -742,24 +759,32 @@ def subtile_aggregation(df, weight_column, should_run):
 
 @task(log_stdout=True)
 def compute_tiling(df, dest, time_res, model_id, run_id):
+    print(f"\ncompute tiling dataframe length={len(df.index)}, npartitions={df.npartitions}\n")
     stile = df.apply(
         lambda x: filter_by_min_zoom(ancestor_tiles(x.subtile), MIN_SUBTILE_PRECISION),
         axis=1,
         meta=(None, "object"),
     )
     tiling_df = df.assign(subtile=stile)
-    tiling_df = tiling_df.explode("subtile").repartition(npartitions=100)
+    tiling_df = tiling_df.explode("subtile").repartition(npartitions=DEFAULT_PARTITIONS)
+
+    print(
+        f"\nexploded tiling dataframe length={len(tiling_df.index)}, npartitions={tiling_df.npartitions}\n"
+    )
 
     # Assign main tile coord for each subtile
     tiling_df["tile"] = tiling_df.apply(
         lambda x: tile_coord(x.subtile, LEVEL_DIFF), axis=1, meta=(None, "object")
     )
 
+    start = time.time()
+
+    # convert each row to protobuf and save
     tiling_df = (
         tiling_df.groupby(["feature", "timestamp", "tile"])
         .agg(list)
         .reset_index()
-        .repartition(npartitions=200)
+        .repartition(npartitions=DEFAULT_PARTITIONS * 20)
         .apply(
             lambda x: save_tile(  # To test use: save_tile_to_csv
                 to_proto(x),  # To test use: to_tile_csv
@@ -774,7 +799,10 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
             axis=1,
             meta=(None, "object"),
         )
-    )  # convert each row to protobuf and save
+    )
+    print(
+        f"\ngrouped tiling dataframe length={len(tiling_df.index)}, npartitions={tiling_df.npartitions}\n"
+    )
     tiling_df.compute()
 
 
@@ -1039,6 +1067,8 @@ def record_results(
 
 @task(log_stdout=True)
 def record_region_lists(df, dest, model_id, run_id) -> Tuple[list, list]:
+    print(f"\nrecord region list dataframe length={len(df.index)}, npartitions={df.npartitions}\n")
+
     def cols_to_lists(df, id_cols, feature):
         lists = {region: [] for region in REGION_LEVELS}
         for index, id_col in enumerate(id_cols):
@@ -1059,6 +1089,9 @@ def record_region_lists(df, dest, model_id, run_id) -> Tuple[list, list]:
         raise SKIP("No regional information available")
 
     save_df = df.copy()
+    print(
+        f"\nsave_df record region list dataframe length={len(save_df.index)}, npartitions={save_df.npartitions}\n"
+    )
 
     # ["__region_id_0", "__region_id_1", "__region_id_2", "__region_id_3"]
     id_cols = [f"__region_id_{level}" for level in range(len(region_cols))]
@@ -1081,6 +1114,10 @@ def record_region_lists(df, dest, model_id, run_id) -> Tuple[list, list]:
 
 @task(log_stdout=True)
 def record_qualifier_lists(df, dest, model_id, run_id, qualifiers, thresholds):
+    print(
+        f"\nrecord qualifier list dataframe length={len(df.index)}, npartitions={df.npartitions}\n"
+    )
+
     def save_qualifier_lists(df):
         feature = df["feature"].values[0]
         qualifier_counts = {
@@ -1265,6 +1302,7 @@ with Flow(FLOW_NAME) as flow:
         qualifier_map,
         qualifier_columns,
         weight_column,
+        upstream_tasks=[monthly_data],
     )
     compute_regional_timeseries(
         monthly_data,
@@ -1277,6 +1315,7 @@ with Flow(FLOW_NAME) as flow:
         qualifier_counts,
         qualifier_thresholds,
         weight_column,
+        upstream_tasks=[monthly_data],
     )
     monthly_csv_regional_df = compute_regional_aggregation_to_csv(
         monthly_data,
@@ -1287,6 +1326,7 @@ with Flow(FLOW_NAME) as flow:
         qualifier_map,
         qualifier_columns,
         weight_column,
+        upstream_tasks=[monthly_data],
     )
 
     monthly_spatial_data = subtile_aggregation(
@@ -1387,26 +1427,6 @@ if __name__ == "__main__" and LOCAL_RUN:
     from prefect.utilities.debug import raise_on_exception
 
     with raise_on_exception():
-        # flow.run(parameters=dict(is_indicator=True, model_id='ACLED', run_id='indicator', data_paths=['s3://test/acled/acled-test.bin']))
-        # flow.run(parameters=dict(compute_tiles=True, model_id='geo-test-data', run_id='test-run', data_paths=['s3://test/geo-test-data.parquet']))
-        # flow.run(parameters=dict(
-        #      is_indicator=True,
-        #      model_id='1fb59bc8-a321-4981-8ec9-1041798ddb7e',
-        #      run_id='indicator',
-        #      data_paths=["https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/1fb59bc8-a321-4981-8ec9-1041798ddb7e/1fb59bc8-a321-4981-8ec9-1041798ddb7e.parquet.gzip"]
-        # ))
-        # flow.run(parameters=dict( # Conflict model
-        #      compute_tiles=True,
-        #      model_id="9e896392-2639-4df6-b4b4-e1b1d4cf46ae",
-        #      run_id="2dc64e9d-be17-471e-a24b-aeb9c1178313",
-        #      data_paths=["https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/2dc64e9d-be17-471e-a24b-aeb9c1178313/2dc64e9d-be17-471e-a24b-aeb9c1178313_9e896392-2639-4df6-b4b4-e1b1d4cf46ae.parquet.gzip"]
-        # ))
-        # flow.run(parameters=dict( # Malnutrition model
-        #      compute_tiles=True,
-        #      model_id='425f58a4-bbba-44d3-83f3-aba353fc7c64',
-        #      run_id='db68a592-e456-465f-9785-86440f49e838',
-        #      data_paths=['https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/db68a592-e456-465f-9785-86440f49e838/db68a592-e456-465f-9785-86440f49e838_425f58a4-bbba-44d3-83f3-aba353fc7c64.parquet.gzip']
-        # ))
         # flow.run(
         #     parameters=dict(  # Maxhop
         #         compute_tiles=True,
@@ -1554,20 +1574,39 @@ if __name__ == "__main__" and LOCAL_RUN:
         flow.run(
             parameters=dict(
                 compute_tiles=True,
-                is_indicator=False,
-                model_id="2281e058-d521-4180-8216-54832700cedd",
-                run_id="22045d57-aa6a-4df6-a11d-793225878dab",
+                is_indicator=True,
+                model_id="3a013cd3-6064-4888-9cc6-0e9d637c690e",
+                run_id="indicator",
                 data_paths=[
-                    "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/22045d57-aa6a-4df6-a11d-793225878dab/22045d57-aa6a-4df6-a11d-793225878dab_2281e058-d521-4180-8216-54832700cedd.1.parquet.gzip"
+                    "https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/3a013cd3-6064-4888-9cc6-0e9d637c690e/3a013cd3-6064-4888-9cc6-0e9d637c690e.parquet.gzip",
+                    "https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/3a013cd3-6064-4888-9cc6-0e9d637c690e/3a013cd3-6064-4888-9cc6-0e9d637c690e_1.parquet.gzip",
+                    "https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/3a013cd3-6064-4888-9cc6-0e9d637c690e/3a013cd3-6064-4888-9cc6-0e9d637c690e_2.parquet.gzip",
                 ],
                 fill_timestamp=0,
                 qualifier_map={
-                    "max": ["Date", "camp"],
-                    "min": ["Date", "camp"],
-                    "data": ["Date", "camp"],
-                    "mean": ["Date", "camp"],
-                    "error": ["Date", "camp"],
-                    "median": ["Date", "camp"],
+                    "data_id": ["event_date"],
+                    "fatalities": ["event_date", "event_type", "sub_event_type", "actor1"],
                 },
             )
         )
+
+        # flow.run(
+        #     parameters=dict(
+        #         compute_tiles=True,
+        #         is_indicator=False,
+        #         model_id="2281e058-d521-4180-8216-54832700cedd",
+        #         run_id="22045d57-aa6a-4df6-a11d-793225878dab",
+        #         data_paths=[
+        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/22045d57-aa6a-4df6-a11d-793225878dab/22045d57-aa6a-4df6-a11d-793225878dab_2281e058-d521-4180-8216-54832700cedd.1.parquet.gzip"
+        #         ],
+        #         fill_timestamp=0,
+        #         qualifier_map={
+        #             "max": ["Date", "camp"],
+        #             "min": ["Date", "camp"],
+        #             "data": ["Date", "camp"],
+        #             "mean": ["Date", "camp"],
+        #             "error": ["Date", "camp"],
+        #             "median": ["Date", "camp"],
+        #         },
+        #     )
+        # )
