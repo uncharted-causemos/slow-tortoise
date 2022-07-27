@@ -10,6 +10,10 @@ set -e
 #     HostName 10.65.18.82
 #     User centos
 
+# Host dask-swarm-test                                                             
+#     HostName 10.65.18.107                                                        
+#     User centos
+
 SCRIPT_DIR="$(dirname "$0")"
 pushd $SCRIPT_DIR
 
