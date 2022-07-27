@@ -16,6 +16,7 @@ setup(
     install_requires=[
         "prefect==1.2.4",
         "dask==2022.7.1",
+        "bokeh==2.4.3",
         "lz4==4.0.2",
         "blosc==1.10.6",
         "pandas==1.3.5", # There's a groupby.apply breaking change in >= 1.4.0 version (https://pandas.pydata.org/pandas-docs/stable/whatsnew/v1.4.0.html#groupby-apply-consistent-transform-detection)
