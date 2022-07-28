@@ -97,9 +97,9 @@ def deg2num(lat_deg, lon_deg, zoom):
 
 
 # Get the parent tile coord of the given tile coord
-def parent_tile(coord):
+def parent_tile(coord, l=1):
     z, x, y = coord
-    return (z - 1, math.floor(x / 2), math.floor(y / 2))
+    return (z - l, math.floor(x / (2**l)), math.floor(y / (2**l)))
 
 
 # Return all acestor tile coords of the given tile coord
@@ -347,7 +347,7 @@ def results_to_json(contents, dest, model_id, run_id, writer):
 
 # transform given row to tile protobuf
 def to_proto(row):
-    z, x, y = row.tile
+    z, x, y = row["tile"]
     if z < 0 or x < 0 or y < 0:
         return None
 
@@ -357,14 +357,14 @@ def to_proto(row):
     tile.coord.y = y
 
     tile.bins.totalBins = int(
-        math.pow(4, row.subtile[0][0] - z)
+        math.pow(4, row["subtile"][0][0] - z)
     )  # Total number of bins (subtile) for the tile
 
-    for i in range(len(row.subtile)):
-        bin_index = project(row.subtile[i], row.tile)
-        tile.bins.stats[bin_index].s_sum_t_sum += row.s_sum_t_sum[i]
-        tile.bins.stats[bin_index].s_sum_t_mean += row.s_sum_t_mean[i]
-        tile.bins.stats[bin_index].weight += row.s_count[i]
+    for i in range(len(row["subtile"])):
+        bin_index = project(row["subtile"][i], row["tile"])
+        tile.bins.stats[bin_index].s_sum_t_sum += row["s_sum_t_sum"][i]
+        tile.bins.stats[bin_index].s_sum_t_mean += row["s_sum_t_mean"][i]
+        tile.bins.stats[bin_index].weight += row["s_count"][i]
     return tile
 
 
@@ -765,7 +765,7 @@ def compute_timeseries_by_region(
 
         timeseries_df = timeseries_df.groupby(
             ["feature", "region_id", "timestamp"] + qualifier_col
-        ).agg(columns_to_agg)
+        ).agg(columns_to_agg, split_out=DEFAULT_PARTITIONS)
         timeseries_df.columns = timeseries_df.columns.to_flat_index()
         timeseries_df = timeseries_df.rename(columns=timeseries_lookup).reset_index()
 
