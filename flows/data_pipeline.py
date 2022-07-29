@@ -763,9 +763,14 @@ def subtile_aggregation(df, weight_column, should_run):
 def compute_tiling(df, dest, time_res, model_id, run_id):
     print(f"\ncompute tiling dataframe length={len(df.index)}, npartitions={df.npartitions}\n")
 
+    df = df.persist()
+
     # Starting with level 14, work our way up until the subgrid offset
     for level_idx in range(15):
         actual_level = 14 - level_idx
+        if actual_level < 6:
+            continue
+
         print(f"Compute tiling level {actual_level}")
 
         df["z"] = df.apply(
