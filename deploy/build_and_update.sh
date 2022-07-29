@@ -10,11 +10,13 @@ set -e
 #     HostName 10.65.18.82
 #     User centos
 
+source ./prod.env
+
 SCRIPT_DIR="$(dirname "$0")"
 pushd $SCRIPT_DIR
 
 echo "Stopping request-queue"
-curl -X PUT http://10.65.18.52:4040/data-pipeline/stop
+curl -X PUT $WM_QUEUE_MANAGER/data-pipeline/stop
 
 echo "Stopping swarms..."
 ssh dask-swarm 'docker stack rm dask_swarm'
@@ -27,8 +29,8 @@ pushd ../infra/docker
 popd
 
 echo "Pulling images to swarms..."
-ssh dask-swarm 'docker pull docker.uncharted.software/worldmodeler/wm-data-pipeline:latest'
-ssh dask-swarm-big 'docker pull docker.uncharted.software/worldmodeler/wm-data-pipeline:latest'
+ssh dask-swarm "docker pull $WM_DATA_PIPELINE_IMAGE"
+ssh dask-swarm-big "docker pull $WM_DATA_PIPELINE_IMAGE"
 
 echo "Restarting swarms..."
 ssh dask-swarm 'docker stack deploy --with-registry-auth --compose-file docker-dask-docker-compose.yml dask_swarm'
@@ -38,7 +40,8 @@ echo "Registering with Prefect..."
 ./register_flows.sh
 
 echo "Starting request-queue"
-curl -X PUT http://10.65.18.52:4040/data-pipeline/start
+curl -X PUT $WM_QUEUE_MANAGER/data-pipeline/start
 
 popd
 echo "SUCCESS!"
+

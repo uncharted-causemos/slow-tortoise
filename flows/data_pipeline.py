@@ -15,10 +15,13 @@ from prefect.executors import DaskExecutor, LocalDaskExecutor
 from flows.common import (
     run_temporal_aggregation,
     deg2num,
+    parent_tile,
     ancestor_tiles,
     filter_by_min_zoom,
     tile_coord,
     save_tile,
+    save_tile_to_csv,
+    to_tile_csv,
     save_timeseries_as_csv,
     stats_to_json,
     info_to_json,
@@ -535,7 +538,7 @@ def compute_regional_aggregation_to_csv(
         qualifier_df = (
             qualifier_df[select_cols]
             .groupby(["feature", "timestamp"] + regions_cols + qualifier_col)
-            .agg(aggregates_to_compute)
+            .agg(aggregates_to_compute, split_out=DEFAULT_PARTITIONS)
         )
 
         # Rename columns
@@ -628,6 +631,7 @@ def compute_regional_aggregation_to_csv(
                     meta=(None, "object"),
                 )
                 foo.compute()
+    del df
 
 
 @task(log_stdout=True)
@@ -759,6 +763,60 @@ def subtile_aggregation(df, weight_column, should_run):
 
 @task(log_stdout=True)
 def compute_tiling(df, dest, time_res, model_id, run_id):
+    print(f"\ncompute tiling dataframe length={len(df.index)}, npartitions={df.npartitions}\n")
+
+    df = df.persist()
+
+    # Starting with level 14, work our way up until the subgrid offset
+    for level_idx in range(15):
+        actual_level = 14 - level_idx
+        if actual_level < 6:
+            continue
+
+        cdf = df.copy()
+
+        print(f"Compute tiling level {actual_level}")
+
+        cdf["subtile"] = df.apply(
+            lambda x: parent_tile(x.subtile, level_idx),
+            axis=1,
+            meta=(None, "object"),
+        )
+        tile_df = cdf.apply(
+            lambda x: tile_coord(x["subtile"], LEVEL_DIFF), axis=1, meta=(None, "object")
+        )
+        cdf = cdf.assign(tile=tile_df)
+
+        temp_df = (
+            cdf.groupby(["feature", "timestamp", "tile"])
+            .agg(list, split_out=DEFAULT_PARTITIONS)
+            .reset_index()
+        )
+        temp_df = temp_df.apply(
+            lambda x: save_tile(  # To test use: save_tile_to_csv
+                to_proto(x),  # To test use: to_tile_csv
+                dest,
+                model_id,
+                run_id,
+                x.feature,
+                time_res,
+                x.timestamp,
+                WRITE_TYPES[DEST_TYPE],
+            ),
+            axis=1,
+            meta=(None, "object"),
+        )
+        temp_df.compute()
+        print(
+            f"\nNumber of tiles to generated length={len(temp_df.index)}, npartitions={temp_df.npartitions}\n"
+        )
+        del temp_df
+        del cdf
+
+
+# Deprecated
+@task(log_stdout=True)
+def compute_tiling_current(df, dest, time_res, model_id, run_id):
     print(f"\ncompute tiling dataframe length={len(df.index)}, npartitions={df.npartitions}\n")
     stile = df.apply(
         lambda x: filter_by_min_zoom(ancestor_tiles(x.subtile), MIN_SUBTILE_PRECISION),
@@ -1304,7 +1362,7 @@ with Flow(FLOW_NAME) as flow:
         weight_column,
         upstream_tasks=[monthly_data],
     )
-    compute_regional_timeseries(
+    monthly_regional_timeseries_task = compute_regional_timeseries(
         monthly_data,
         dest,
         "month",
@@ -1330,11 +1388,14 @@ with Flow(FLOW_NAME) as flow:
     )
 
     monthly_spatial_data = subtile_aggregation(
-        monthly_data, weight_column, compute_tiles, upstream_tasks=[month_ts_size]
+        monthly_data,
+        weight_column,
+        compute_tiles,
+        upstream_tasks=[month_ts_size, monthly_regional_timeseries_task, monthly_csv_regional_df],
     )
     month_stats_done = compute_stats(monthly_spatial_data, dest, "month", model_id, run_id)
     month_done = compute_tiling(
-        monthly_spatial_data, dest, "month", model_id, run_id, upstream_tasks=[month_stats_done]
+        monthly_spatial_data, dest, "month", model_id, run_id, upstream_tasks=[monthly_spatial_data]
     )
 
     # ==== Run aggregations based on annual time resolution =====
@@ -1348,7 +1409,7 @@ with Flow(FLOW_NAME) as flow:
     year_ts_size = compute_timeseries_as_csv(
         annual_data, dest, "year", model_id, run_id, qualifier_map, qualifier_columns, weight_column
     )
-    compute_regional_timeseries(
+    annual_regional_timeseries_task = compute_regional_timeseries(
         annual_data,
         dest,
         "year",
@@ -1365,11 +1426,14 @@ with Flow(FLOW_NAME) as flow:
     )
 
     annual_spatial_data = subtile_aggregation(
-        annual_data, weight_column, compute_tiles, upstream_tasks=[year_ts_size]
+        annual_data,
+        weight_column,
+        compute_tiles,
+        upstream_tasks=[year_ts_size, annual_regional_timeseries_task, annual_csv_regional_df],
     )
     year_stats_done = compute_stats(annual_spatial_data, dest, "year", model_id, run_id)
     year_done = compute_tiling(
-        annual_spatial_data, dest, "year", model_id, run_id, upstream_tasks=[year_stats_done]
+        annual_spatial_data, dest, "year", model_id, run_id, upstream_tasks=[annual_spatial_data]
     )
 
     # ==== Generate a single aggregate value per feature =====
@@ -1571,42 +1635,44 @@ if __name__ == "__main__" and LOCAL_RUN:
         #         ],
         #     )
         # )
-        flow.run(
-            parameters=dict(
-                compute_tiles=True,
-                is_indicator=True,
-                model_id="3a013cd3-6064-4888-9cc6-0e9d637c690e",
-                run_id="indicator",
-                data_paths=[
-                    "https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/3a013cd3-6064-4888-9cc6-0e9d637c690e/3a013cd3-6064-4888-9cc6-0e9d637c690e.parquet.gzip",
-                    "https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/3a013cd3-6064-4888-9cc6-0e9d637c690e/3a013cd3-6064-4888-9cc6-0e9d637c690e_1.parquet.gzip",
-                    "https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/3a013cd3-6064-4888-9cc6-0e9d637c690e/3a013cd3-6064-4888-9cc6-0e9d637c690e_2.parquet.gzip",
-                ],
-                fill_timestamp=0,
-                qualifier_map={
-                    "data_id": ["event_date"],
-                    "fatalities": ["event_date", "event_type", "sub_event_type", "actor1"],
-                },
-            )
-        )
 
+        # DC Test 30K records
         # flow.run(
         #     parameters=dict(
         #         compute_tiles=True,
-        #         is_indicator=False,
-        #         model_id="2281e058-d521-4180-8216-54832700cedd",
-        #         run_id="22045d57-aa6a-4df6-a11d-793225878dab",
+        #         is_indicator=True,
+        #         model_id="3a013cd3-6064-4888-9cc6-0e9d637c690e",
+        #         run_id="indicator",
         #         data_paths=[
-        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/22045d57-aa6a-4df6-a11d-793225878dab/22045d57-aa6a-4df6-a11d-793225878dab_2281e058-d521-4180-8216-54832700cedd.1.parquet.gzip"
+        #             "https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/3a013cd3-6064-4888-9cc6-0e9d637c690e/3a013cd3-6064-4888-9cc6-0e9d637c690e.parquet.gzip",
+        #             "https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/3a013cd3-6064-4888-9cc6-0e9d637c690e/3a013cd3-6064-4888-9cc6-0e9d637c690e_1.parquet.gzip",
+        #             "https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/3a013cd3-6064-4888-9cc6-0e9d637c690e/3a013cd3-6064-4888-9cc6-0e9d637c690e_2.parquet.gzip",
         #         ],
         #         fill_timestamp=0,
         #         qualifier_map={
-        #             "max": ["Date", "camp"],
-        #             "min": ["Date", "camp"],
-        #             "data": ["Date", "camp"],
-        #             "mean": ["Date", "camp"],
-        #             "error": ["Date", "camp"],
-        #             "median": ["Date", "camp"],
+        #             "data_id": ["event_date"],
+        #             "fatalities": ["event_date", "event_type", "sub_event_type", "actor1"],
         #         },
         #     )
         # )
+
+        flow.run(
+            parameters=dict(
+                compute_tiles=True,
+                is_indicator=False,
+                model_id="2281e058-d521-4180-8216-54832700cedd",
+                run_id="22045d57-aa6a-4df6-a11d-793225878dab",
+                data_paths=[
+                    "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/22045d57-aa6a-4df6-a11d-793225878dab/22045d57-aa6a-4df6-a11d-793225878dab_2281e058-d521-4180-8216-54832700cedd.1.parquet.gzip"
+                ],
+                fill_timestamp=0,
+                qualifier_map={
+                    "max": ["Date", "camp"],
+                    "min": ["Date", "camp"],
+                    "data": ["Date", "camp"],
+                    "mean": ["Date", "camp"],
+                    "error": ["Date", "camp"],
+                    "median": ["Date", "camp"],
+                },
+            )
+        )
