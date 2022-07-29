@@ -90,7 +90,7 @@ def run_temporal_aggregation(df, time_res, weight_column):
 # https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames#Python
 def deg2num(lat_deg, lon_deg, zoom):
     lat_rad = math.radians(lat_deg)
-    n = 2.0 ** zoom
+    n = 2.0**zoom
     xtile = int((lon_deg + 180.0) / 360.0 * n)
     ytile = int((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n)
     return (zoom, xtile, ytile)
@@ -99,7 +99,7 @@ def deg2num(lat_deg, lon_deg, zoom):
 # Get the parent tile coord of the given tile coord
 def parent_tile(coord, l=1):
     z, x, y = coord
-    return (z - l, math.floor(x / (2 ** l)), math.floor(y / (2 ** l)))
+    return (z - l, math.floor(x / (2**l)), math.floor(y / (2**l)))
 
 
 # Return all acestor tile coords of the given tile coord
