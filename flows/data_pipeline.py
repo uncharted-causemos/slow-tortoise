@@ -780,10 +780,13 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
         )
         tile_df = df.apply(lambda x: tile_coord(x["z"], LEVEL_DIFF), axis=1, meta=(None, "object"))
         df = df.assign(tile=tile_df)
-        df.compute()
 
-        temp_df = df.groupby(["feature", "timestamp", "tile"]).agg(list)
-        temp_df.apply(
+        temp_df = (
+            df.groupby(["feature", "timestamp", "tile"])
+            .agg(list, split_out=DEFAULT_PARTITIONS)
+            .reset_index()
+        )
+        temp_df = temp_df.apply(
             lambda x: save_tile(  # To test use: save_tile_to_csv
                 to_proto(x),  # To test use: to_tile_csv
                 dest,
@@ -797,8 +800,9 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
             axis=1,
             meta=(None, "object"),
         )
+        temp_df.compute()
         print(
-            f"\nNumber of tiles to generated length={len(temp_df.index)}, npartitions={df.npartitions}\n"
+            f"\nNumber of tiles to generated length={len(temp_df.index)}, npartitions={temp_df.npartitions}\n"
         )
         del temp_df
 
