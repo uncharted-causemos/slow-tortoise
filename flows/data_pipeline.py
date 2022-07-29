@@ -1,5 +1,5 @@
 from dask import delayed
-from typing import Tuple
+from typing import Tuple, List
 import dask.dataframe as dd
 import pandas as pd
 import numpy as np
@@ -157,7 +157,7 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
         # Note: dask read_parquet doesn't work for gzip files. So here is the work around using pandas read_parquet
         # Read each parquet file in separately, and ensure that all columns match before joining together
         delayed_dfs = [delayed(pd.read_parquet)(path) for path in numeric_files]
-        dfs = [dd.from_delayed(d) for d in delayed_dfs]
+        dfs: List[pd.DataFrame] = [dd.from_delayed(d) for d in delayed_dfs]
 
         if len(dfs) == 0:
             raise FAIL("No numeric parquet files")
