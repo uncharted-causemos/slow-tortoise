@@ -782,7 +782,9 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
             axis=1,
             meta=(None, "object"),
         )
-        tile_df = cdf.apply(lambda x: tile_coord(x["subtile"], LEVEL_DIFF), axis=1, meta=(None, "object"))
+        tile_df = cdf.apply(
+            lambda x: tile_coord(x["subtile"], LEVEL_DIFF), axis=1, meta=(None, "object")
+        )
         cdf = cdf.assign(tile=tile_df)
 
         temp_df = (
