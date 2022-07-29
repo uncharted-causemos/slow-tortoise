@@ -774,13 +774,11 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
         print(f"Compute tiling level {actual_level}")
 
         df["z"] = df.apply(
-            lambda x:parent_tile(x.subtile, level_idx),
+            lambda x: parent_tile(x.subtile, level_idx),
             axis=1,
             meta=(None, "object"),
         )
-        tile_df = df.apply(
-            lambda x: tile_coord(x["z"], LEVEL_DIFF), axis=1, meta=(None, "object")
-        )
+        tile_df = df.apply(lambda x: tile_coord(x["z"], LEVEL_DIFF), axis=1, meta=(None, "object"))
         df = df.assign(tile=tile_df)
         df.compute()
 
@@ -799,7 +797,9 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
             axis=1,
             meta=(None, "object"),
         )
-        print(f"\nNumber of tiles to generated length={len(temp_df.index)}, npartitions={df.npartitions}\n")
+        print(
+            f"\nNumber of tiles to generated length={len(temp_df.index)}, npartitions={df.npartitions}\n"
+        )
         del temp_df
 
 
@@ -1376,7 +1376,10 @@ with Flow(FLOW_NAME) as flow:
     )
 
     monthly_spatial_data = subtile_aggregation(
-        monthly_data, weight_column, compute_tiles, upstream_tasks=[month_ts_size, monthly_regional_timeseries_task, monthly_csv_regional_df]
+        monthly_data,
+        weight_column,
+        compute_tiles,
+        upstream_tasks=[month_ts_size, monthly_regional_timeseries_task, monthly_csv_regional_df],
     )
     # month_stats_done = compute_stats(monthly_spatial_data, dest, "month", model_id, run_id)
     month_done = compute_tiling(
@@ -1411,7 +1414,10 @@ with Flow(FLOW_NAME) as flow:
     )
 
     annual_spatial_data = subtile_aggregation(
-        annual_data, weight_column, compute_tiles, upstream_tasks=[year_ts_size, annual_regional_timeseries_task, annual_csv_regional_df]
+        annual_data,
+        weight_column,
+        compute_tiles,
+        upstream_tasks=[year_ts_size, annual_regional_timeseries_task, annual_csv_regional_df],
     )
     # year_stats_done = compute_stats(annual_spatial_data, dest, "year", model_id, run_id)
     year_done = compute_tiling(
