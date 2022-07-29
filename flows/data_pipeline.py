@@ -20,6 +20,8 @@ from flows.common import (
     filter_by_min_zoom,
     tile_coord,
     save_tile,
+    save_tile_to_csv,
+    to_tile_csv,
     save_timeseries_as_csv,
     stats_to_json,
     info_to_json,
@@ -771,18 +773,20 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
         if actual_level < 6:
             continue
 
+        cdf = df.copy()
+
         print(f"Compute tiling level {actual_level}")
 
-        df["z"] = df.apply(
+        cdf["subtile"] = df.apply(
             lambda x: parent_tile(x.subtile, level_idx),
             axis=1,
             meta=(None, "object"),
         )
-        tile_df = df.apply(lambda x: tile_coord(x["z"], LEVEL_DIFF), axis=1, meta=(None, "object"))
-        df = df.assign(tile=tile_df)
+        tile_df = cdf.apply(lambda x: tile_coord(x["subtile"], LEVEL_DIFF), axis=1, meta=(None, "object"))
+        cdf = cdf.assign(tile=tile_df)
 
         temp_df = (
-            df.groupby(["feature", "timestamp", "tile"])
+            cdf.groupby(["feature", "timestamp", "tile"])
             .agg(list, split_out=DEFAULT_PARTITIONS)
             .reset_index()
         )
@@ -805,8 +809,10 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
             f"\nNumber of tiles to generated length={len(temp_df.index)}, npartitions={temp_df.npartitions}\n"
         )
         del temp_df
+        del cdf
 
 
+# Deprecated
 @task(log_stdout=True)
 def compute_tiling_current(df, dest, time_res, model_id, run_id):
     print(f"\ncompute tiling dataframe length={len(df.index)}, npartitions={df.npartitions}\n")
@@ -1385,7 +1391,7 @@ with Flow(FLOW_NAME) as flow:
         compute_tiles,
         upstream_tasks=[month_ts_size, monthly_regional_timeseries_task, monthly_csv_regional_df],
     )
-    # month_stats_done = compute_stats(monthly_spatial_data, dest, "month", model_id, run_id)
+    month_stats_done = compute_stats(monthly_spatial_data, dest, "month", model_id, run_id)
     month_done = compute_tiling(
         monthly_spatial_data, dest, "month", model_id, run_id, upstream_tasks=[monthly_spatial_data]
     )
@@ -1423,7 +1429,7 @@ with Flow(FLOW_NAME) as flow:
         compute_tiles,
         upstream_tasks=[year_ts_size, annual_regional_timeseries_task, annual_csv_regional_df],
     )
-    # year_stats_done = compute_stats(annual_spatial_data, dest, "year", model_id, run_id)
+    year_stats_done = compute_stats(annual_spatial_data, dest, "year", model_id, run_id)
     year_done = compute_tiling(
         annual_spatial_data, dest, "year", model_id, run_id, upstream_tasks=[annual_spatial_data]
     )
