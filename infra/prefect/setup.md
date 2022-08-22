@@ -12,7 +12,7 @@
 - Install docker-compose using [the instructions here](https://docs.docker.com/compose/install/)
 - A virtual conda environment will be used to simplify future package changes.
   Create a conda environment and install prefect:
-  `conda create -n prefect -c conda-forge "prefect==0.14.20"`
+  `conda create -n prefect -c conda-forge "prefect==1.2.4"`
 - Activate the new conda environment with `conda activate prefect`
 - Copy [config.toml](./config.toml) to `~/.prefect/config.toml` making sure to replace the apollo_url with the external IP of the VM and the dask address with the IP of the dask cluster.
 - Configure prefect `prefect backend server`
@@ -26,7 +26,7 @@
 **NOTES**
 If you are running into issues with docker registry pull limits when starting the server you can run using a specific image version that you already have locally.
 - Use `docker images` to find out what versions of prefect you already have in your local registry
-- Start the server with something like this `prefect server start --use-volume --skip-pull --version=core-0.14.6 --ui-version=core-0.14.6`
+- Start the server with something like this `prefect server start --use-volume --skip-pull --version=core-1.2.4 --ui-version=core-1.2.4`
 
 It is helpful to run the prefect server and agent in their own tmux session.
 - Start a new tmux session `tmux new -s <label>`
