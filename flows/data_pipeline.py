@@ -7,6 +7,8 @@ import os
 import json
 import re
 import time
+import math
+import asyncio
 
 from prefect import task, Flow, Parameter
 from prefect.engine.signals import SKIP, FAIL
@@ -776,6 +778,7 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
         cdf = df.copy()
 
         print(f"Compute tiling level {actual_level}")
+        start = time.time()
 
         cdf["subtile"] = df.apply(
             lambda x: parent_tile(x.subtile, level_idx),
@@ -792,7 +795,8 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
             .agg(list, split_out=DEFAULT_PARTITIONS)
             .reset_index()
         )
-        temp_df = temp_df.apply(
+        npart = int(min(math.ceil(len(temp_df.index) / 2), 500))
+        temp_df = temp_df.repartition(npartitions=npart).apply(
             lambda x: save_tile(  # To test use: save_tile_to_csv
                 to_proto(x),  # To test use: to_tile_csv
                 dest,
@@ -807,8 +811,9 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
             meta=(None, "object"),
         )
         temp_df.compute()
+        end = time.time()
         print(
-            f"\nNumber of tiles to generated length={len(temp_df.index)}, npartitions={temp_df.npartitions}\n"
+            f"\nNumber of tiles to generated length={len(temp_df.index)}, npartitions={temp_df.npartitions}, elapsed time={end - start}\n"
         )
         del temp_df
         del cdf
