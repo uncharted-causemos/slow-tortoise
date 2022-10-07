@@ -33,7 +33,7 @@ ssh dask-swarm "docker pull $WM_DATA_PIPELINE_IMAGE"
 ssh dask-swarm-big "docker pull $WM_DATA_PIPELINE_IMAGE"
 
 echo "Restarting swarms..."
-ssh dask-swarm 'docker stack deploy --with-registry-auth --compose-file docker-dask-docker-compose.yml dask_swarm'
+ssh dask-swarm 'docker stack deploy --with-registry-auth --compose-file docker-compose.yml dask_swarm'
 ssh dask-swarm-big 'docker stack deploy --with-registry-auth --compose-file docker-compose.yml big_dask_swarm'
 
 echo "Registering with Prefect..."
