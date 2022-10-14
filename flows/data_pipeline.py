@@ -8,7 +8,6 @@ import json
 import re
 import time
 import math
-import asyncio
 
 from prefect import task, Flow, Parameter
 from prefect.engine.signals import SKIP, FAIL
