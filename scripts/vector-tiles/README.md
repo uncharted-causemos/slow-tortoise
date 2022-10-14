@@ -22,7 +22,7 @@ brew install gdal tippecanoe minio/stable/mc
 
 Vector tile sets will be generated in `dist` folder
 
-### Uploade vector tiles to minio/s3
+### Upload vector tiles to minio/s3
 ```
 mc alias set cm <TARGET-S3-ENDPOINT> <YOUR-ACCESS-KEY> <YOUR-SECRET-KEY>
 mc mb cm/vector-tiles
