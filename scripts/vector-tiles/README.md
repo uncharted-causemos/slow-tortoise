@@ -20,3 +20,9 @@ brew install gdal tippecanoe
 ```
 
 Vector tile sets will be generated in `dist` folder
+
+### Uploade vector tiles to minio/s3
+
+```
+mc cp -r dist/* cm/vector-tiles/
+```
