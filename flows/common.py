@@ -171,16 +171,12 @@ def apply_qualifier_count_limit(qualifier_map, columns, counts, max_count) -> Tu
     return (new_qualifier_map, qualifier_columns)
 
 
-def is_same_s3_session(s3meta, dest):
-    return dest["endpoint_url"] == s3meta["endpoint_url"] and dest["region_name"] == s3meta["region_name"]
-
 # writes to S3 using the boto client
 def write_to_s3(body, path, dest):
     # Create s3 client only if it hasn't been created in current worker
-    # since initalizing the client is expensive. Make sure we only initialize it once per worker
+    # since initializing the client is expensive. Make sure we only initialize it once per worker
     global s3
-    if (not is_same_s3_session(s3.meta, dest)) or ("s3" not in globals()):
-    # if "s3" not in globals():
+    if ("s3" not in globals()) or (s3.meta.endpoint_url != dest["endpoint_url"]):
         s3 = boto3.session.Session().client(
             "s3",
             endpoint_url=dest["endpoint_url"],
