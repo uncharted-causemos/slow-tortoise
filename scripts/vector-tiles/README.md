@@ -7,10 +7,11 @@ The following dependencies need to be installed
 - Python >= 2.6
 - gdal 
 - tippecanoe
+- mc (Minio client for uploading vector tiles to a bucket)
 
 Installation on Mac:
 ```
-brew install gdal tippecanoe
+brew install gdal tippecanoe minio/stable/mc
 ```
 
 ### Generate vector tile set
@@ -20,3 +21,10 @@ brew install gdal tippecanoe
 ```
 
 Vector tile sets will be generated in `dist` folder
+
+### Upload vector tiles to minio/s3
+```
+mc alias set cm <TARGET-S3-ENDPOINT> <YOUR-ACCESS-KEY> <YOUR-SECRET-KEY>
+mc mb cm/vector-tiles
+mc cp -r dist/* cm/vector-tiles/
+```

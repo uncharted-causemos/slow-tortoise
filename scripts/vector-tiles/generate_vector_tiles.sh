@@ -26,7 +26,7 @@ cd ./.tmp
 # Downloading mbutil dependency (if not exist)
 if [ ! -d "mbutil" ]
 then
-  git clone git://github.com/mapbox/mbutil.git
+  git clone git@github.com:mapbox/mbutil.git
   mbutil/mb-util -h >/dev/null && echo "mb-util cloned successfully"
 fi
 
