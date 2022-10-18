@@ -812,7 +812,7 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
         temp_df.compute()
         end = time.time()
         print(
-            f"\nNumber of tiles to generated length={len(temp_df.index)}, npartitions={temp_df.npartitions}, elapsed time={end - start}\n"
+            f"\nNumber of tiles generated length={len(temp_df.index)}, npartitions={temp_df.npartitions}, elapsed time={end - start}\n"
         )
         del temp_df
         del cdf
