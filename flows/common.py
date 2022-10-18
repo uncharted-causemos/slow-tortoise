@@ -174,9 +174,11 @@ def apply_qualifier_count_limit(qualifier_map, columns, counts, max_count) -> Tu
 # writes to S3 using the boto client
 def write_to_s3(body, path, dest):
     # Create s3 client only if it hasn't been created in current worker
-    # since initalizing the client is expensive. Make sure we only initialize it once per worker
+    # since initializing the client is expensive. Make sure we only initialize it once per worker
+    # Since global variable and the s3 client initialized here seem to be shared across multiple flow runs,
+    # we need to also check for the destination url and re-initialize the s3 client when dest url has been changed in different flow run.
     global s3
-    if "s3" not in globals():
+    if ("s3" not in globals()) or (s3.meta.endpoint_url != dest["endpoint_url"]):
         s3 = boto3.session.Session().client(
             "s3",
             endpoint_url=dest["endpoint_url"],
