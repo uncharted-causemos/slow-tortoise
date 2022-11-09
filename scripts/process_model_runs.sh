@@ -11,7 +11,7 @@ fi
 
 source $1 
 echo "Running Configuration"
-echo "DOJO_URL: $DOJO_URL"
+echo "ES_URL: $ES_URL"
 echo "CAUSEMOS_URL: $CAUSEMOS_URL\n"
 
 shift # shift the first argument
