@@ -16,7 +16,6 @@ CAUSEMOS_URL = os.getenv("CAUSEMOS_URL", "http://localhost:3000")
 CAUSEMOS_USER = os.getenv("CAUSEMOS_USER", "")
 CAUSEMOS_PWD = os.getenv("CAUSEMOS_PWD", "")
 
-
 def get_model_run_from_es(run_id, es_url=ES_URL):
     # Fetch existing model run metadata
     auth = None
