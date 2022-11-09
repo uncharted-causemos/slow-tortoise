@@ -2,9 +2,8 @@ import json
 import sys
 import time
 import requests
-import os
 
-CAUSEMOS_URL = os.getenv("CAUSEMOS_URL", "http://localhost:3000")
+CAUSEMOS_URL = "http://localhost:3000"
 
 # Sumbit all indicators from the input file for post-processing.
 # The input file can be created with `fetch-all-indicators.py` and optionally filtered with `filter_mitre_indicators.py`
