@@ -22,7 +22,7 @@ setup(
         "pandas==1.3.5", # There's a groupby.apply breaking change in >= 1.4.0 version (https://pandas.pydata.org/pandas-docs/stable/whatsnew/v1.4.0.html#groupby-apply-consistent-transform-detection)
         "s3fs==2022.5.0",
         "boto3==1.21.21",
-        "protobuf==4.21.4",
+        "protobuf==4.21.6",
         "pyarrow==8.0.0",
         "prometheus_client==0.14.1",
     ],
