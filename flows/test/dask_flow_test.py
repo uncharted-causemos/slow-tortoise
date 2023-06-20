@@ -1,5 +1,6 @@
 from prefect import task, Flow
-from prefect.storage import Docker
+from prefect.storage import S3
+from prefect.run_configs import DockerRun
 from prefect.executors import DaskExecutor, LocalDaskExecutor
 import dask
 import os
@@ -36,7 +37,6 @@ def simple_add():
 
 DASK_SCHEDULER = os.getenv("WM_DASK_SCHEDULER")
 LOCAL_RUN = os.getenv("WM_LOCAL", "False").lower() in ("true", "1", "t")
-PUSH_IMAGE = os.getenv("WM_PUSH_IMAGE", "False").lower() in ("true", "1", "t")
 
 # DO NOT DECLARE FLOW IN MAIN.  During registration, prefect calls `exec` on this
 # script and looks for instances of `Flow` at the global level.
@@ -48,30 +48,23 @@ if not DASK_SCHEDULER:
 else:
     flow.executor = DaskExecutor(DASK_SCHEDULER)
 
-# setup the flow storage - will build a docker image containing the flow from the base image
-# provided
+# The flow will be executed inside this docker image
 base_image = os.getenv(
     "WM_DATA_PIPELINE_IMAGE", "docker.uncharted.software/worldmodeler/wm-data-pipeline:latest"
 )
-registry_url = os.getenv("DOCKER_REGISTRY_URL", "docker.uncharted.software")
-image_name = os.getenv("DOCKER_RUN_IMAGE", "worldmodeler/wm-data-pipeline/test-dask-flow")
-if not PUSH_IMAGE:
-    image_name = f"{registry_url}/{image_name}"
-    registry_url = ""
+# TODO: based on the environment that the agent is running on, switch between DockerRun or KubeRun
+flow.run_config = DockerRun(image=base_image)
 
-flow.storage = Docker(
-    registry_url=registry_url,
-    base_image=base_image,
-    image_name=image_name,
-    local_image=True,
+# The flow code will be stored in and retrieved from following s3 bucket
+# 
+flow.storage = S3(
+    bucket='causemos-prod-prefect-flows-dev',
     stored_as_script=True,
-    path="/wm_data_pipeline/flows/test/dask_flow_test.py",
-    ignore_healthchecks=True,
 )
-
 
 # For debugging support - local dask cluster needs to run in main otherwise process forking
 # fails.
 if __name__ == "__main__" and LOCAL_RUN:
+    print('test')
     state = flow.run()
     print(state.result[simple_add_result].result)

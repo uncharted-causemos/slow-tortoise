@@ -178,14 +178,23 @@ def write_to_s3(body, path, dest):
     # Since global variable and the s3 client initialized here seem to be shared across multiple flow runs,
     # we need to also check for the destination url and re-initialize the s3 client when dest url has been changed in different flow run.
     global s3
-    if ("s3" not in globals()) or (s3.meta.endpoint_url != dest["endpoint_url"]):
-        s3 = boto3.session.Session().client(
-            "s3",
-            endpoint_url=dest["endpoint_url"],
-            region_name=dest["region_name"],
-            aws_access_key_id=dest["key"],
-            aws_secret_access_key=dest["secret"],
-        )
+    if ("s3" not in globals()) or ("endpoint_url" in dest and s3.meta.endpoint_url != dest["endpoint_url"]):
+        if "endpoint_url" in dest:
+            # If custom s3 endpoint url is provided
+            s3 = boto3.session.Session().client(
+                "s3",
+                endpoint_url=dest["endpoint_url"],
+                region_name=dest["region_name"],
+                aws_access_key_id=dest["key"],
+                aws_secret_access_key=dest["secret"],
+            )
+        else:
+            # connect to default aws s3
+            s3 = boto3.session.Session().client(
+                "s3",
+                aws_access_key_id=dest["key"],
+                aws_secret_access_key=dest["secret"],
+            )
 
     s3.put_object(Body=body, Bucket=dest["bucket"], Key=path)
 

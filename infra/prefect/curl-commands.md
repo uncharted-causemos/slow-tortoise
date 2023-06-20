@@ -7,7 +7,7 @@
 Prefect documentation [here](https://docs.prefect.io/orchestration/concepts/api.html)  
 To write your own query with curl just replace the GraphQL query in the `query` variable and leave the rest of the bash dark magic alone.  
 **NOTE**: You will need to double escape `\\"` any quotes that appear inside a JSON string (like the parameters in the first query.)  
-To craft GraphQL queries you can use the [Interactive API](http://10.65.18.52:8080/default/api) tab in the Prefect UI where you have full access to the schemas and type information
+To craft GraphQL queries you can use the [Interactive API](http://10.65.18.57:8080/default/api) tab in the Prefect UI where you have full access to the schemas and type information
 
 ### Sample queries
 
@@ -23,7 +23,7 @@ query='mutation {
   }
 }'
 query="${query//[$'\n']}"
-curl 'http://10.65.18.52:4200/' -H 'Content-Type: application/json' -d '{"query":"'"${query//[\"]/\\\"}"'"}'
+curl 'http://10.65.18.57:4200/' -H 'Content-Type: application/json' -d '{"query":"'"${query//[\"]/\\\"}"'"}'
 ```
 **NOTE:** The `flow_id` of a flow changes with each version. To create a "stable" query that continues to work between flow updates use the flow's `version_group_id` instead.
 
@@ -40,7 +40,7 @@ query='query {
   }
 }'
 query="${query//[$'\n']}"
-curl 'http://10.65.18.52:4200/' -H 'Content-Type: application/json' -d '{"query":"'"${query//[\"]/\\\"}"'"}'
+curl 'http://10.65.18.57:4200/' -H 'Content-Type: application/json' -d '{"query":"'"${query//[\"]/\\\"}"'"}'
 ```
 
 **Get the logs of a flow run**
@@ -61,5 +61,5 @@ query='query {
   }
 }'
 query="${query//[$'\n']}"
-curl 'http://10.65.18.52:4200/' -H 'Content-Type: application/json' -d '{"query":"'"${query//[\"]/\\\"}"'"}'
+curl 'http://10.65.18.57:4200/' -H 'Content-Type: application/json' -d '{"query":"'"${query//[\"]/\\\"}"'"}'
 ```

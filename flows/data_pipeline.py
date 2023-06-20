@@ -13,6 +13,8 @@ from prefect import task, Flow, Parameter
 from prefect.engine.signals import SKIP, FAIL
 from prefect.storage import Docker
 from prefect.executors import DaskExecutor, LocalDaskExecutor
+from prefect.storage import S3
+from prefect.run_configs import DockerRun
 from flows.common import (
     run_temporal_aggregation,
     deg2num,
@@ -56,19 +58,34 @@ WRITE_TYPES = {
 
 TRUE_TOKENS = ("true", "1", "t")
 
-# address of the dask scheduler to connect to - set this to empty to spawn a local
-# dask cluster
-DASK_SCHEDULER = os.getenv("WM_DASK_SCHEDULER", "10.65.18.58:8786")
-
 # run the flow locally without the prefect agent and server
 LOCAL_RUN = os.getenv("WM_LOCAL", "False").lower() in TRUE_TOKENS
 
 # write to the local file system - mostly to support testing
 DEST_TYPE = os.getenv("WM_DEST_TYPE", "s3").lower()
 
-# indicate whether or not this flow should be pushed to the docker registry as part of its
-# registration process
-PUSH_IMAGE = os.getenv("WM_PUSH_IMAGE", "False").lower() in TRUE_TOKENS
+## ===== These environment variables are needed to be set by the agent =======
+# address of the dask scheduler to connect to - set this to empty to spawn a local
+# dask cluster
+WM_DASK_SCHEDULER = os.getenv("WM_DASK_SCHEDULER", "10.65.18.58:8786")
+
+# default base-image, used by the agent to run the flow script inside the image. 
+WM_DATA_PIPELINE_IMAGE = os.getenv(
+    "WM_DATA_PIPELINE_IMAGE", "docker.uncharted.software/worldmodeler/wm-data-pipeline:latest"
+)
+# AWS s3 storage information
+WM_FLOW_STORAGE_S3_BUCKET_NAME = os.getenv("WM_FLOW_STORAGE_S3_BUCKET_NAME", "causemos-prod-prefect-flows-dev")
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+
+# Custom s3 destination. If WM_S3_DEST_URL is not empty, the pipeline will use following information to connect s3 to write output to,
+# otherwise it will use default aws s3 with above AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY 
+# If you want to write the pipeline output to custom location such as custom minio storage, provide following information
+WM_S3_DEST_URL = os.getenv("WM_S3_DEST_URL", "http://10.65.18.9:9000" if LOCAL_RUN else None)
+WM_S3_DEST_REGION = os.getenv("WM_S3_DEST_REGION", "us-east-1")
+WM_S3_DEST_KEY = os.getenv("WM_S3_DEST_KEY") 
+WM_S3_DEST_SECRET = os.getenv("WM_S3_DEST_SECRET") 
+# ================================================================
 
 # Following env vars provide the defaults assigned to the prefect flow parameters.  The parameters
 # are normally set when a run is scheduled in the deployment environment, but when we do a local
@@ -77,28 +94,14 @@ PUSH_IMAGE = os.getenv("WM_PUSH_IMAGE", "False").lower() in TRUE_TOKENS
 #
 # TODO: Safer to set these to reasonable dev values (or leave them empty) so that nothing is accidentally overwritten?
 
-# S3 data source URL
+# S3 data source URL (mainly used for getting test data)
 S3_SOURCE_URL = os.getenv("WM_S3_SOURCE_URL", "http://10.65.18.73:9000")
 
-# S3 data destination URL
-S3_DEST_URL = os.getenv("WM_S3_DEST_URL", "http://10.65.18.9:9000")
-
 # default s3 indicator write bucket
-S3_DEFAULT_INDICATOR_BUCKET = os.getenv("WM_S3_DEFAULT_INDICATOR_BUCKET", "new-indicators")
+S3_DEFAULT_INDICATOR_BUCKET = os.getenv("WM_S3_DEFAULT_INDICATOR_BUCKET", "test-indicators")
 
 # default model s3 write bucket
-S3_DEFAULT_MODEL_BUCKET = os.getenv("WM_S3_DEFAULT_MODEL_BUCKET", "new-models")
-
-# default base-image, used to build docker image for the agent
-BASE_IMAGE = os.getenv(
-    "WM_DATA_PIPELINE_IMAGE", "docker.uncharted.software/worldmodeler/wm-data-pipeline:latest"
-)
-
-DOCKER_REGISTRY_URL = os.getenv("DOCKER_REGISTRY_URL", "docker.uncharted.software")
-DOCKER_RUN_IMAGE = os.getenv(
-    "DOCKER_RUN_IMAGE", "worldmodeler/wm-data-pipeline/prefect-datacube-ingest"
-)
-
+S3_DEFAULT_MODEL_BUCKET = os.getenv("WM_S3_DEFAULT_MODEL_BUCKET", "test-models")
 
 # This determines the number of bins(subtiles) per tile. Eg. Each tile has 4^6=4096 grid cells (subtiles) when LEVEL_DIFF is 6
 # Tile (z, x, y) will have a sutbile where its zoom level is z + LEVEL_DIFF
@@ -1261,28 +1264,19 @@ def print_flow_metadata(
 
 with Flow(FLOW_NAME) as flow:
     # setup the flow executor - if no adress is set rely on a local dask instance
-    if not DASK_SCHEDULER:
+    if not WM_DASK_SCHEDULER:
         flow.executor = LocalDaskExecutor()
     else:
-        flow.executor = DaskExecutor(DASK_SCHEDULER)
+        flow.executor = DaskExecutor(WM_DASK_SCHEDULER)
 
-    # setup the flow storage - will build a docker image containing the flow from the base image
-    # provided
-    registry_url = DOCKER_REGISTRY_URL
-    image_name = DOCKER_RUN_IMAGE
-    if not PUSH_IMAGE:
-        image_name = f"{registry_url}/{image_name}"
-        registry_url = ""
-
-    flow.storage = Docker(
-        registry_url=registry_url,
-        base_image=BASE_IMAGE,
-        image_name=image_name,
-        local_image=True,
+    # The flow code will be stored in and retrieved from following s3 bucket
+    flow.storage = S3(
+        bucket=WM_FLOW_STORAGE_S3_BUCKET_NAME,
         stored_as_script=True,
-        path="/wm_data_pipeline/flows/data_pipeline.py",
-        ignore_healthchecks=True,
     )
+
+    # TODO: based on the environment that the agent is running on, switch between DockerRun or KubeRun
+    flow.run_config = DockerRun(image=WM_DATA_PIPELINE_IMAGE)
 
     # Parameters
     model_id = Parameter("model_id", default="geo-test-data")
@@ -1318,15 +1312,27 @@ with Flow(FLOW_NAME) as flow:
         },
     )
 
-    dest = Parameter(
-        "dest",
-        default={
-            "endpoint_url": S3_DEST_URL,
-            "region_name": "us-east-1",
-            "key": "foobar",
-            "secret": "foobarbaz",
-        },
-    )
+    # dest = Parameter(
+    #     "dest",
+    #     default={
+    #         "endpoint_url": S3_DEST_URL,
+    #         "region_name": "us-east-1",
+    #         "key": "foobar",
+    #         "secret": "foobarbaz",
+    #     },
+    # )
+    dest = {
+        "key": AWS_ACCESS_KEY_ID, 
+        "secret": AWS_SECRET_ACCESS_KEY, 
+    }
+    # if Custom s3 destination url is provide, override dest object
+    if WM_S3_DEST_URL is not None:
+        dest = {
+            "endpoint_url": WM_S3_DEST_URL,
+            "region_name": WM_S3_DEST_REGION, 
+            "key": WM_S3_DEST_KEY,
+            "secret": WM_S3_DEST_SECRET,
+        }
 
     (raw_df, num_rows) = read_data(source, data_paths)
 

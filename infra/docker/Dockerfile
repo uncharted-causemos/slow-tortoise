@@ -14,8 +14,7 @@ COPY src/version.py .
 
 # force an install of our package requirements so that they get properly
 # cached
-# Note: '--ignore-installed PyYAML' override already installed package pyYAML without unistalling since uninstalling PyYAML throws error
-RUN python3 setup.py egg_info && pip3 install `grep -v '^\[' *.egg-info/requires.txt` --ignore-installed PyYAML
+RUN python3 setup.py egg_info && pip3 install `grep -v '^\[' *.egg-info/requires.txt`
 
 # copy over the flow source
 ADD src/flows ./flows
