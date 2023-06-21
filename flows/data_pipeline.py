@@ -14,7 +14,7 @@ from prefect.engine.signals import SKIP, FAIL
 from prefect.storage import Docker
 from prefect.executors import DaskExecutor, LocalDaskExecutor
 from prefect.storage import S3
-from prefect.run_configs import DockerRun
+from prefect.run_configs import DockerRun, KubernetesRun, LocalRun
 from flows.common import (
     run_temporal_aggregation,
     deg2num,
@@ -60,21 +60,26 @@ TRUE_TOKENS = ("true", "1", "t")
 
 # run the flow locally without the prefect agent and server
 LOCAL_RUN = os.getenv("WM_LOCAL", "False").lower() in TRUE_TOKENS
-
-# write to the local file system - mostly to support testing
+# write to the local file system - mostly to support testing on local run
 DEST_TYPE = os.getenv("WM_DEST_TYPE", "s3").lower()
 
-## ===== These environment variables are needed to be set by the agent =======
-# address of the dask scheduler to connect to - set this to empty to spawn a local
-# dask cluster
-WM_DASK_SCHEDULER = os.getenv("WM_DASK_SCHEDULER", "10.65.18.58:8786")
+## ======= Flow Configuration Environment Variables ===========
+# Note: Following environment variables need to be set when registering the flow. 
+# Theses variables are used to configure flow.run_config and flow.storage
 
+# AWS s3 storage information
+WM_FLOW_STORAGE_S3_BUCKET_NAME = os.getenv("WM_FLOW_STORAGE_S3_BUCKET_NAME", "causemos-prod-prefect-flows-dev")
 # default base-image, used by the agent to run the flow script inside the image. 
 WM_DATA_PIPELINE_IMAGE = os.getenv(
     "WM_DATA_PIPELINE_IMAGE", "docker.uncharted.software/worldmodeler/wm-data-pipeline:latest"
 )
-# AWS s3 storage information
-WM_FLOW_STORAGE_S3_BUCKET_NAME = os.getenv("WM_FLOW_STORAGE_S3_BUCKET_NAME", "causemos-prod-prefect-flows-dev")
+WM_RUN_CONFIG_TYPE = os.getenv("WM_RUN_CONFIG_TYPE", 'docker') # docker, local, kubernetes
+## ======= Flow Configuration Environment Variables End ===========
+
+## ===== These environment variables are run time variables set by the agent =======
+# address of the dask scheduler to connect to - set this to empty to spawn a local
+# dask cluster
+WM_DASK_SCHEDULER = os.getenv("WM_DASK_SCHEDULER", "10.65.18.58:8786")
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 
@@ -1263,20 +1268,28 @@ def print_flow_metadata(
 ###########################################################################
 
 with Flow(FLOW_NAME) as flow:
-    # setup the flow executor - if no adress is set rely on a local dask instance
-    if not WM_DASK_SCHEDULER:
-        flow.executor = LocalDaskExecutor()
-    else:
-        flow.executor = DaskExecutor(WM_DASK_SCHEDULER)
-
+    # ============ Flow Configuration ===================
     # The flow code will be stored in and retrieved from following s3 bucket
     flow.storage = S3(
         bucket=WM_FLOW_STORAGE_S3_BUCKET_NAME,
         stored_as_script=True,
     )
+    # Set flow run configuration. Each RunConfig type has a corresponding Prefect Agent.
+    # Corresponding WM_RUN_CONFIG_TYPE environment variable must be provided by the agent with same type. 
+    # For example, with docker agent, set RUN_CONFIG_TYPE to 'docker' and with kubernetes agent, set RUN_CONFIG_TYPE to 'kubernetes' 
+    if WM_RUN_CONFIG_TYPE == 'docker':
+        flow.run_config = DockerRun(image=WM_DATA_PIPELINE_IMAGE)
+    elif WM_RUN_CONFIG_TYPE == 'local':
+        flow.run_config = LocalRun()
+    elif WM_RUN_CONFIG_TYPE == 'kubernetes':
+        flow.run_config = KubernetesRun(image=WM_DATA_PIPELINE_IMAGE)
 
-    # TODO: based on the environment that the agent is running on, switch between DockerRun or KubeRun
-    flow.run_config = DockerRun(image=WM_DATA_PIPELINE_IMAGE)
+    # setup the flow executor - if no adress is set rely on a local dask instance
+    if not WM_DASK_SCHEDULER:
+        flow.executor = LocalDaskExecutor()
+    else:
+        flow.executor = DaskExecutor(WM_DASK_SCHEDULER)
+    # ============ Flow Configuration End ================
 
     # Parameters
     model_id = Parameter("model_id", default="geo-test-data")
@@ -1312,15 +1325,6 @@ with Flow(FLOW_NAME) as flow:
         },
     )
 
-    # dest = Parameter(
-    #     "dest",
-    #     default={
-    #         "endpoint_url": S3_DEST_URL,
-    #         "region_name": "us-east-1",
-    #         "key": "foobar",
-    #         "secret": "foobarbaz",
-    #     },
-    # )
     dest = {
         "key": AWS_ACCESS_KEY_ID, 
         "secret": AWS_SECRET_ACCESS_KEY, 

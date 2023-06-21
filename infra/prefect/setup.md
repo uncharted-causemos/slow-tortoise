@@ -4,7 +4,7 @@
 - See [here](https://gitlab.uncharted.software/WM/wm-playbooks/-/blob/main/prefect-v1/server/README.md) how to set up prefect server.
 - See [here](https://gitlab.uncharted.software/WM/wm-playbooks/-/blob/main/prefect-v1/agents/README.md) how to set up prefect agents.
 
-If prefect server and the agents are running in same machine, It is helpful to run the prefect server and agent in their own tmux session.
+If prefect server and the agents are running in a same machine, It is helpful to run the prefect server and agent in their own tmux session.
 - Start a new tmux session `tmux new -s <label>`
 - Attach to a session `tmux a -t <label>`
 - Detach a session `ctrl-b + d`

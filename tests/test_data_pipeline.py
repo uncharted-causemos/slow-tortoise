@@ -8,7 +8,6 @@ def update_env(monkeypatch):
     # setup the environment overrides for the tests
     monkeypatch.setenv("WM_LOCAL", "True")
     monkeypatch.setenv("WM_DASK_SCHEDULER", "")  # spawn local cluster
-    monkeypatch.setenv("WM_ELASTIC_URL", "")
     monkeypatch.setenv("WM_DEST_TYPE", "file")  # skip writes
     monkeypatch.setenv("WM_S3_DEST_URL", "")  # skip writes
     monkeypatch.setenv(
