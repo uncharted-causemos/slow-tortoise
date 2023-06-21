@@ -14,10 +14,11 @@
 # source ./prod.env
 export PREFECT__SERVER__HOST=http://10.65.18.57
 export WM_FLOW_STORAGE_S3_BUCKET_NAME=causemos-prod-prefect-flows-dev
-export WM_RUN_CONFIG_TYPE=docker
+export WM_RUN_CONFIG_TYPE=docker # docker, local, or kubernetes
 export WM_DATA_PIPELINE_IMAGE=docker.uncharted.software/worldmodeler/wm-data-pipeline:latest
 
 PROJECT="Tests"
 prefect register --project="$PROJECT" --label wm-prefect-server.openstack.uncharted.software --label $WM_RUN_CONFIG_TYPE --path ../../flows/test/flow_test.py
 prefect register --project="$PROJECT" --label wm-prefect-server.openstack.uncharted.software --label $WM_RUN_CONFIG_TYPE --path ../../flows/test/dask_flow_test.py
+prefect register --project="$PROJECT" --label wm-prefect-server.openstack.uncharted.software --label $WM_RUN_CONFIG_TYPE --path ../../flows/data_pipeline.py
 
