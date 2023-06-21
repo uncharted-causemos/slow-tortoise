@@ -64,16 +64,18 @@ LOCAL_RUN = os.getenv("WM_LOCAL", "False").lower() in TRUE_TOKENS
 DEST_TYPE = os.getenv("WM_DEST_TYPE", "s3").lower()
 
 ## ======= Flow Configuration Environment Variables ===========
-# Note: Following environment variables need to be set when registering the flow. 
+# Note: Following environment variables need to be set when registering the flow.
 # Theses variables are used to configure flow.run_config and flow.storage
 
 # AWS s3 storage information
-WM_FLOW_STORAGE_S3_BUCKET_NAME = os.getenv("WM_FLOW_STORAGE_S3_BUCKET_NAME", "causemos-prod-prefect-flows-dev")
-# default base-image, used by the agent to run the flow script inside the image. 
+WM_FLOW_STORAGE_S3_BUCKET_NAME = os.getenv(
+    "WM_FLOW_STORAGE_S3_BUCKET_NAME", "causemos-prod-prefect-flows-dev"
+)
+# default base-image, used by the agent to run the flow script inside the image.
 WM_DATA_PIPELINE_IMAGE = os.getenv(
     "WM_DATA_PIPELINE_IMAGE", "docker.uncharted.software/worldmodeler/wm-data-pipeline:latest"
 )
-WM_RUN_CONFIG_TYPE = os.getenv("WM_RUN_CONFIG_TYPE", 'docker') # docker, local, kubernetes
+WM_RUN_CONFIG_TYPE = os.getenv("WM_RUN_CONFIG_TYPE", "docker")  # docker, local, kubernetes
 ## ======= Flow Configuration Environment Variables End ===========
 
 ## ===== These environment variables are run time variables set by the agent =======
@@ -84,12 +86,12 @@ AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 
 # Custom s3 destination. If WM_S3_DEST_URL is not empty, the pipeline will use following information to connect s3 to write output to,
-# otherwise it will use default aws s3 with above AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY 
+# otherwise it will use default aws s3 with above AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
 # If you want to write the pipeline output to custom location such as custom minio storage, provide following information
 WM_S3_DEST_URL = os.getenv("WM_S3_DEST_URL", "http://10.65.18.9:9000" if LOCAL_RUN else None)
 WM_S3_DEST_REGION = os.getenv("WM_S3_DEST_REGION", "us-east-1")
-WM_S3_DEST_KEY = os.getenv("WM_S3_DEST_KEY") 
-WM_S3_DEST_SECRET = os.getenv("WM_S3_DEST_SECRET") 
+WM_S3_DEST_KEY = os.getenv("WM_S3_DEST_KEY")
+WM_S3_DEST_SECRET = os.getenv("WM_S3_DEST_SECRET")
 # ================================================================
 
 # Following env vars provide the defaults assigned to the prefect flow parameters.  The parameters
@@ -348,7 +350,8 @@ def compute_timeseries_as_csv(
     df, dest, time_res, model_id, run_id, qualifier_map, qualifer_columns, weight_column
 ):
     print(
-        f"\ncompute timeseries as csv dataframe length={len(df.index)}, npartitions={df.npartitions}\n"
+        f"\ncompute timeseries as csv dataframe length={len(df.index)},"
+        f" npartitions={df.npartitions}\n"
     )
     qualifier_cols = [*qualifer_columns, []]  # [] is the default case of ignoring qualifiers
 
@@ -467,7 +470,8 @@ def compute_regional_aggregation_to_csv(
     input_df, dest, time_res, model_id, run_id, qualifier_map, qualifer_columns, weight_column
 ):
     print(
-        f"\ncompute regional aggregate to csv dataframe length={len(input_df.index)}, npartitions={input_df.npartitions}\n"
+        f"\ncompute regional aggregate to csv dataframe length={len(input_df.index)},"
+        f" npartitions={input_df.npartitions}\n"
     )
     qualifier_cols = [*qualifer_columns, []]  # [] is the default case of ignoring qualifiers
 
@@ -668,7 +672,8 @@ def compute_regional_timeseries(
     weight_column,
 ):
     print(
-        f"\ncompute regional timeseries dataframe length={len(df.index)}, npartitions={df.npartitions}\n"
+        f"\ncompute regional timeseries dataframe length={len(df.index)},"
+        f" npartitions={df.npartitions}\n"
     )
     max_qualifier_count = qualifier_thresholds["regional_timeseries_count"]
     max_level = qualifier_thresholds["regional_timeseries_max_level"]
@@ -820,7 +825,8 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
         temp_df.compute()
         end = time.time()
         print(
-            f"\nNumber of tile files written length={len(temp_df.index)}, npartitions={temp_df.npartitions}, elapsed time={end - start}\n"
+            f"\nNumber of tile files written length={len(temp_df.index)},"
+            f" npartitions={temp_df.npartitions}, elapsed time={end - start}\n"
         )
         del temp_df
         del cdf
@@ -839,7 +845,8 @@ def compute_tiling_current(df, dest, time_res, model_id, run_id):
     tiling_df = tiling_df.explode("subtile").repartition(npartitions=DEFAULT_PARTITIONS)
 
     print(
-        f"\nexploded tiling dataframe length={len(tiling_df.index)}, npartitions={tiling_df.npartitions}\n"
+        f"\nexploded tiling dataframe length={len(tiling_df.index)},"
+        f" npartitions={tiling_df.npartitions}\n"
     )
 
     # Assign main tile coord for each subtile
@@ -871,7 +878,8 @@ def compute_tiling_current(df, dest, time_res, model_id, run_id):
         )
     )
     print(
-        f"\ngrouped tiling dataframe length={len(tiling_df.index)}, npartitions={tiling_df.npartitions}\n"
+        f"\ngrouped tiling dataframe length={len(tiling_df.index)},"
+        f" npartitions={tiling_df.npartitions}\n"
     )
     tiling_df.compute()
 
@@ -1160,7 +1168,8 @@ def record_region_lists(df, dest, model_id, run_id) -> Tuple[list, list]:
 
     save_df = df.copy()
     print(
-        f"\nsave_df record region list dataframe length={len(save_df.index)}, npartitions={save_df.npartitions}\n"
+        f"\nsave_df record region list dataframe length={len(save_df.index)},"
+        f" npartitions={save_df.npartitions}\n"
     )
 
     # ["__region_id_0", "__region_id_1", "__region_id_2", "__region_id_3"]
@@ -1275,13 +1284,13 @@ with Flow(FLOW_NAME) as flow:
         stored_as_script=True,
     )
     # Set flow run configuration. Each RunConfig type has a corresponding Prefect Agent.
-    # Corresponding WM_RUN_CONFIG_TYPE environment variable must be provided by the agent with same type. 
-    # For example, with docker agent, set RUN_CONFIG_TYPE to 'docker' and with kubernetes agent, set RUN_CONFIG_TYPE to 'kubernetes' 
-    if WM_RUN_CONFIG_TYPE == 'docker':
+    # Corresponding WM_RUN_CONFIG_TYPE environment variable must be provided by the agent with same type.
+    # For example, with docker agent, set RUN_CONFIG_TYPE to 'docker' and with kubernetes agent, set RUN_CONFIG_TYPE to 'kubernetes'
+    if WM_RUN_CONFIG_TYPE == "docker":
         flow.run_config = DockerRun(image=WM_DATA_PIPELINE_IMAGE)
-    elif WM_RUN_CONFIG_TYPE == 'local':
+    elif WM_RUN_CONFIG_TYPE == "local":
         flow.run_config = LocalRun()
-    elif WM_RUN_CONFIG_TYPE == 'kubernetes':
+    elif WM_RUN_CONFIG_TYPE == "kubernetes":
         flow.run_config = KubernetesRun(image=WM_DATA_PIPELINE_IMAGE)
 
     # setup the flow executor - if no adress is set rely on a local dask instance
@@ -1326,14 +1335,14 @@ with Flow(FLOW_NAME) as flow:
     )
 
     dest = {
-        "key": AWS_ACCESS_KEY_ID, 
-        "secret": AWS_SECRET_ACCESS_KEY, 
+        "key": AWS_ACCESS_KEY_ID,
+        "secret": AWS_SECRET_ACCESS_KEY,
     }
     # if Custom s3 destination url is provide, override dest object
     if WM_S3_DEST_URL is not None:
         dest = {
             "endpoint_url": WM_S3_DEST_URL,
-            "region_name": WM_S3_DEST_REGION, 
+            "region_name": WM_S3_DEST_REGION,
             "key": WM_S3_DEST_KEY,
             "secret": WM_S3_DEST_SECRET,
         }

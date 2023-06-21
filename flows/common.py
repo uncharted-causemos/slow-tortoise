@@ -37,7 +37,8 @@ DEFAULT_PARTITIONS = 8
 # Run temporal aggregation on given provided dataframe
 def run_temporal_aggregation(df, time_res, weight_column):
     print(
-        f"\nrun temporal aggregation dataframe length={len(df.index)}, npartitions={df.npartitions}\n"
+        f"\nrun temporal aggregation dataframe length={len(df.index)},"
+        f" npartitions={df.npartitions}\n"
     )
     columns = df.columns.tolist()  # includes qualifier columns
     columns.remove("value")
@@ -80,7 +81,8 @@ def run_temporal_aggregation(df, time_res, weight_column):
         temporal_df = temporal_df.drop(columns=[values_col, weights_col])
 
     print(
-        f"\nrun temporal aggregation dataframe!! length={len(temporal_df.index)}, npartitions={temporal_df.npartitions}\n"
+        f"\nrun temporal aggregation dataframe!! length={len(temporal_df.index)},"
+        f" npartitions={temporal_df.npartitions}\n"
     )
     return temporal_df
 
@@ -178,7 +180,9 @@ def write_to_s3(body, path, dest):
     # Since global variable and the s3 client initialized here seem to be shared across multiple flow runs,
     # we need to also check for the destination url and re-initialize the s3 client when dest url has been changed in different flow run.
     global s3
-    if ("s3" not in globals()) or ("endpoint_url" in dest and s3.meta.endpoint_url != dest["endpoint_url"]):
+    if ("s3" not in globals()) or (
+        "endpoint_url" in dest and s3.meta.endpoint_url != dest["endpoint_url"]
+    ):
         if "endpoint_url" in dest:
             # If custom s3 endpoint url is provided
             s3 = boto3.session.Session().client(
