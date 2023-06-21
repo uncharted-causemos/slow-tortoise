@@ -1,5 +1,4 @@
 #!/bin/bash
-source ./prod.env
 # Environment variables needed when registering prefect flow. These variable are used to configure flow.storage and flow.run_config
 # Note: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY can be ommited if aws s3 default credentials are in ~/.aws/credentials
 #
@@ -12,6 +11,7 @@ source ./prod.env
 #   AWS_SECRET_ACCESS_KEY 
 #
 
+# source ./prod.env
 export PREFECT__SERVER__HOST=http://10.65.18.57
 export WM_FLOW_STORAGE_S3_BUCKET_NAME=causemos-prod-prefect-flows-dev
 export WM_RUN_CONFIG_TYPE=docker
