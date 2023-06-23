@@ -1,5 +1,6 @@
 from prefect import task, Flow
-from prefect.storage import Docker
+from prefect.storage import S3
+from prefect.run_configs import DockerRun, KubernetesRun, LocalRun
 from prefect.executors import DaskExecutor, LocalDaskExecutor
 import dask
 import os
@@ -34,41 +35,38 @@ def simple_add():
     return result
 
 
-DASK_SCHEDULER = os.getenv("WM_DASK_SCHEDULER")
 LOCAL_RUN = os.getenv("WM_LOCAL", "False").lower() in ("true", "1", "t")
-PUSH_IMAGE = os.getenv("WM_PUSH_IMAGE", "False").lower() in ("true", "1", "t")
+DASK_SCHEDULER = os.getenv("WM_DASK_SCHEDULER")
+
+WM_DATA_PIPELINE_IMAGE = os.getenv("WM_DATA_PIPELINE_IMAGE")
+WM_FLOW_STORAGE_S3_BUCKET_NAME = os.getenv("WM_FLOW_STORAGE_S3_BUCKET_NAME")
+WM_RUN_CONFIG_TYPE = os.getenv("WM_RUN_CONFIG_TYPE")  # docker, local, kubernetes
 
 # DO NOT DECLARE FLOW IN MAIN.  During registration, prefect calls `exec` on this
 # script and looks for instances of `Flow` at the global level.
 with Flow("dask_flow") as flow:
+    # The flow code will be stored in and retrieved from following s3 bucket
+    # Note: aws s3 credentials must be available from `~/.aws/credentials` or from environment variables, AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
+    flow.storage = S3(
+        bucket=WM_FLOW_STORAGE_S3_BUCKET_NAME,
+        stored_as_script=True,
+    )
+    # Set flow run configuration. Each RunConfig type has a corresponding Prefect Agent.
+    # Corresponding WM_RUN_CONFIG_TYPE environment variable must be provided by the agent with same type.
+    # For example, with docker agent, set RUN_CONFIG_TYPE to 'docker' and with kubernetes agent, set RUN_CONFIG_TYPE to 'kubernetes'
+    if WM_RUN_CONFIG_TYPE == "docker":
+        flow.run_config = DockerRun(image=WM_DATA_PIPELINE_IMAGE)
+    elif WM_RUN_CONFIG_TYPE == "local":
+        flow.run_config = LocalRun()
+    elif WM_RUN_CONFIG_TYPE == "kubernetes":
+        flow.run_config = KubernetesRun(image=WM_DATA_PIPELINE_IMAGE)
+
+    if not DASK_SCHEDULER:
+        flow.executor = LocalDaskExecutor()
+    else:
+        flow.executor = DaskExecutor(DASK_SCHEDULER)
+
     simple_add_result = simple_add()
-
-if not DASK_SCHEDULER:
-    flow.executor = LocalDaskExecutor()
-else:
-    flow.executor = DaskExecutor(DASK_SCHEDULER)
-
-# setup the flow storage - will build a docker image containing the flow from the base image
-# provided
-base_image = os.getenv(
-    "WM_DATA_PIPELINE_IMAGE", "docker.uncharted.software/worldmodeler/wm-data-pipeline:latest"
-)
-registry_url = os.getenv("DOCKER_REGISTRY_URL", "docker.uncharted.software")
-image_name = os.getenv("DOCKER_RUN_IMAGE", "worldmodeler/wm-data-pipeline/test-dask-flow")
-if not PUSH_IMAGE:
-    image_name = f"{registry_url}/{image_name}"
-    registry_url = ""
-
-flow.storage = Docker(
-    registry_url=registry_url,
-    base_image=base_image,
-    image_name=image_name,
-    local_image=True,
-    stored_as_script=True,
-    path="/wm_data_pipeline/flows/test/dask_flow_test.py",
-    ignore_healthchecks=True,
-)
-
 
 # For debugging support - local dask cluster needs to run in main otherwise process forking
 # fails.

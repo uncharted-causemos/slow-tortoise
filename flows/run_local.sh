@@ -1,9 +1,9 @@
 #!/bin/bash
-
 export WM_DASK_SCHEDULER="" # spawn local cluster eg. tcp://localhost:8786
 export WM_LOCAL=true # run flow locally
-export WM_PUSH_IMAGE=false # don't push to registry
 export WM_S3_DEST_URL=http://10.65.18.73:9000 # dev s3 cluster
+export WM_S3_DEST_KEY="foobar"
+export WM_S3_DEST_SECRET="foobarbaz" 
 export WM_DEST_TYPE=s3
 export WM_S3_DEFAULT_INDICATOR_BUCKET=test-indicators
 export WM_S3_DEFAULT_MODEL_BUCKET=test-models

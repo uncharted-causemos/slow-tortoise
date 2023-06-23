@@ -14,7 +14,7 @@ setup(
     keywords=["world modellers"],
     license="Apache-2.0",
     install_requires=[
-        "prefect==1.2.4",
+        "prefect==1.4.1",
         "dask==2022.7.1", # This dask version should match with the dask base image tag in infra/docker/Dockerfile. e.g  docker-hub.uncharted.software/daskdev/dask:2022.7.1
         "bokeh==2.4.3",
         "lz4==4.0.2",
