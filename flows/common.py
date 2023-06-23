@@ -86,6 +86,83 @@ def run_temporal_aggregation(df, time_res, weight_column):
     )
     return temporal_df
 
+# Run spatial aggregation on provided groupby columns of given temporally aggregated dataframe
+def run_spatial_aggregation(df, groupby, weight_column):
+
+    # TODO: Optimization: remove all spatial mean columns since spatial mean can be calculated on the fly in `wm-go` by `spatial sum / spatial count`
+    # In order to achieve this, we first need to implement on the fly `spatial sum / spatial count` calculation in `wm-go`
+    spatial_aggs = ["sum", "mean"]
+    rename_lookup = {
+        ("t_sum", "sum"): "s_sum_t_sum",
+        ("t_sum", "mean"): "s_mean_t_sum", # spatial mean of temporal sum
+        ("t_mean", "sum"): "s_sum_t_mean",
+        ("t_mean", "mean"): "s_mean_t_mean", # spatial mean of temporal mean
+        ("t_mean", "count"): "s_count",
+    }
+    agg_columns = [
+        "s_sum_t_sum",
+        "s_mean_t_sum",
+        "s_sum_t_mean",
+        "s_mean_t_mean",
+        "s_count",
+    ]
+
+    columns_to_agg = {"t_sum": spatial_aggs, "t_mean": spatial_aggs + ['count']}
+    if weight_column != "":
+        df = df.assign(
+            _weighted_t_sum=df["t_sum"] * df[weight_column],
+            _weighted_t_mean=df["t_mean"] * df[weight_column],
+            _weighted_t_wavg=df["t_wavg"] * df[weight_column],
+        )
+
+        columns_to_agg["_weighted_t_sum"] = ["sum"]
+        columns_to_agg["_weighted_t_mean"] = ["sum"]
+        columns_to_agg["_weighted_t_wavg"] = ["sum"]
+        columns_to_agg[weight_column] = ["sum"]
+        columns_to_agg["t_wavg"] = spatial_aggs
+
+        rename_lookup.update(
+            {
+                # wavg of temporal
+                ("_weighted_t_sum", "sum"): "s_wssum_t_sum",
+                ("_weighted_t_mean", "sum"): "s_wsum_t_mean",
+                ("_weighted_t_wavg", "sum"): "s_wsum_t_wavg",
+                (weight_column, "sum"): "s_weight",
+                # spatial agg of wavg
+                ("t_wavg", "sum"): "s_sum_t_wavg",
+                ("t_wavg", "mean"): "s_mean_t_wavg", # spatial mean of temporal weighted average
+            }
+        )
+        agg_columns.extend(
+            [
+                "s_sum_t_wavg",
+                "s_mean_t_wavg",
+                # next 3 columns are computed below
+                "s_wavg_t_sum",
+                "s_wavg_t_mean",
+                "s_wavg_t_wavg",
+            ]
+        )
+
+    df = df.groupby(groupby).agg(columns_to_agg, split_out=DEFAULT_PARTITIONS)
+    df.columns = df.columns.to_flat_index()
+    df = df.rename(columns=rename_lookup).reset_index()
+
+    if weight_column != "":
+        df["s_wavg_t_sum"] = (
+            df["s_wssum_t_sum"] / df["s_weight"]
+        )
+        df["s_wavg_t_mean"] = (
+            df["s_wsum_t_mean"] / df["s_weight"]
+        )
+        df["s_wavg_t_wavg"] = (
+            df["s_wsum_t_wavg"] / df["s_weight"]
+        )
+        df = df.drop(
+            columns=["s_wssum_t_sum", "s_wsum_t_mean", "s_wsum_t_wavg", "s_weight"]
+        )
+
+    return (df, agg_columns)
 
 # More details on tile calculations https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames
 # Convert lat, long to tile coord
@@ -687,7 +764,6 @@ def save_regional_timeseries(
         body = df.to_csv(index=False)
         writer(body, path, dest)
 
-
 # Compute timeseries by region
 def compute_timeseries_by_region(
     temporal_df,
@@ -702,102 +778,16 @@ def compute_timeseries_by_region(
     writer,
 ):
     admin_level = REGION_LEVELS.index(region_level)
+    regions_cols = extract_region_columns(temporal_df)
 
+    temporal_df = temporal_df.assign(region_id=join_region_columns(temporal_df, regions_cols, admin_level))
     # persist the result in memory since this df is going to be used for multiple qualifiers
     temporal_df = temporal_df.persist()
 
     # Iterate through all the qualifier columns. Not all columns map to
     # all the features, they will be excluded when processing each feature
     for qualifier_col in qualifier_cols:
-        timeseries_df = temporal_df.copy()
-        regions_cols = extract_region_columns(timeseries_df)
-        timeseries_df["region_id"] = join_region_columns(timeseries_df, regions_cols, admin_level)
-        timeseries_aggs = ["min", "max", "sum", "mean", "count"]
-        timeseries_lookup = {
-            ("t_sum", "min"): "s_min_t_sum",
-            ("t_sum", "max"): "s_max_t_sum",
-            ("t_sum", "sum"): "s_sum_t_sum",
-            ("t_sum", "mean"): "s_mean_t_sum",
-            ("t_mean", "min"): "s_min_t_mean",
-            ("t_mean", "max"): "s_max_t_mean",
-            ("t_mean", "sum"): "s_sum_t_mean",
-            ("t_mean", "mean"): "s_mean_t_mean",
-            ("t_mean", "count"): "s_count_t_mean",
-            ("t_sum", "count"): "s_count",
-        }
-        timeseries_agg_columns = [
-            "s_min_t_sum",
-            "s_max_t_sum",
-            "s_sum_t_sum",
-            "s_mean_t_sum",
-            "s_min_t_mean",
-            "s_max_t_mean",
-            "s_sum_t_mean",
-            "s_mean_t_mean",
-            "s_count",
-        ]
-
-        columns_to_agg = {"t_sum": timeseries_aggs, "t_mean": timeseries_aggs}
-        if weight_column != "":
-            timeseries_df["_weighted_sum"] = timeseries_df["t_sum"] * timeseries_df[weight_column]
-            timeseries_df["_weighted_mean"] = timeseries_df["t_mean"] * timeseries_df[weight_column]
-            timeseries_df["_weighted_wavg"] = timeseries_df["t_wavg"] * timeseries_df[weight_column]
-
-            columns_to_agg["_weighted_sum"] = ["sum"]
-            columns_to_agg["_weighted_mean"] = ["sum"]
-            columns_to_agg["_weighted_wavg"] = ["sum"]
-            columns_to_agg[weight_column] = ["sum"]
-            columns_to_agg["t_wavg"] = timeseries_aggs
-
-            timeseries_lookup.update(
-                {
-                    # wavg of temporal
-                    ("_weighted_sum", "sum"): "_weighted_sum",
-                    ("_weighted_mean", "sum"): "_weighted_mean",
-                    ("_weighted_wavg", "sum"): "_weighted_wavg",
-                    (weight_column, "sum"): "_weight_sum",
-                    # spatial agg of wavg
-                    ("t_wavg", "min"): "s_min_t_wavg",
-                    ("t_wavg", "max"): "s_max_t_wavg",
-                    ("t_wavg", "sum"): "s_sum_t_wavg",
-                    ("t_wavg", "mean"): "s_mean_t_wavg",
-                    ("t_wavg", "count"): "s_count_t_wavg",
-                }
-            )
-            timeseries_agg_columns.extend(
-                [
-                    "s_min_t_wavg",
-                    "s_max_t_wavg",
-                    "s_sum_t_wavg",
-                    "s_mean_t_wavg",
-                    "s_count_t_wavg",
-                    # next 3 columns are computed below
-                    "s_wavg_t_sum",
-                    "s_wavg_t_mean",
-                    "s_wavg_t_wavg",
-                ]
-            )
-
-        timeseries_df = timeseries_df.groupby(
-            ["feature", "region_id", "timestamp"] + qualifier_col
-        ).agg(columns_to_agg, split_out=DEFAULT_PARTITIONS)
-        timeseries_df.columns = timeseries_df.columns.to_flat_index()
-        timeseries_df = timeseries_df.rename(columns=timeseries_lookup).reset_index()
-
-        if weight_column != "":
-            timeseries_df["s_wavg_t_sum"] = (
-                timeseries_df["_weighted_sum"] / timeseries_df["_weight_sum"]
-            )
-            timeseries_df["s_wavg_t_mean"] = (
-                timeseries_df["_weighted_mean"] / timeseries_df["_weight_sum"]
-            )
-            timeseries_df["s_wavg_t_wavg"] = (
-                timeseries_df["_weighted_wavg"] / timeseries_df["_weight_sum"]
-            )
-            timeseries_df = timeseries_df.drop(
-                columns=["_weighted_sum", "_weighted_mean", "_weighted_wavg", "_weight_sum"]
-            )
-
+        (timeseries_df, timeseries_agg_columns) = run_spatial_aggregation(temporal_df, ["feature", "region_id", "timestamp"] + qualifier_col, weight_column)
         timeseries_df = (
             timeseries_df.repartition(npartitions=12)
             .groupby(["feature", "region_id"] + qualifier_col)

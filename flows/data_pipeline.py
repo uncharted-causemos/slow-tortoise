@@ -17,6 +17,7 @@ from prefect.storage import S3
 from prefect.run_configs import DockerRun, KubernetesRun, LocalRun
 from flows.common import (
     run_temporal_aggregation,
+    run_spatial_aggregation,
     deg2num,
     parent_tile,
     ancestor_tiles,
@@ -361,88 +362,7 @@ def compute_timeseries_as_csv(
     # Iterate through all the qualifier columns. Not all columns map to
     # all the features, they will be excluded when processing each feature
     for qualifier_col in qualifier_cols:
-        timeseries_df = df.copy()
-        timeseries_aggs = ["min", "max", "sum", "mean"]
-        timeseries_lookup = {
-            ("t_sum", "min"): "s_min_t_sum",
-            ("t_sum", "max"): "s_max_t_sum",
-            ("t_sum", "sum"): "s_sum_t_sum",
-            ("t_sum", "mean"): "s_mean_t_sum",
-            ("t_mean", "min"): "s_min_t_mean",
-            ("t_mean", "max"): "s_max_t_mean",
-            ("t_mean", "sum"): "s_sum_t_mean",
-            ("t_mean", "mean"): "s_mean_t_mean",
-        }
-        timeseries_agg_columns = [
-            "s_min_t_sum",
-            "s_max_t_sum",
-            "s_sum_t_sum",
-            "s_mean_t_sum",
-            "s_min_t_mean",
-            "s_max_t_mean",
-            "s_sum_t_mean",
-            "s_mean_t_mean",
-        ]
-
-        aggregates_to_compute = {"t_sum": timeseries_aggs, "t_mean": timeseries_aggs}
-        if weight_column != "":
-            timeseries_df["_weighted_sum"] = timeseries_df["t_sum"] * timeseries_df[weight_column]
-            timeseries_df["_weighted_mean"] = timeseries_df["t_mean"] * timeseries_df[weight_column]
-            timeseries_df["_weighted_wavg"] = timeseries_df["t_wavg"] * timeseries_df[weight_column]
-
-            aggregates_to_compute["_weighted_sum"] = ["sum"]
-            aggregates_to_compute["_weighted_mean"] = ["sum"]
-            aggregates_to_compute["_weighted_wavg"] = ["sum"]
-            aggregates_to_compute[weight_column] = ["sum"]
-            aggregates_to_compute["t_wavg"] = timeseries_aggs
-
-            timeseries_lookup.update(
-                {
-                    # wavg of temporal
-                    ("_weighted_sum", "sum"): "_weighted_sum",
-                    ("_weighted_mean", "sum"): "_weighted_mean",
-                    ("_weighted_wavg", "sum"): "_weighted_wavg",
-                    (weight_column, "sum"): "_weight_sum",
-                    # spatial agg of wavg
-                    ("t_wavg", "min"): "s_min_t_wavg",
-                    ("t_wavg", "max"): "s_max_t_wavg",
-                    ("t_wavg", "sum"): "s_sum_t_wavg",
-                    ("t_wavg", "mean"): "s_mean_t_wavg",
-                }
-            )
-            timeseries_agg_columns.extend(
-                [
-                    "s_min_t_wavg",
-                    "s_max_t_wavg",
-                    "s_sum_t_wavg",
-                    "s_mean_t_wavg",
-                    # next 3 columns are computed below
-                    "s_wavg_t_sum",
-                    "s_wavg_t_mean",
-                    "s_wavg_t_wavg",
-                ]
-            )
-
-        timeseries_df = timeseries_df.groupby(["feature", "timestamp"] + qualifier_col).agg(
-            aggregates_to_compute
-        )
-        timeseries_df.columns = timeseries_df.columns.to_flat_index()
-        timeseries_df = timeseries_df.rename(columns=timeseries_lookup).reset_index()
-
-        if weight_column != "":
-            timeseries_df["s_wavg_t_sum"] = (
-                timeseries_df["_weighted_sum"] / timeseries_df["_weight_sum"]
-            )
-            timeseries_df["s_wavg_t_mean"] = (
-                timeseries_df["_weighted_mean"] / timeseries_df["_weight_sum"]
-            )
-            timeseries_df["s_wavg_t_wavg"] = (
-                timeseries_df["_weighted_wavg"] / timeseries_df["_weight_sum"]
-            )
-            timeseries_df = timeseries_df.drop(
-                columns=["_weighted_sum", "_weighted_mean", "_weighted_wavg", "_weight_sum"]
-            )
-
+        (timeseries_df, timeseries_agg_columns) = run_spatial_aggregation(df, ["feature", "timestamp"] + qualifier_col, weight_column)
         timeseries_df = timeseries_df.groupby(["feature"]).apply(
             lambda x: save_timeseries_as_csv(
                 x,
@@ -464,7 +384,6 @@ def compute_timeseries_as_csv(
 
     return timeseries_size
 
-
 @task(log_stdout=True)
 def compute_regional_aggregation_to_csv(
     input_df, dest, time_res, model_id, run_id, qualifier_map, qualifer_columns, weight_column
@@ -477,7 +396,7 @@ def compute_regional_aggregation_to_csv(
 
     # Copy input df so that original df doesn't get mutated
     df = input_df.copy()
-    # Ranme columns
+    # Rename columns
     df.columns = df.columns.str.replace("t_sum", "s_sum_t_sum").str.replace(
         "t_mean", "s_sum_t_mean"
     )
@@ -904,11 +823,6 @@ def assist_compute_stats(df, dest, time_res, model_id, run_id, weight_column, fi
         s_mean_t_mean=df["s_sum_t_mean"] / df["s_count"],
         s_mean_t_wavg=df["s_sum_t_wavg"] / df["s_count"],
     )
-    if weight_column != "":
-        stats_df["s_wavg_t_sum"] = stats_df["_weighted_sum"] / stats_df["_weight_sum"]
-        stats_df["s_wavg_t_mean"] = stats_df["_weighted_mean"] / stats_df["_weight_sum"]
-        stats_df["s_wavg_t_wavg"] = stats_df["_weighted_wavg"] / stats_df["_weight_sum"]
-
     # Stats aggregation
     stats_aggs = ["min", "max"]
     stats_lookup = {
@@ -940,6 +854,11 @@ def assist_compute_stats(df, dest, time_res, model_id, run_id, weight_column, fi
     }
 
     if weight_column != "":
+
+        stats_df["s_wavg_t_sum"] = stats_df["_weighted_sum"] / stats_df["_weight_sum"]
+        stats_df["s_wavg_t_mean"] = stats_df["_weighted_mean"] / stats_df["_weight_sum"]
+        stats_df["s_wavg_t_wavg"] = stats_df["_weighted_wavg"] / stats_df["_weight_sum"]
+
         stats_lookup.update(
             {
                 ("s_wavg_t_mean", "min"): "min_s_wavg_t_mean",
@@ -1374,30 +1293,30 @@ with Flow(FLOW_NAME) as flow:
 
     # ==== Run aggregations based on monthly time resolution =====
     monthly_data = temporal_aggregation(df, "month", compute_monthly, weight_column)
-    month_ts_size = compute_timeseries_as_csv(
-        monthly_data,
-        dest,
-        "month",
-        model_id,
-        run_id,
-        qualifier_map,
-        qualifier_columns,
-        weight_column,
-        upstream_tasks=[monthly_data],
-    )
-    monthly_regional_timeseries_task = compute_regional_timeseries(
-        monthly_data,
-        dest,
-        "month",
-        model_id,
-        run_id,
-        qualifier_map,
-        qualifier_columns,
-        qualifier_counts,
-        qualifier_thresholds,
-        weight_column,
-        upstream_tasks=[monthly_data],
-    )
+    # month_ts_size = compute_timeseries_as_csv(
+    #     monthly_data,
+    #     dest,
+    #     "month",
+    #     model_id,
+    #     run_id,
+    #     qualifier_map,
+    #     qualifier_columns,
+    #     weight_column,
+    #     upstream_tasks=[monthly_data],
+    # )
+    # monthly_regional_timeseries_task = compute_regional_timeseries(
+    #     monthly_data,
+    #     dest,
+    #     "month",
+    #     model_id,
+    #     run_id,
+    #     qualifier_map,
+    #     qualifier_columns,
+    #     qualifier_counts,
+    #     qualifier_thresholds,
+    #     weight_column,
+    #     upstream_tasks=[monthly_data],
+    # )
     monthly_csv_regional_df = compute_regional_aggregation_to_csv(
         monthly_data,
         dest,
@@ -1410,99 +1329,99 @@ with Flow(FLOW_NAME) as flow:
         upstream_tasks=[monthly_data],
     )
 
-    monthly_spatial_data = subtile_aggregation(
-        monthly_data,
-        weight_column,
-        compute_tiles,
-        upstream_tasks=[month_ts_size, monthly_regional_timeseries_task, monthly_csv_regional_df],
-    )
-    month_stats_done = compute_stats(monthly_spatial_data, dest, "month", model_id, run_id)
-    month_done = compute_tiling(
-        monthly_spatial_data, dest, "month", model_id, run_id, upstream_tasks=[monthly_spatial_data]
-    )
+    # monthly_spatial_data = subtile_aggregation(
+    #     monthly_data,
+    #     weight_column,
+    #     compute_tiles,
+    #     upstream_tasks=[month_ts_size, monthly_regional_timeseries_task, monthly_csv_regional_df],
+    # )
+    # month_stats_done = compute_stats(monthly_spatial_data, dest, "month", model_id, run_id)
+    # month_done = compute_tiling(
+    #     monthly_spatial_data, dest, "month", model_id, run_id, upstream_tasks=[monthly_spatial_data]
+    # )
 
-    # ==== Run aggregations based on annual time resolution =====
-    annual_data = temporal_aggregation(
-        df,
-        "year",
-        compute_annual,
-        weight_column,
-        upstream_tasks=[monthly_csv_regional_df, month_done],
-    )
-    year_ts_size = compute_timeseries_as_csv(
-        annual_data, dest, "year", model_id, run_id, qualifier_map, qualifier_columns, weight_column
-    )
-    annual_regional_timeseries_task = compute_regional_timeseries(
-        annual_data,
-        dest,
-        "year",
-        model_id,
-        run_id,
-        qualifier_map,
-        qualifier_columns,
-        qualifier_counts,
-        qualifier_thresholds,
-        weight_column,
-    )
-    annual_csv_regional_df = compute_regional_aggregation_to_csv(
-        annual_data, dest, "year", model_id, run_id, qualifier_map, qualifier_columns, weight_column
-    )
+    # # ==== Run aggregations based on annual time resolution =====
+    # annual_data = temporal_aggregation(
+    #     df,
+    #     "year",
+    #     compute_annual,
+    #     weight_column,
+    #     upstream_tasks=[monthly_csv_regional_df, month_done],
+    # )
+    # year_ts_size = compute_timeseries_as_csv(
+    #     annual_data, dest, "year", model_id, run_id, qualifier_map, qualifier_columns, weight_column
+    # )
+    # annual_regional_timeseries_task = compute_regional_timeseries(
+    #     annual_data,
+    #     dest,
+    #     "year",
+    #     model_id,
+    #     run_id,
+    #     qualifier_map,
+    #     qualifier_columns,
+    #     qualifier_counts,
+    #     qualifier_thresholds,
+    #     weight_column,
+    # )
+    # annual_csv_regional_df = compute_regional_aggregation_to_csv(
+    #     annual_data, dest, "year", model_id, run_id, qualifier_map, qualifier_columns, weight_column
+    # )
 
-    annual_spatial_data = subtile_aggregation(
-        annual_data,
-        weight_column,
-        compute_tiles,
-        upstream_tasks=[year_ts_size, annual_regional_timeseries_task, annual_csv_regional_df],
-    )
-    year_stats_done = compute_stats(annual_spatial_data, dest, "year", model_id, run_id)
-    year_done = compute_tiling(
-        annual_spatial_data, dest, "year", model_id, run_id, upstream_tasks=[annual_spatial_data]
-    )
+    # annual_spatial_data = subtile_aggregation(
+    #     annual_data,
+    #     weight_column,
+    #     compute_tiles,
+    #     upstream_tasks=[year_ts_size, annual_regional_timeseries_task, annual_csv_regional_df],
+    # )
+    # year_stats_done = compute_stats(annual_spatial_data, dest, "year", model_id, run_id)
+    # year_done = compute_tiling(
+    #     annual_spatial_data, dest, "year", model_id, run_id, upstream_tasks=[annual_spatial_data]
+    # )
 
-    # ==== Generate a single aggregate value per feature =====
-    summary_data = temporal_aggregation(
-        df,
-        "all",
-        compute_summary,
-        weight_column,
-        upstream_tasks=[year_done, year_ts_size, annual_csv_regional_df],
-    )
-    summary_values = compute_output_summary(summary_data, weight_column)
+    # # ==== Generate a single aggregate value per feature =====
+    # summary_data = temporal_aggregation(
+    #     df,
+    #     "all",
+    #     compute_summary,
+    #     weight_column,
+    #     upstream_tasks=[year_done, year_ts_size, annual_csv_regional_df],
+    # )
+    # summary_values = compute_output_summary(summary_data, weight_column)
 
-    # ==== Record the results in Minio =====
-    record_results(
-        dest,
-        model_id,
-        run_id,
-        summary_values,
-        num_rows,
-        rows_per_feature,
-        region_columns,
-        feature_list,
-        raw_count_threshold,
-        compute_monthly,
-        compute_annual,
-        compute_tiles,
-        month_ts_size,
-        year_ts_size,
-        num_missing_ts,
-        num_invalid_ts,
-        num_missing_val,
-        weight_column,
-    )
+    # # ==== Record the results in Minio =====
+    # record_results(
+    #     dest,
+    #     model_id,
+    #     run_id,
+    #     summary_values,
+    #     num_rows,
+    #     rows_per_feature,
+    #     region_columns,
+    #     feature_list,
+    #     raw_count_threshold,
+    #     compute_monthly,
+    #     compute_annual,
+    #     compute_tiles,
+    #     month_ts_size,
+    #     year_ts_size,
+    #     num_missing_ts,
+    #     num_invalid_ts,
+    #     num_missing_val,
+    #     weight_column,
+    # )
 
-    # === Print out useful information about the flow metadata =====
-    print_flow_metadata(
-        model_id,
-        run_id,
-        data_paths,
-        dest,
-        compute_monthly,
-        compute_annual,
-        compute_summary,
-        compute_tiles,
-        upstream_tasks=[summary_values],
-    )
+    # # === Print out useful information about the flow metadata =====
+    # print_flow_metadata(
+    #     model_id,
+    #     run_id,
+    #     data_paths,
+    #     dest,
+    #     compute_monthly,
+    #     compute_annual,
+    #     compute_summary,
+    #     compute_tiles,
+    #     upstream_tasks=[summary_values],
+    # )
 
     # TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful.
     # Then same data can be used for producing tiles and also used for doing regional aggregation and other computation in other tasks.
@@ -1679,23 +1598,83 @@ if __name__ == "__main__" and LOCAL_RUN:
         #     )
         # )
 
+        # flow.run(
+        #     parameters=dict(
+        #         compute_tiles=True,
+        #         is_indicator=False,
+        #         model_id="2281e058-d521-4180-8216-54832700cedd",
+        #         run_id="22045d57-aa6a-4df6-a11d-793225878dab",
+        #         data_paths=[
+        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/22045d57-aa6a-4df6-a11d-793225878dab/22045d57-aa6a-4df6-a11d-793225878dab_2281e058-d521-4180-8216-54832700cedd.1.parquet.gzip"
+        #         ],
+        #         fill_timestamp=0,
+        #         qualifier_map={
+        #             "max": ["Date", "camp"],
+        #             "min": ["Date", "camp"],
+        #             "data": ["Date", "camp"],
+        #             "mean": ["Date", "camp"],
+        #             "error": ["Date", "camp"],
+        #             "median": ["Date", "camp"],
+        #         },
+        #     )
+        # )
+
+
+        # flow.run(
+        #     parameters=dict(  # Real weights
+        #         compute_tiles=False,
+        #         is_indicator=False,
+        #         qualifier_map={
+        #             "HWAM_AVE": ["year", "mgn", "season"],
+        #             "production": ["year", "mgn", "season"],
+        #             "crop_failure_area": ["year", "mgn", "season"],
+        #             "TOTAL_NITROGEN_APPLIED": ["year", "mgn", "season"]
+        #         },
+        #         weight_column="HAREA_TOT",
+        #         model_id="2af38a88-aa34-4f4a-94f6-a3e1e6630833",
+        #         run_id="eba6ca6b-8c7f-44d1-b008-4349491cabf5",
+        #         data_paths=[
+        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/eba6ca6b-8c7f-44d1-b008-4349491cabf5/eba6ca6b-8c7f-44d1-b008-4349491cabf5_2af38a88-aa34-4f4a-94f6-a3e1e6630833.1.parquet.gzip"
+        #         ],
+        #     )
+        # )
+        
+
+        # ========= Temporally run commands. Remove below when finished =======
+
         flow.run(
-            parameters=dict(
-                compute_tiles=True,
+            parameters=dict(  # Real weights
+                compute_tiles=False,
                 is_indicator=False,
-                model_id="2281e058-d521-4180-8216-54832700cedd",
-                run_id="22045d57-aa6a-4df6-a11d-793225878dab",
-                data_paths=[
-                    "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/22045d57-aa6a-4df6-a11d-793225878dab/22045d57-aa6a-4df6-a11d-793225878dab_2281e058-d521-4180-8216-54832700cedd.1.parquet.gzip"
-                ],
-                fill_timestamp=0,
                 qualifier_map={
-                    "max": ["Date", "camp"],
-                    "min": ["Date", "camp"],
-                    "data": ["Date", "camp"],
-                    "mean": ["Date", "camp"],
-                    "error": ["Date", "camp"],
-                    "median": ["Date", "camp"],
+                    "HWAM_AVE": ["year", "mgn", "season"],
+                    "production": ["year", "mgn", "season"],
+                    "crop_failure_area": ["year", "mgn", "season"],
+                    "TOTAL_NITROGEN_APPLIED": ["year", "mgn", "season"]
                 },
+                weight_column="HAREA_TOT",
+                model_id="2af38a88-aa34-4f4a-94f6-a3e1e6630833",
+                run_id="test-run",
+                data_paths=[
+                    "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/eba6ca6b-8c7f-44d1-b008-4349491cabf5/eba6ca6b-8c7f-44d1-b008-4349491cabf5_2af38a88-aa34-4f4a-94f6-a3e1e6630833.1.parquet.gzip"
+                ],
             )
         )
+
+        # flow.run(
+        #     parameters=dict(  # Weights
+        #         compute_tiles=False,
+        #         is_indicator=True,
+        #         qualifier_map={
+        #             "Surveyed Area": ["Locust Presence", "Control Pesticide Name"],
+        #             "Control Area Treated": ["Control Pesticide Name"],
+        #             "Estimated Control Kill (Mortality Rate)": ["Control Pesticide Name"],
+        #         },
+        #         weight_column="Locust Breeding",
+        #         model_id="_weight-test-1",
+        #         run_id="indicator",
+        #         data_paths=[
+        #             "https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/39f7959d-a63e-4db4-a54d-24c66184cf82/39f7959d-a63e-4db4-a54d-24c66184cf82.parquet.gzip"
+        #         ],
+        #     )
+        # )
