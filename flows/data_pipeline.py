@@ -27,14 +27,13 @@ from flows.common import (
     save_tile_to_csv,
     to_tile_csv,
     save_timeseries_as_csv,
+    save_regional_aggregation,
     stats_to_json,
     info_to_json,
     results_to_json,
     to_proto,
     extract_region_columns,
     join_region_columns,
-    save_regional_qualifiers_to_csv,
-    write_regional_aggregation_csv,
     output_values_to_json_array,
     raw_data_to_csv,
     compute_timeseries_by_region,
@@ -385,186 +384,48 @@ def compute_timeseries_as_csv(
     return timeseries_size
 
 @task(log_stdout=True)
-def compute_regional_aggregation_to_csv(
-    input_df, dest, time_res, model_id, run_id, qualifier_map, qualifer_columns, weight_column
+def compute_regional_aggregation(
+    df, dest, time_res, model_id, run_id, qualifier_map, qualifier_columns, weight_column
 ):
     print(
-        f"\ncompute regional aggregate to csv dataframe length={len(input_df.index)},"
-        f" npartitions={input_df.npartitions}\n"
+        f"\ncompute regional aggregate to csv dataframe length={len(df.index)},"
+        f" npartitions={df.npartitions}\n"
     )
-    qualifier_cols = [*qualifer_columns, []]  # [] is the default case of ignoring qualifiers
-
-    # Copy input df so that original df doesn't get mutated
-    df = input_df.copy()
-    # Rename columns
-    df.columns = df.columns.str.replace("t_sum", "s_sum_t_sum").str.replace(
-        "t_mean", "s_sum_t_mean"
-    )
-    if weight_column != "":
-        df.columns = df.columns.str.replace("t_wavg", "s_sum_t_wavg")
-    else:
-        df["s_sum_t_wavg"] = 0
-
-    df["s_count"] = 1
-    df = df.reset_index()
 
     regions_cols = extract_region_columns(df)
     if len(regions_cols) == 0:
         raise SKIP("No regional information available")
 
-    # persist the result in memory since this df is going to be used for multiple qualifiers
+    qualifier_cols = [*qualifier_columns, []]  # [] is the default case of ignoring qualifiers
+
     df = df.persist()
 
-    # Iterate through all the qualifier columns. Not all columns map to
-    # all the features, they will be excluded when processing each feature
-    for qualifier_col in qualifier_cols:
-        qualifier_df = df.copy()
+    for region_level in range(len(regions_cols)):
+        # Add region_id columns to the data frame
+        temporal_df = df.assign(region_id=join_region_columns(df, regions_cols, region_level))
 
-        aggregates_to_compute = {
-            "s_sum_t_sum": ["sum"],
-            "s_sum_t_mean": ["sum"],
-            "s_sum_t_wavg": ["sum"],
-            "s_count": ["sum"],
-        }
-
-        rename_lookup = {
-            ("s_sum_t_sum", "sum"): "s_sum_t_sum",
-            ("s_sum_t_mean", "sum"): "s_sum_t_mean",
-            ("s_sum_t_wavg", "sum"): "s_sum_t_wavg",
-            ("s_count", "sum"): "s_count",
-        }
-
-        select_cols = (
-            ["feature", "timestamp", "s_sum_t_sum", "s_sum_t_mean", "s_sum_t_wavg", "s_count"]
-            + regions_cols
-            + qualifier_col
-        )
-
-        if weight_column != "":
-            qualifier_df["_weighted_sum"] = (
-                qualifier_df["s_sum_t_sum"] * qualifier_df[weight_column]
-            )
-            qualifier_df["_weighted_mean"] = (
-                qualifier_df["s_sum_t_mean"] * qualifier_df[weight_column]
-            )
-            qualifier_df["_weighted_wavg"] = (
-                qualifier_df["s_sum_t_wavg"] * qualifier_df[weight_column]
-            )
-
-            aggregates_to_compute["_weighted_sum"] = ["sum"]
-            aggregates_to_compute["_weighted_mean"] = ["sum"]
-            aggregates_to_compute["_weighted_wavg"] = ["sum"]
-            aggregates_to_compute[weight_column] = ["sum"]
-
-            rename_lookup.update(
-                {
-                    ("_weighted_sum", "sum"): "_weighted_sum",
-                    ("_weighted_mean", "sum"): "_weighted_mean",
-                    ("_weighted_wavg", "sum"): "_weighted_wavg",
-                    (weight_column, "sum"): "_weight_sum",
-                }
-            )
-            select_cols.extend(["_weighted_sum", "_weighted_mean", "_weighted_wavg", weight_column])
-
-        # Region aggregation at the highest admin level
-        qualifier_df = (
-            qualifier_df[select_cols]
-            .groupby(["feature", "timestamp"] + regions_cols + qualifier_col)
-            .agg(aggregates_to_compute, split_out=DEFAULT_PARTITIONS)
-        )
-
-        # Rename columns
-        qualifier_df.columns = qualifier_df.columns.to_flat_index()
-        qualifier_df = qualifier_df.rename(columns=rename_lookup).reset_index()
-
-        # This is done later in write_regional_aggregation_csv and save_regional_qualifiers_to_csv
-        # if weight_column != "":
-        #     timeseries_df["s_wavg_t_sum"] = timeseries_df["_weighted_sum"] / timeseries_df["_weight_sum"]
-        #     timeseries_df["s_wavg_t_mean"] = timeseries_df["_weighted_mean"] / timeseries_df["_weight_sum"]
-        #     timeseries_df["s_wavg_t_wavg"] = timeseries_df["_weighted_wavg"] / timeseries_df["_weight_sum"]
-        #     timeseries_df = timeseries_df.drop(
-        #         columns=["_weighted_sum", "_weighted_mean", "_weighted_wavg", "_weight_sum"]
-        #     )
-
-        # persist the result in memory at this point since this df is going to be used multiple times to compute for different regional levels
-        qualifier_df = qualifier_df.persist()
-
-        # Compute aggregation and save for all regional levels
-        for level in range(len(regions_cols)):
-            save_df = qualifier_df.copy()
-            # Merge region columns to single region_id column. eg. ['Ethiopia', 'Afar'] -> ['Ethiopia_Afar']
-            save_df["region_id"] = join_region_columns(save_df, regions_cols, level)
-
-            if len(qualifier_col) == 0:
-                # Compute regional stats
-                assist_compute_stats(
-                    save_df.copy(),
-                    dest,
-                    time_res,
-                    model_id,
-                    run_id,
-                    weight_column,
-                    f"regional/{regions_cols[level]}",
-                )
-
-            desired_columns = [
-                "feature",
-                "timestamp",
-                "region_id",
-                "s_sum_t_sum",
-                "s_sum_t_mean",
-                "s_sum_t_wavg",
-                "s_count",
-            ] + qualifier_col
-            if weight_column != "":
-                desired_columns.extend(
-                    ["_weighted_sum", "_weighted_mean", "_weighted_wavg", "_weight_sum"]
-                )
-
-            save_df = save_df[desired_columns].groupby(["feature", "timestamp"]).agg(list)
-
-            save_df = save_df.reset_index()
-            # At this point data is already reduced to reasonably small size due to prior admin aggregation.
-            # Just perform repartition to make sure save io operation runs in parallel since each writing operation is expensive and blocks
-            # Set npartitions to same as # of available workers/threads. Increasing partition number beyond the number of the workers doesn't seem to give more performance benefits.
-            save_df = save_df.repartition(npartitions=12)
-
-            if len(qualifier_col) == 0:
-                foo = save_df.apply(
-                    lambda x: write_regional_aggregation_csv(
+        for qualifier_col in qualifier_cols:
+            (regional_df, agg_columns) = run_spatial_aggregation(temporal_df, ["feature", "timestamp", "region_id"] + qualifier_col, weight_column)
+            regional_df = (
+                regional_df.repartition(npartitions=12)
+                .groupby(["feature", "timestamp"])
+                .apply(
+                    lambda x: save_regional_aggregation(
                         x,
                         dest,
                         model_id,
                         run_id,
                         time_res,
-                        weight_column,
-                        WRITE_TYPES[DEST_TYPE],
-                        region_level=regions_cols[level],
-                    ),
-                    axis=1,
-                    meta=(None, "object"),
-                )
-                foo.compute()
-            else:
-                foo = save_df.apply(
-                    lambda x: save_regional_qualifiers_to_csv(
-                        x,
-                        qualifier_col[0],
-                        dest,
-                        model_id,
-                        run_id,
-                        time_res,
-                        weight_column,
+                        agg_columns,
+                        REGION_LEVELS[region_level],
                         qualifier_map,
-                        WRITE_TYPES[DEST_TYPE],
-                        region_level=regions_cols[level],
+                        qualifier_col,
+                        WRITE_TYPES[DEST_TYPE]
                     ),
-                    axis=1,
-                    meta=(None, "object"),
+                    meta=(None, "object")
                 )
-                foo.compute()
-    del df
-
+            )
+            regional_df.compute()
 
 @task(log_stdout=True)
 def get_qualifier_columns(df, weight_col):
@@ -1317,7 +1178,7 @@ with Flow(FLOW_NAME) as flow:
     #     weight_column,
     #     upstream_tasks=[monthly_data],
     # )
-    monthly_csv_regional_df = compute_regional_aggregation_to_csv(
+    monthly_csv_regional_df = compute_regional_aggregation(
         monthly_data,
         dest,
         "month",
@@ -1363,7 +1224,7 @@ with Flow(FLOW_NAME) as flow:
     #     qualifier_thresholds,
     #     weight_column,
     # )
-    # annual_csv_regional_df = compute_regional_aggregation_to_csv(
+    # annual_csv_regional_df = compute_regional_aggregation(
     #     annual_data, dest, "year", model_id, run_id, qualifier_map, qualifier_columns, weight_column
     # )
 
@@ -1676,5 +1537,15 @@ if __name__ == "__main__" and LOCAL_RUN:
         #         data_paths=[
         #             "https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/39f7959d-a63e-4db4-a54d-24c66184cf82/39f7959d-a63e-4db4-a54d-24c66184cf82.parquet.gzip"
         #         ],
+        #     )
+        # )
+        # flow.run(  # For testing weight column
+        #     parameters=dict(  # Weights small
+        #         compute_tiles=True,
+        #         qualifier_map={"sam_rate": ["qual_1"], "gam_rate": ["qual_1"]},
+        #         weight_column="weights",
+        #         model_id="_weight-test-small",
+        #         run_id="indicator",
+        #         data_paths=["s3://test/weight-col.bin"],
         #     )
         # )
