@@ -11,7 +11,6 @@ import math
 
 from prefect import task, Flow, Parameter
 from prefect.engine.signals import SKIP, FAIL
-from prefect.storage import Docker
 from prefect.executors import DaskExecutor, LocalDaskExecutor
 from prefect.storage import S3
 from prefect.run_configs import DockerRun, KubernetesRun, LocalRun
@@ -28,7 +27,6 @@ from flows.common import (
     to_tile_csv,
     save_timeseries_as_csv,
     save_regional_aggregation,
-    stats_to_json,
     info_to_json,
     results_to_json,
     to_proto,
@@ -62,6 +60,8 @@ TRUE_TOKENS = ("true", "1", "t")
 LOCAL_RUN = os.getenv("WM_LOCAL", "False").lower() in TRUE_TOKENS
 # write to the local file system - mostly to support testing on local run
 DEST_TYPE = os.getenv("WM_DEST_TYPE", "s3").lower()
+# write tile file as csv instead of binary for debugging
+DEBUG_TILE = os.getenv("WM_DEBUG_TILE", "False").lower() in TRUE_TOKENS
 
 ## ======= Flow Configuration Environment Variables ===========
 # Note: Following environment variables need to be set when registering the flow.
@@ -493,73 +493,20 @@ def compute_regional_aggregation(
 
 @task(log_stdout=True)
 def subtile_aggregation(df, weight_column, should_run):
-    # Note: Our tile data format (tile proto buff) currently doesn't support weighted average
+
     print(f"\nsubtile aggregation dataframe length={len(df.index)}, npartitions={df.npartitions}\n")
     if should_run is False:
         raise SKIP("Tiling was not requested")
 
-    # Spatial aggregation to the higest supported precision(subtile z) level
+    # Note: Tile data format (tile proto buff) currently doesn't support weighted average. Assign "" to weight_column
+    weight_column = ""
 
+    # Spatial aggregation to the hightest supported precision(subtile z) level
     stile = df.apply(
         lambda x: deg2num(x.lat, x.lng, MAX_SUBTILE_PRECISION), axis=1, meta=(None, "object")
     )
-    subtile_df = df.assign(subtile=stile)
-
-    subset_cols = ["feature", "timestamp", "subtile", "t_sum", "t_mean"]
-    aggregates_to_compute = {"t_sum": ["sum", "count"], "t_mean": ["sum", "count"]}
-
-    # Rename columns
-    spatial_lookup = {
-        ("t_sum", "sum"): "s_sum_t_sum",
-        ("t_sum", "count"): "s_count_t_sum",
-        ("t_mean", "sum"): "s_sum_t_mean",
-        ("t_mean", "count"): "s_count",
-    }
-
-    if weight_column != "":
-        subtile_df["_weighted_sum"] = subtile_df["t_sum"] * subtile_df[weight_column]
-        subtile_df["_weighted_mean"] = subtile_df["t_mean"] * subtile_df[weight_column]
-        subtile_df["_weighted_wavg"] = subtile_df["t_wavg"] * subtile_df[weight_column]
-
-        aggregates_to_compute["_weighted_sum"] = ["sum"]
-        aggregates_to_compute["_weighted_mean"] = ["sum"]
-        aggregates_to_compute["_weighted_wavg"] = ["sum"]
-        aggregates_to_compute[weight_column] = ["sum"]
-        aggregates_to_compute["t_wavg"] = ["sum", "mean"]  # mean can be caluculated here directly
-
-        spatial_lookup.update(
-            {
-                # wavg of temporal
-                ("_weighted_sum", "sum"): "_weighted_sum",
-                ("_weighted_mean", "sum"): "_weighted_mean",
-                ("_weighted_wavg", "sum"): "_weighted_wavg",
-                (weight_column, "sum"): "_weight_sum",
-                # spatial agg of wavg
-                ("t_wavg", "sum"): "s_sum_t_wavg",
-                ("t_wavg", "mean"): "s_mean_t_wavg",
-            }
-        )
-        subset_cols.extend(
-            ["t_wavg", "_weighted_sum", "_weighted_mean", "_weighted_wavg", weight_column]
-        )
-
-    subtile_df = (
-        subtile_df[subset_cols]
-        .groupby(["feature", "timestamp", "subtile"])
-        .agg(aggregates_to_compute, split_out=DEFAULT_PARTITIONS)
-    )
-    subtile_df.columns = subtile_df.columns.to_flat_index()
-    subtile_df = (
-        subtile_df.rename(columns=spatial_lookup).drop(columns=["s_count_t_sum"]).reset_index()
-    )
-
-    if weight_column != "":
-        subtile_df["s_wavg_t_sum"] = subtile_df["_weighted_sum"] / subtile_df["_weight_sum"]
-        subtile_df["s_wavg_t_mean"] = subtile_df["_weighted_mean"] / subtile_df["_weight_sum"]
-        subtile_df["s_wavg_t_wavg"] = subtile_df["_weighted_wavg"] / subtile_df["_weight_sum"]
-        subtile_df = subtile_df.drop(
-            columns=["_weighted_sum", "_weighted_mean", "_weighted_wavg", "_weight_sum"]
-        )
+    temporal_df = df.assign(subtile=stile)
+    (subtile_df, _) = run_spatial_aggregation(temporal_df, ["feature", "timestamp", "subtile"], ["sum"], weight_column)
 
     return subtile_df
 
@@ -567,6 +514,13 @@ def subtile_aggregation(df, weight_column, should_run):
 @task(log_stdout=True)
 def compute_tiling(df, dest, time_res, model_id, run_id):
     print(f"\ncompute tiling dataframe length={len(df.index)}, npartitions={df.npartitions}\n")
+
+    save_tile_fn = save_tile
+    to_tile_file_fn = to_proto 
+
+    if DEBUG_TILE:
+        save_tile_fn = save_tile_to_csv
+        to_tile_file_fn = to_tile_csv 
 
     df = df.persist()
 
@@ -598,8 +552,8 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
         )
         npart = int(min(math.ceil(len(temp_df.index) / 2), 500))
         temp_df = temp_df.repartition(npartitions=npart).apply(
-            lambda x: save_tile(  # To test use: save_tile_to_csv
-                to_proto(x),  # To test use: to_tile_csv
+            lambda x: save_tile_fn(
+                to_tile_file_fn(x),
                 dest,
                 model_id,
                 run_id,
@@ -1310,72 +1264,12 @@ if __name__ == "__main__" and LOCAL_RUN:
         #     )
         # )
 
-
-        # flow.run(
-        #     parameters=dict(  # Real weights
-        #         compute_tiles=False,
-        #         is_indicator=False,
-        #         qualifier_map={
-        #             "HWAM_AVE": ["year", "mgn", "season"],
-        #             "production": ["year", "mgn", "season"],
-        #             "crop_failure_area": ["year", "mgn", "season"],
-        #             "TOTAL_NITROGEN_APPLIED": ["year", "mgn", "season"]
-        #         },
-        #         weight_column="HAREA_TOT",
-        #         model_id="2af38a88-aa34-4f4a-94f6-a3e1e6630833",
-        #         run_id="eba6ca6b-8c7f-44d1-b008-4349491cabf5",
-        #         data_paths=[
-        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/eba6ca6b-8c7f-44d1-b008-4349491cabf5/eba6ca6b-8c7f-44d1-b008-4349491cabf5_2af38a88-aa34-4f4a-94f6-a3e1e6630833.1.parquet.gzip"
-        #         ],
-        #     )
-        # )
-        
-
-        # ========= Temporally run commands. Remove below when finished =======
-
-        # flow.run(
-        #     parameters=dict(  # Real weights
-        #         compute_tiles=False,
-        #         is_indicator=False,
-        #         qualifier_map={
-        #             "HWAM_AVE": ["year", "mgn", "season"],
-        #             "production": ["year", "mgn", "season"],
-        #             "crop_failure_area": ["year", "mgn", "season"],
-        #             "TOTAL_NITROGEN_APPLIED": ["year", "mgn", "season"]
-        #         },
-        #         weight_column="HAREA_TOT",
-        #         model_id="2af38a88-aa34-4f4a-94f6-a3e1e6630833",
-        #         run_id="test-run",
-        #         data_paths=[
-        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/eba6ca6b-8c7f-44d1-b008-4349491cabf5/eba6ca6b-8c7f-44d1-b008-4349491cabf5_2af38a88-aa34-4f4a-94f6-a3e1e6630833.1.parquet.gzip"
-        #         ],
-        #     )
-        # )
-
-        # flow.run(
-        #     parameters=dict(  # Weights
-        #         compute_tiles=False,
-        #         is_indicator=True,
-        #         qualifier_map={
-        #             "Surveyed Area": ["Locust Presence", "Control Pesticide Name"],
-        #             "Control Area Treated": ["Control Pesticide Name"],
-        #             "Estimated Control Kill (Mortality Rate)": ["Control Pesticide Name"],
-        #         },
-        #         weight_column="Locust Breeding",
-        #         model_id="_weight-test-1",
-        #         run_id="indicator",
-        #         data_paths=[
-        #             "https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/39f7959d-a63e-4db4-a54d-24c66184cf82/39f7959d-a63e-4db4-a54d-24c66184cf82.parquet.gzip"
-        #         ],
-        #     )
-        # )
-        flow.run(  # For testing weight column
-            parameters=dict(  # Weights small
+        # For testing tile data
+        flow.run(
+            parameters=dict(
                 compute_tiles=True,
-                qualifier_map={"sam_rate": ["qual_1"], "gam_rate": ["qual_1"]},
-                weight_column="weights",
-                model_id="_weight-test-small",
-                run_id="indicator-3",
-                data_paths=["s3://test/weight-col.bin"],
+                model_id="geo-test-data",
+                run_id="test-run-5",
+                data_paths=["s3://test/geo-test-data.parquet"],
             )
         )

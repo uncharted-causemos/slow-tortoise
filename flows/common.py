@@ -409,14 +409,6 @@ def output_values_to_json_array(df):
     return json.loads(json_str)
 
 
-# save stats as a json file
-def stats_to_json(x, dest, model_id, run_id, feature, time_res, filename, writer):
-    path = f"{model_id}/{run_id}/{time_res}/{feature}/stats/{filename}.json"
-    # print(x)
-    body = x.to_json(orient="index")
-    writer(body, path, dest)
-
-
 # save any generic info as a json file (gadm regions lists, qualifier lists, etc)
 def info_to_json(contents, dest, model_id, run_id, feature, filename, writer):
     path = f"{model_id}/{run_id}/raw/{feature}/info/{filename}.json"
@@ -681,7 +673,9 @@ def compute_subtile_stats(subtile_df, dest, model_id, run_id, time_res, min_prec
     )
     df = df.assign(subtile=tiles_series)
     # Explode data and duplicate data points for each zoom level (zoom level is defined by subtile coordinates)
-    # TODO: compute iteratively level by level instead of using `explode` which is very memory intensive (look at `compute_tiling` in data_pipeline.py)
+    #
+    # TODO: compute iteratively by level instead of using `explode` which is very memory intensive (look at `compute_tiling` in data_pipeline.py)
+    #
     df = df.explode("subtile").repartition(npartitions=12)
     # Group data points by unique subtile and sum their values and counts up
     df = df.groupby(["feature", "timestamp", "subtile"]).agg("sum")
