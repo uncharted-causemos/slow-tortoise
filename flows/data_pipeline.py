@@ -1023,7 +1023,7 @@ with Flow(FLOW_NAME) as flow:
         annual_spatial_data, dest, "year", model_id, run_id, upstream_tasks=[annual_spatial_data]
     )
 
-    # # ==== Generate a single aggregate value per feature =====
+    # ==== Generate a single aggregate value per feature =====
     summary_data = temporal_aggregation(
         df,
         "all",
