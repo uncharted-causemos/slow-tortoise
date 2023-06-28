@@ -88,7 +88,7 @@ AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 # Custom s3 destination. If WM_S3_DEST_URL is not empty, the pipeline will use following information to connect s3 to write output to,
 # otherwise it will use default aws s3 with above AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
 # If you want to write the pipeline output to custom location such as custom minio storage, provide following information
-WM_S3_DEST_URL = os.getenv("WM_S3_DEST_URL", "http://10.65.18.9:9000" if LOCAL_RUN else None)
+WM_S3_DEST_URL = os.getenv("WM_S3_DEST_URL", "http://10.65.18.73:9000" if LOCAL_RUN else None)
 WM_S3_DEST_REGION = os.getenv("WM_S3_DEST_REGION", "us-east-1")
 WM_S3_DEST_KEY = os.getenv("WM_S3_DEST_KEY")
 WM_S3_DEST_SECRET = os.getenv("WM_S3_DEST_SECRET")
@@ -370,7 +370,9 @@ def compute_global_timeseries(
     # Iterate through all the qualifier columns. Not all columns map to
     # all the features, they will be excluded when processing each feature
     for qualifier_col in qualifier_cols:
-        (timeseries_df, timeseries_agg_columns) = run_spatial_aggregation(df, ["feature", "timestamp"] + qualifier_col, weight_column)
+        # TODO: Optimization: remove spatial 'mean' aggregation since spatial mean can be calculated on the fly in `wm-go` by `spatial sum / spatial count`
+        # In order to achieve this, we first need to implement on the fly `spatial sum / spatial count` calculation in `wm-go`
+        (timeseries_df, timeseries_agg_columns) = run_spatial_aggregation(df, ["feature", "timestamp"] + qualifier_col, ['sum', 'mean'], weight_column)
         timeseries_df = timeseries_df.groupby(["feature"]).apply(
             lambda x: save_timeseries_as_csv(
                 x,
@@ -465,7 +467,9 @@ def compute_regional_aggregation(
         temporal_df = df.assign(region_id=join_region_columns(df, regions_cols, region_level))
 
         for qualifier_col in qualifier_cols:
-            (regional_df, agg_columns) = run_spatial_aggregation(temporal_df, ["feature", "timestamp", "region_id"] + qualifier_col, weight_column)
+            # TODO: Optimization: remove spatial 'mean' aggregation since spatial mean can be calculated on the fly in `wm-go` by `spatial sum / spatial count`
+            # In order to achieve this, we first need to implement on the fly `spatial sum / spatial count` calculation in `wm-go`
+            (regional_df, agg_columns) = run_spatial_aggregation(temporal_df, ["feature", "timestamp", "region_id"] + qualifier_col, ['sum', 'mean'], weight_column)
             regional_df = (
                 regional_df.repartition(npartitions=12)
                 .groupby(["feature", "timestamp"])
@@ -489,6 +493,7 @@ def compute_regional_aggregation(
 
 @task(log_stdout=True)
 def subtile_aggregation(df, weight_column, should_run):
+    # Note: Our tile data format (tile proto buff) currently doesn't support weighted average
     print(f"\nsubtile aggregation dataframe length={len(df.index)}, npartitions={df.npartitions}\n")
     if should_run is False:
         raise SKIP("Tiling was not requested")
@@ -679,107 +684,6 @@ def compute_stats(df, dest, time_res, model_id, run_id):
         MIN_SUBTILE_PRECISION,
         WRITE_TYPES[DEST_TYPE],
     )
-
-
-def assist_compute_stats(df, dest, time_res, model_id, run_id, weight_column, filename):
-    # Compute mean and get new dataframe with mean columns added
-    stats_df = df.assign(
-        s_mean_t_sum=df["s_sum_t_sum"] / df["s_count"],
-        s_mean_t_mean=df["s_sum_t_mean"] / df["s_count"],
-        s_mean_t_wavg=df["s_sum_t_wavg"] / df["s_count"],
-    )
-    # Stats aggregation
-    stats_aggs = ["min", "max"]
-    stats_lookup = {
-        ("s_sum_t_sum", "min"): "min_s_sum_t_sum",
-        ("s_sum_t_sum", "max"): "max_s_sum_t_sum",
-        ("s_mean_t_sum", "min"): "min_s_mean_t_sum",
-        ("s_mean_t_sum", "max"): "max_s_mean_t_sum",
-        ("s_sum_t_mean", "min"): "min_s_sum_t_mean",
-        ("s_sum_t_mean", "max"): "max_s_sum_t_mean",
-        ("s_mean_t_mean", "min"): "min_s_mean_t_mean",
-        ("s_mean_t_mean", "max"): "max_s_mean_t_mean",
-    }
-    stats_agg_columns = [
-        "min_s_sum_t_sum",
-        "max_s_sum_t_sum",
-        "min_s_mean_t_sum",
-        "max_s_mean_t_sum",
-        "min_s_sum_t_mean",
-        "max_s_sum_t_mean",
-        "min_s_mean_t_mean",
-        "max_s_mean_t_mean",
-    ]
-
-    aggregations_to_compute = {
-        "s_sum_t_sum": stats_aggs,
-        "s_mean_t_sum": stats_aggs,
-        "s_sum_t_mean": stats_aggs,
-        "s_mean_t_mean": stats_aggs,
-    }
-
-    if weight_column != "":
-
-        stats_df["s_wavg_t_sum"] = stats_df["_weighted_sum"] / stats_df["_weight_sum"]
-        stats_df["s_wavg_t_mean"] = stats_df["_weighted_mean"] / stats_df["_weight_sum"]
-        stats_df["s_wavg_t_wavg"] = stats_df["_weighted_wavg"] / stats_df["_weight_sum"]
-
-        stats_lookup.update(
-            {
-                ("s_wavg_t_mean", "min"): "min_s_wavg_t_mean",
-                ("s_wavg_t_mean", "max"): "max_s_wavg_t_mean",
-                ("s_wavg_t_sum", "min"): "min_s_wavg_t_sum",
-                ("s_wavg_t_sum", "max"): "max_s_wavg_t_sum",
-                ("s_sum_t_wavg", "min"): "min_s_sum_t_wavg",
-                ("s_sum_t_wavg", "max"): "max_s_sum_t_wavg",
-                ("s_mean_t_wavg", "min"): "min_s_mean_t_wavg",
-                ("s_mean_t_wavg", "max"): "max_s_mean_t_wavg",
-                ("s_wavg_t_wavg", "min"): "min_s_wavg_t_wavg",
-                ("s_wavg_t_wavg", "max"): "max_s_wavg_t_wavg",
-            }
-        )
-        stats_agg_columns.extend(
-            [
-                "min_s_wavg_t_sum",
-                "max_s_wavg_t_sum",
-                "min_s_wavg_t_mean",
-                "max_s_wavg_t_mean",
-                "min_s_sum_t_wavg",
-                "max_s_sum_t_wavg",
-                "min_s_mean_t_wavg",
-                "max_s_mean_t_wavg",
-                "min_s_wavg_t_wavg",
-                "max_s_wavg_t_wavg",
-            ]
-        )
-        aggregations_to_compute.update(
-            {
-                "s_wavg_t_sum": stats_aggs,
-                "s_wavg_t_mean": stats_aggs,
-                "s_sum_t_wavg": stats_aggs,
-                "s_mean_t_wavg": stats_aggs,
-                "s_wavg_t_wavg": stats_aggs,
-            }
-        )
-
-    stats_df = stats_df.groupby(["feature"]).agg(aggregations_to_compute)
-    stats_df.columns = stats_df.columns.to_flat_index()
-    stats_df = stats_df.rename(columns=stats_lookup).reset_index()
-    stats_df = stats_df.groupby(["feature"]).apply(
-        lambda x: stats_to_json(
-            x[stats_agg_columns],
-            dest,
-            model_id,
-            run_id,
-            x["feature"].values[0],
-            time_res,
-            filename,
-            WRITE_TYPES[DEST_TYPE],
-        ),
-        meta=(None, "object"),
-    )
-    stats_df.compute()
-
 
 @task(log_stdout=True)
 def compute_output_summary(df, weight_column):
@@ -1158,41 +1062,41 @@ with Flow(FLOW_NAME) as flow:
 
     # ==== Run aggregations based on monthly time resolution =====
     monthly_data = temporal_aggregation(df, "month", compute_monthly, weight_column)
-    # month_ts_size = compute_global_timeseries(
-    #     monthly_data,
-    #     dest,
-    #     "month",
-    #     model_id,
-    #     run_id,
-    #     qualifier_map,
-    #     qualifier_columns,
-    #     weight_column,
-    #     upstream_tasks=[monthly_data],
-    # )
-    # monthly_regional_timeseries_task = compute_regional_timeseries(
-    #     monthly_data,
-    #     dest,
-    #     "month",
-    #     model_id,
-    #     run_id,
-    #     qualifier_map,
-    #     qualifier_columns,
-    #     qualifier_counts,
-    #     qualifier_thresholds,
-    #     weight_column,
-    #     upstream_tasks=[monthly_data],
-    # )
-    # monthly_csv_regional_df = compute_regional_aggregation(
-    #     monthly_data,
-    #     dest,
-    #     "month",
-    #     model_id,
-    #     run_id,
-    #     qualifier_map,
-    #     qualifier_columns,
-    #     weight_column,
-    #     upstream_tasks=[monthly_data],
-    # )
+    month_ts_size = compute_global_timeseries(
+        monthly_data,
+        dest,
+        "month",
+        model_id,
+        run_id,
+        qualifier_map,
+        qualifier_columns,
+        weight_column,
+        upstream_tasks=[monthly_data],
+    )
+    monthly_regional_timeseries_task = compute_regional_timeseries(
+        monthly_data,
+        dest,
+        "month",
+        model_id,
+        run_id,
+        qualifier_map,
+        qualifier_columns,
+        qualifier_counts,
+        qualifier_thresholds,
+        weight_column,
+        upstream_tasks=[monthly_data],
+    )
+    monthly_csv_regional_df = compute_regional_aggregation(
+        monthly_data,
+        dest,
+        "month",
+        model_id,
+        run_id,
+        qualifier_map,
+        qualifier_columns,
+        weight_column,
+        upstream_tasks=[monthly_data],
+    )
 
     # monthly_spatial_data = subtile_aggregation(
     #     monthly_data,
@@ -1549,7 +1453,7 @@ if __name__ == "__main__" and LOCAL_RUN:
                 qualifier_map={"sam_rate": ["qual_1"], "gam_rate": ["qual_1"]},
                 weight_column="weights",
                 model_id="_weight-test-small",
-                run_id="indicator",
+                run_id="indicator-2",
                 data_paths=["s3://test/weight-col.bin"],
             )
         )
