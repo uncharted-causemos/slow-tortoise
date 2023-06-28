@@ -1201,17 +1201,17 @@ with Flow(FLOW_NAME) as flow:
 
     # ==== Run aggregations based on monthly time resolution =====
     monthly_data = temporal_aggregation(df, "month", compute_monthly, weight_column)
-    # month_ts_size = compute_global_timeseries(
-    #     monthly_data,
-    #     dest,
-    #     "month",
-    #     model_id,
-    #     run_id,
-    #     qualifier_map,
-    #     qualifier_columns,
-    #     weight_column,
-    #     upstream_tasks=[monthly_data],
-    # )
+    month_ts_size = compute_global_timeseries(
+        monthly_data,
+        dest,
+        "month",
+        model_id,
+        run_id,
+        qualifier_map,
+        qualifier_columns,
+        weight_column,
+        upstream_tasks=[monthly_data],
+    )
     monthly_regional_stats_task = compute_regional_stats(
         monthly_data,
         dest,
@@ -1221,31 +1221,30 @@ with Flow(FLOW_NAME) as flow:
         weight_column,
         upstream_tasks=[monthly_data],
     )
-    # monthly_regional_timeseries_task = compute_regional_timeseries(
-    #     monthly_data,
-    #     dest,
-    #     "month",
-    #     model_id,
-    #     run_id,
-    #     qualifier_map,
-    #     qualifier_columns,
-    #     qualifier_counts,
-    #     qualifier_thresholds,
-    #     weight_column,
-    #     upstream_tasks=[monthly_data],
-    # )
-    # monthly_csv_regional_df = compute_regional_aggregation(
-    #     monthly_data,
-    #     dest,
-    #     "month",
-    #     model_id,
-    #     run_id,
-    #     qualifier_map,
-    #     qualifier_columns,
-    #     weight_column,
-    #     upstream_tasks=[monthly_data],
-    # )
-
+    monthly_regional_timeseries_task = compute_regional_timeseries(
+        monthly_data,
+        dest,
+        "month",
+        model_id,
+        run_id,
+        qualifier_map,
+        qualifier_columns,
+        qualifier_counts,
+        qualifier_thresholds,
+        weight_column,
+        upstream_tasks=[monthly_data],
+    )
+    monthly_csv_regional_df = compute_regional_aggregation(
+        monthly_data,
+        dest,
+        "month",
+        model_id,
+        run_id,
+        qualifier_map,
+        qualifier_columns,
+        weight_column,
+        upstream_tasks=[monthly_data],
+    )
     # monthly_spatial_data = subtile_aggregation(
     #     monthly_data,
     #     weight_column,
@@ -1559,6 +1558,24 @@ if __name__ == "__main__" and LOCAL_RUN:
 
         # ========= Temporally run commands. Remove below when finished =======
 
+        # flow.run(
+        #     parameters=dict(  # Real weights
+        #         compute_tiles=False,
+        #         is_indicator=False,
+        #         qualifier_map={
+        #             "HWAM_AVE": ["year", "mgn", "season"],
+        #             "production": ["year", "mgn", "season"],
+        #             "crop_failure_area": ["year", "mgn", "season"],
+        #             "TOTAL_NITROGEN_APPLIED": ["year", "mgn", "season"]
+        #         },
+        #         weight_column="HAREA_TOT",
+        #         model_id="2af38a88-aa34-4f4a-94f6-a3e1e6630833",
+        #         run_id="test-run",
+        #         data_paths=[
+        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/eba6ca6b-8c7f-44d1-b008-4349491cabf5/eba6ca6b-8c7f-44d1-b008-4349491cabf5_2af38a88-aa34-4f4a-94f6-a3e1e6630833.1.parquet.gzip"
+        #         ],
+        #     )
+        # )
         # flow.run(
         #     parameters=dict(  # Real weights
         #         compute_tiles=False,
