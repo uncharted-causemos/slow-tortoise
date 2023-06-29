@@ -1,5 +1,6 @@
 from dask import delayed
 from typing import Tuple, List
+from pathlib import Path
 import dask.dataframe as dd
 import pandas as pd
 import numpy as np
@@ -11,7 +12,6 @@ import math
 
 from prefect import task, Flow, Parameter
 from prefect.engine.signals import SKIP, FAIL
-from prefect.storage import Docker
 from prefect.executors import DaskExecutor, LocalDaskExecutor
 from prefect.storage import S3
 from prefect.run_configs import DockerRun, KubernetesRun, LocalRun
@@ -29,7 +29,6 @@ from flows.common import (
     save_timeseries_as_csv,
     save_regional_stats,
     save_regional_aggregation,
-    stats_to_json,
     info_to_json,
     results_to_json,
     to_proto,
@@ -63,6 +62,8 @@ TRUE_TOKENS = ("true", "1", "t")
 LOCAL_RUN = os.getenv("WM_LOCAL", "False").lower() in TRUE_TOKENS
 # write to the local file system - mostly to support testing on local run
 DEST_TYPE = os.getenv("WM_DEST_TYPE", "s3").lower()
+# write tile file as csv instead of binary for debugging
+DEBUG_TILE = os.getenv("WM_DEBUG_TILE", "False").lower() in TRUE_TOKENS
 
 ## ======= Flow Configuration Environment Variables ===========
 # Note: Following environment variables need to be set when registering the flow.
@@ -89,7 +90,7 @@ AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 # Custom s3 destination. If WM_S3_DEST_URL is not empty, the pipeline will use following information to connect s3 to write output to,
 # otherwise it will use default aws s3 with above AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
 # If you want to write the pipeline output to custom location such as custom minio storage, provide following information
-WM_S3_DEST_URL = os.getenv("WM_S3_DEST_URL", "http://10.65.18.9:9000" if LOCAL_RUN else None)
+WM_S3_DEST_URL = os.getenv("WM_S3_DEST_URL", "http://10.65.18.73:9000" if LOCAL_RUN else None)
 WM_S3_DEST_REGION = os.getenv("WM_S3_DEST_REGION", "us-east-1")
 WM_S3_DEST_KEY = os.getenv("WM_S3_DEST_KEY")
 WM_S3_DEST_SECRET = os.getenv("WM_S3_DEST_SECRET")
@@ -338,6 +339,7 @@ def validate_and_fix(df, weight_column, fill_timestamp) -> Tuple[dd.DataFrame, s
     num_missing_val = int(df["value"].isna().sum().compute().item())
     return (df, weight_column, num_missing_ts, num_invalid_ts, num_missing_val)
 
+
 @task(log_stdout=True)
 def get_qualifier_columns(df, weight_col):
     base_cols = REQUIRED_COLS
@@ -347,6 +349,7 @@ def get_qualifier_columns(df, weight_col):
     qualifier_cols = [[col] for col in set(all_cols) - base_cols]
 
     return qualifier_cols
+
 
 @task(log_stdout=True, skip_on_upstream_skip=False)
 def temporal_aggregation(df, time_res, should_run, weight_column):
@@ -371,7 +374,11 @@ def compute_global_timeseries(
     # Iterate through all the qualifier columns. Not all columns map to
     # all the features, they will be excluded when processing each feature
     for qualifier_col in qualifier_cols:
-        (timeseries_df, timeseries_agg_columns) = run_spatial_aggregation(df, ["feature", "timestamp"] + qualifier_col, weight_column)
+        # TODO: Optimization: remove spatial 'mean' aggregation since spatial mean can be calculated on the fly in `wm-go` by `spatial sum / spatial count`
+        # In order to achieve this, we first need to implement on the fly `spatial sum / spatial count` calculation in `wm-go`
+        (timeseries_df, timeseries_agg_columns) = run_spatial_aggregation(
+            df, ["feature", "timestamp"] + qualifier_col, ["sum", "mean"], weight_column
+        )
         timeseries_df = timeseries_df.groupby(["feature"]).apply(
             lambda x: save_timeseries_as_csv(
                 x,
@@ -393,6 +400,7 @@ def compute_global_timeseries(
 
     return timeseries_size
 
+
 @task(log_stdout=True)
 def compute_regional_stats(
     df,
@@ -407,6 +415,7 @@ def compute_regional_stats(
         f" npartitions={df.npartitions}\n"
     )
 
+    print(f"weight column: {weight_column}")
     regions_cols = extract_region_columns(df)
 
     df = df.persist()
@@ -414,8 +423,12 @@ def compute_regional_stats(
     for region_level in range(len(regions_cols)):
         # Add region_id columns to the data frame
         temporal_df = df.assign(region_id=join_region_columns(df, regions_cols, region_level))
-        (regional_df, agg_columns) = run_spatial_aggregation(temporal_df, ["feature", "timestamp", "region_id"], weight_column)
-
+        (regional_df, agg_columns) = run_spatial_aggregation(
+            temporal_df,
+            ["feature", "timestamp", "region_id"],
+            ["sum", "mean"],
+            weight_column)
+        agg_columns.remove('s_count')
         regional_df = (
             regional_df
                 .groupby(['feature'])
@@ -479,16 +492,10 @@ def compute_regional_timeseries(
             WRITE_TYPES[DEST_TYPE],
         )
 
+
 @task(log_stdout=True)
 def compute_regional_aggregation(
-    df,
-    dest,
-    time_res,
-    model_id,
-    run_id,
-    qualifier_map,
-    qualifier_columns,
-    weight_column
+    df, dest, time_res, model_id, run_id, qualifier_map, qualifier_columns, weight_column
 ):
     print(
         f"\ncompute regional aggregate to csv dataframe length={len(df.index)},"
@@ -508,7 +515,14 @@ def compute_regional_aggregation(
         temporal_df = df.assign(region_id=join_region_columns(df, regions_cols, region_level))
 
         for qualifier_col in qualifier_cols:
-            (regional_df, agg_columns) = run_spatial_aggregation(temporal_df, ["feature", "timestamp", "region_id"] + qualifier_col, weight_column)
+            # TODO: Optimization: remove spatial 'mean' aggregation since spatial mean can be calculated on the fly in `wm-go` by `spatial sum / spatial count`
+            # In order to achieve this, we first need to implement on the fly `spatial sum / spatial count` calculation in `wm-go`
+            (regional_df, agg_columns) = run_spatial_aggregation(
+                temporal_df,
+                ["feature", "timestamp", "region_id"] + qualifier_col,
+                ["sum", "mean"],
+                weight_column,
+            )
             regional_df = (
                 regional_df.repartition(npartitions=12)
                 .groupby(["feature", "timestamp"])
@@ -523,81 +537,32 @@ def compute_regional_aggregation(
                         REGION_LEVELS[region_level],
                         qualifier_map,
                         qualifier_col,
-                        WRITE_TYPES[DEST_TYPE]
+                        WRITE_TYPES[DEST_TYPE],
                     ),
-                    meta=(None, "object")
+                    meta=(None, "object"),
                 )
             )
             regional_df.compute()
 
+
 @task(log_stdout=True)
 def subtile_aggregation(df, weight_column, should_run):
+
     print(f"\nsubtile aggregation dataframe length={len(df.index)}, npartitions={df.npartitions}\n")
     if should_run is False:
         raise SKIP("Tiling was not requested")
 
-    # Spatial aggregation to the higest supported precision(subtile z) level
+    # Note: Tile data format (tile proto buff) currently doesn't support weighted average. Assign "" to weight_column
+    weight_column = ""
 
+    # Spatial aggregation to the hightest supported precision(subtile z) level
     stile = df.apply(
         lambda x: deg2num(x.lat, x.lng, MAX_SUBTILE_PRECISION), axis=1, meta=(None, "object")
     )
-    subtile_df = df.assign(subtile=stile)
-
-    subset_cols = ["feature", "timestamp", "subtile", "t_sum", "t_mean"]
-    aggregates_to_compute = {"t_sum": ["sum", "count"], "t_mean": ["sum", "count"]}
-
-    # Rename columns
-    spatial_lookup = {
-        ("t_sum", "sum"): "s_sum_t_sum",
-        ("t_sum", "count"): "s_count_t_sum",
-        ("t_mean", "sum"): "s_sum_t_mean",
-        ("t_mean", "count"): "s_count",
-    }
-
-    if weight_column != "":
-        subtile_df["_weighted_sum"] = subtile_df["t_sum"] * subtile_df[weight_column]
-        subtile_df["_weighted_mean"] = subtile_df["t_mean"] * subtile_df[weight_column]
-        subtile_df["_weighted_wavg"] = subtile_df["t_wavg"] * subtile_df[weight_column]
-
-        aggregates_to_compute["_weighted_sum"] = ["sum"]
-        aggregates_to_compute["_weighted_mean"] = ["sum"]
-        aggregates_to_compute["_weighted_wavg"] = ["sum"]
-        aggregates_to_compute[weight_column] = ["sum"]
-        aggregates_to_compute["t_wavg"] = ["sum", "mean"]  # mean can be caluculated here directly
-
-        spatial_lookup.update(
-            {
-                # wavg of temporal
-                ("_weighted_sum", "sum"): "_weighted_sum",
-                ("_weighted_mean", "sum"): "_weighted_mean",
-                ("_weighted_wavg", "sum"): "_weighted_wavg",
-                (weight_column, "sum"): "_weight_sum",
-                # spatial agg of wavg
-                ("t_wavg", "sum"): "s_sum_t_wavg",
-                ("t_wavg", "mean"): "s_mean_t_wavg",
-            }
-        )
-        subset_cols.extend(
-            ["t_wavg", "_weighted_sum", "_weighted_mean", "_weighted_wavg", weight_column]
-        )
-
-    subtile_df = (
-        subtile_df[subset_cols]
-        .groupby(["feature", "timestamp", "subtile"])
-        .agg(aggregates_to_compute, split_out=DEFAULT_PARTITIONS)
+    temporal_df = df.assign(subtile=stile)
+    (subtile_df, _) = run_spatial_aggregation(
+        temporal_df, ["feature", "timestamp", "subtile"], ["sum"], weight_column
     )
-    subtile_df.columns = subtile_df.columns.to_flat_index()
-    subtile_df = (
-        subtile_df.rename(columns=spatial_lookup).drop(columns=["s_count_t_sum"]).reset_index()
-    )
-
-    if weight_column != "":
-        subtile_df["s_wavg_t_sum"] = subtile_df["_weighted_sum"] / subtile_df["_weight_sum"]
-        subtile_df["s_wavg_t_mean"] = subtile_df["_weighted_mean"] / subtile_df["_weight_sum"]
-        subtile_df["s_wavg_t_wavg"] = subtile_df["_weighted_wavg"] / subtile_df["_weight_sum"]
-        subtile_df = subtile_df.drop(
-            columns=["_weighted_sum", "_weighted_mean", "_weighted_wavg", "_weight_sum"]
-        )
 
     return subtile_df
 
@@ -605,6 +570,13 @@ def subtile_aggregation(df, weight_column, should_run):
 @task(log_stdout=True)
 def compute_tiling(df, dest, time_res, model_id, run_id):
     print(f"\ncompute tiling dataframe length={len(df.index)}, npartitions={df.npartitions}\n")
+
+    save_tile_fn = save_tile
+    to_tile_file_fn = to_proto
+
+    if DEBUG_TILE:
+        save_tile_fn = save_tile_to_csv
+        to_tile_file_fn = to_tile_csv
 
     df = df.persist()
 
@@ -636,8 +608,8 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
         )
         npart = int(min(math.ceil(len(temp_df.index) / 2), 500))
         temp_df = temp_df.repartition(npartitions=npart).apply(
-            lambda x: save_tile(  # To test use: save_tile_to_csv
-                to_proto(x),  # To test use: to_tile_csv
+            lambda x: save_tile_fn(
+                to_tile_file_fn(x),
                 dest,
                 model_id,
                 run_id,
@@ -724,191 +696,13 @@ def compute_stats(df, dest, time_res, model_id, run_id):
     )
 
 
-def assist_compute_stats(df, dest, time_res, model_id, run_id, weight_column, filename):
-    # Compute mean and get new dataframe with mean columns added
-    stats_df = df.assign(
-        s_mean_t_sum=df["s_sum_t_sum"] / df["s_count"],
-        s_mean_t_mean=df["s_sum_t_mean"] / df["s_count"],
-        s_mean_t_wavg=df["s_sum_t_wavg"] / df["s_count"],
-    )
-    # Stats aggregation
-    stats_aggs = ["min", "max"]
-    stats_lookup = {
-        ("s_sum_t_sum", "min"): "min_s_sum_t_sum",
-        ("s_sum_t_sum", "max"): "max_s_sum_t_sum",
-        ("s_mean_t_sum", "min"): "min_s_mean_t_sum",
-        ("s_mean_t_sum", "max"): "max_s_mean_t_sum",
-        ("s_sum_t_mean", "min"): "min_s_sum_t_mean",
-        ("s_sum_t_mean", "max"): "max_s_sum_t_mean",
-        ("s_mean_t_mean", "min"): "min_s_mean_t_mean",
-        ("s_mean_t_mean", "max"): "max_s_mean_t_mean",
-    }
-    stats_agg_columns = [
-        "min_s_sum_t_sum",
-        "max_s_sum_t_sum",
-        "min_s_mean_t_sum",
-        "max_s_mean_t_sum",
-        "min_s_sum_t_mean",
-        "max_s_sum_t_mean",
-        "min_s_mean_t_mean",
-        "max_s_mean_t_mean",
-    ]
-
-    aggregations_to_compute = {
-        "s_sum_t_sum": stats_aggs,
-        "s_mean_t_sum": stats_aggs,
-        "s_sum_t_mean": stats_aggs,
-        "s_mean_t_mean": stats_aggs,
-    }
-
-    if weight_column != "":
-
-        stats_df["s_wavg_t_sum"] = stats_df["_weighted_sum"] / stats_df["_weight_sum"]
-        stats_df["s_wavg_t_mean"] = stats_df["_weighted_mean"] / stats_df["_weight_sum"]
-        stats_df["s_wavg_t_wavg"] = stats_df["_weighted_wavg"] / stats_df["_weight_sum"]
-
-        stats_lookup.update(
-            {
-                ("s_wavg_t_mean", "min"): "min_s_wavg_t_mean",
-                ("s_wavg_t_mean", "max"): "max_s_wavg_t_mean",
-                ("s_wavg_t_sum", "min"): "min_s_wavg_t_sum",
-                ("s_wavg_t_sum", "max"): "max_s_wavg_t_sum",
-                ("s_sum_t_wavg", "min"): "min_s_sum_t_wavg",
-                ("s_sum_t_wavg", "max"): "max_s_sum_t_wavg",
-                ("s_mean_t_wavg", "min"): "min_s_mean_t_wavg",
-                ("s_mean_t_wavg", "max"): "max_s_mean_t_wavg",
-                ("s_wavg_t_wavg", "min"): "min_s_wavg_t_wavg",
-                ("s_wavg_t_wavg", "max"): "max_s_wavg_t_wavg",
-            }
-        )
-        stats_agg_columns.extend(
-            [
-                "min_s_wavg_t_sum",
-                "max_s_wavg_t_sum",
-                "min_s_wavg_t_mean",
-                "max_s_wavg_t_mean",
-                "min_s_sum_t_wavg",
-                "max_s_sum_t_wavg",
-                "min_s_mean_t_wavg",
-                "max_s_mean_t_wavg",
-                "min_s_wavg_t_wavg",
-                "max_s_wavg_t_wavg",
-            ]
-        )
-        aggregations_to_compute.update(
-            {
-                "s_wavg_t_sum": stats_aggs,
-                "s_wavg_t_mean": stats_aggs,
-                "s_sum_t_wavg": stats_aggs,
-                "s_mean_t_wavg": stats_aggs,
-                "s_wavg_t_wavg": stats_aggs,
-            }
-        )
-
-    stats_df = stats_df.groupby(["feature"]).agg(aggregations_to_compute)
-    stats_df.columns = stats_df.columns.to_flat_index()
-    stats_df = stats_df.rename(columns=stats_lookup).reset_index()
-    stats_df = stats_df.groupby(["feature"]).apply(
-        lambda x: stats_to_json(
-            x[stats_agg_columns],
-            dest,
-            model_id,
-            run_id,
-            x["feature"].values[0],
-            time_res,
-            filename,
-            WRITE_TYPES[DEST_TYPE],
-        ),
-        meta=(None, "object"),
-    )
-    stats_df.compute()
-
-
 @task(log_stdout=True)
 def compute_output_summary(df, weight_column):
-    timeseries_df = df.copy()
-
-    # Timeseries aggregation
-    timeseries_aggs = ["min", "max", "sum", "mean"]
-    timeseries_lookup = {
-        ("t_sum", "min"): "s_min_t_sum",
-        ("t_sum", "max"): "s_max_t_sum",
-        ("t_sum", "sum"): "s_sum_t_sum",
-        ("t_sum", "mean"): "s_mean_t_sum",
-        ("t_mean", "min"): "s_min_t_mean",
-        ("t_mean", "max"): "s_max_t_mean",
-        ("t_mean", "sum"): "s_sum_t_mean",
-        ("t_mean", "mean"): "s_mean_t_mean",
-    }
-    timeseries_agg_columns = [
-        "s_min_t_sum",
-        "s_max_t_sum",
-        "s_sum_t_sum",
-        "s_mean_t_sum",
-        "s_min_t_mean",
-        "s_max_t_mean",
-        "s_sum_t_mean",
-        "s_mean_t_mean",
-    ]
-
-    aggregations_to_compute = {"t_sum": timeseries_aggs, "t_mean": timeseries_aggs}
-    if weight_column != "":
-        timeseries_df["_weighted_sum"] = timeseries_df["t_sum"] * timeseries_df[weight_column]
-        timeseries_df["_weighted_mean"] = timeseries_df["t_mean"] * timeseries_df[weight_column]
-        timeseries_df["_weighted_wavg"] = timeseries_df["t_wavg"] * timeseries_df[weight_column]
-
-        aggregations_to_compute["_weighted_sum"] = ["sum"]
-        aggregations_to_compute["_weighted_mean"] = ["sum"]
-        aggregations_to_compute["_weighted_wavg"] = ["sum"]
-        aggregations_to_compute[weight_column] = ["sum"]
-        aggregations_to_compute["t_wavg"] = timeseries_aggs
-
-        timeseries_lookup.update(
-            {
-                # wavg of temporal
-                ("_weighted_sum", "sum"): "_weighted_sum",
-                ("_weighted_mean", "sum"): "_weighted_mean",
-                ("_weighted_wavg", "sum"): "_weighted_wavg",
-                (weight_column, "sum"): "_weight_sum",
-                # spatial agg of wavg
-                ("t_wavg", "min"): "s_min_t_wavg",
-                ("t_wavg", "max"): "s_max_t_wavg",
-                ("t_wavg", "sum"): "s_sum_t_wavg",
-                ("t_wavg", "mean"): "s_mean_t_wavg",
-            }
-        )
-        timeseries_agg_columns.extend(
-            [
-                "s_min_t_wavg",
-                "s_max_t_wavg",
-                "s_sum_t_wavg",
-                "s_mean_t_wavg",
-                # next 3 columns are computed below
-                "s_wavg_t_sum",
-                "s_wavg_t_mean",
-                "s_wavg_t_wavg",
-            ]
-        )
-
-    timeseries_df = timeseries_df.groupby(["feature", "timestamp"]).agg(aggregations_to_compute)
-    timeseries_df.columns = timeseries_df.columns.to_flat_index()
-    timeseries_df = timeseries_df.rename(columns=timeseries_lookup).reset_index()
-
-    if weight_column != "":
-        timeseries_df["s_wavg_t_sum"] = (
-            timeseries_df["_weighted_sum"] / timeseries_df["_weight_sum"]
-        )
-        timeseries_df["s_wavg_t_mean"] = (
-            timeseries_df["_weighted_mean"] / timeseries_df["_weight_sum"]
-        )
-        timeseries_df["s_wavg_t_wavg"] = (
-            timeseries_df["_weighted_wavg"] / timeseries_df["_weight_sum"]
-        )
-        timeseries_df = timeseries_df.drop(
-            columns=["_weighted_sum", "_weighted_mean", "_weighted_wavg", "_weight_sum"]
-        )
-
-    summary = output_values_to_json_array(timeseries_df[["feature"] + timeseries_agg_columns])
+    groupby = ["feature", "timestamp"]
+    aggs = ["min", "max", "sum", "mean"]
+    (summary_df, summary_agg_columns) = run_spatial_aggregation(df, groupby, aggs, weight_column)
+    summary_agg_columns.remove("s_count")
+    summary = output_values_to_json_array(summary_df[["feature"] + summary_agg_columns])
     return summary
 
 
@@ -1245,99 +1039,108 @@ with Flow(FLOW_NAME) as flow:
         weight_column,
         upstream_tasks=[monthly_data],
     )
-    # monthly_spatial_data = subtile_aggregation(
-    #     monthly_data,
-    #     weight_column,
-    #     compute_tiles,
-    #     upstream_tasks=[month_ts_size, monthly_regional_timeseries_task, monthly_csv_regional_df],
-    # )
-    # month_stats_done = compute_stats(monthly_spatial_data, dest, "month", model_id, run_id)
-    # month_done = compute_tiling(
-    #     monthly_spatial_data, dest, "month", model_id, run_id, upstream_tasks=[monthly_spatial_data]
-    # )
 
-    # # ==== Run aggregations based on annual time resolution =====
-    # annual_data = temporal_aggregation(
-    #     df,
-    #     "year",
-    #     compute_annual,
-    #     weight_column,
-    #     upstream_tasks=[monthly_csv_regional_df, month_done],
-    # )
-    # year_ts_size = compute_global_timeseries(
-    #     annual_data, dest, "year", model_id, run_id, qualifier_map, qualifier_columns, weight_column
-    # )
-    # annual_regional_timeseries_task = compute_regional_timeseries(
-    #     annual_data,
-    #     dest,
-    #     "year",
-    #     model_id,
-    #     run_id,
-    #     qualifier_map,
-    #     qualifier_columns,
-    #     qualifier_counts,
-    #     qualifier_thresholds,
-    #     weight_column,
-    # )
-    # annual_csv_regional_df = compute_regional_aggregation(
-    #     annual_data, dest, "year", model_id, run_id, qualifier_map, qualifier_columns, weight_column
-    # )
+    monthly_spatial_data = subtile_aggregation(
+        monthly_data,
+        weight_column,
+        compute_tiles,
+        upstream_tasks=[month_ts_size, monthly_regional_timeseries_task, monthly_csv_regional_df],
+    )
+    month_stats_done = compute_stats(monthly_spatial_data, dest, "month", model_id, run_id)
+    month_done = compute_tiling(
+        monthly_spatial_data, dest, "month", model_id, run_id, upstream_tasks=[monthly_spatial_data]
+    )
 
-    # annual_spatial_data = subtile_aggregation(
-    #     annual_data,
-    #     weight_column,
-    #     compute_tiles,
-    #     upstream_tasks=[year_ts_size, annual_regional_timeseries_task, annual_csv_regional_df],
-    # )
-    # year_stats_done = compute_stats(annual_spatial_data, dest, "year", model_id, run_id)
-    # year_done = compute_tiling(
-    #     annual_spatial_data, dest, "year", model_id, run_id, upstream_tasks=[annual_spatial_data]
-    # )
+    # ==== Run aggregations based on annual time resolution =====
+    annual_data = temporal_aggregation(
+        df,
+        "year",
+        compute_annual,
+        weight_column,
+        upstream_tasks=[monthly_csv_regional_df, month_done],
+    )
+    year_ts_size = compute_global_timeseries(
+        annual_data, dest, "year", model_id, run_id, qualifier_map, qualifier_columns, weight_column
+    )
+    annual_regional_stats_task = compute_regional_stats(
+        annual_data,
+        dest,
+        "year",
+        model_id,
+        run_id,
+        weight_column,
+    )
+    annual_regional_timeseries_task = compute_regional_timeseries(
+        annual_data,
+        dest,
+        "year",
+        model_id,
+        run_id,
+        qualifier_map,
+        qualifier_columns,
+        qualifier_counts,
+        qualifier_thresholds,
+        weight_column,
+    )
+    annual_csv_regional_df = compute_regional_aggregation(
+        annual_data, dest, "year", model_id, run_id, qualifier_map, qualifier_columns, weight_column
+    )
 
-    # # ==== Generate a single aggregate value per feature =====
-    # summary_data = temporal_aggregation(
-    #     df,
-    #     "all",
-    #     compute_summary,
-    #     weight_column,
-    #     upstream_tasks=[year_done, year_ts_size, annual_csv_regional_df],
-    # )
-    # summary_values = compute_output_summary(summary_data, weight_column)
+    annual_spatial_data = subtile_aggregation(
+        annual_data,
+        weight_column,
+        compute_tiles,
+        upstream_tasks=[year_ts_size, annual_regional_timeseries_task, annual_csv_regional_df],
+    )
+    year_stats_done = compute_stats(annual_spatial_data, dest, "year", model_id, run_id)
+    year_done = compute_tiling(
+        annual_spatial_data, dest, "year", model_id, run_id, upstream_tasks=[annual_spatial_data]
+    )
 
-    # # ==== Record the results in Minio =====
-    # record_results(
-    #     dest,
-    #     model_id,
-    #     run_id,
-    #     summary_values,
-    #     num_rows,
-    #     rows_per_feature,
-    #     region_columns,
-    #     feature_list,
-    #     raw_count_threshold,
-    #     compute_monthly,
-    #     compute_annual,
-    #     compute_tiles,
-    #     month_ts_size,
-    #     year_ts_size,
-    #     num_missing_ts,
-    #     num_invalid_ts,
-    #     num_missing_val,
-    #     weight_column,
-    # )
+    # ==== Generate a single aggregate value per feature =====
+    summary_data = temporal_aggregation(
+        df,
+        "all",
+        compute_summary,
+        weight_column,
+        upstream_tasks=[year_done, year_ts_size, annual_csv_regional_df],
+    )
+    summary_values = compute_output_summary(summary_data, weight_column)
 
-    # # === Print out useful information about the flow metadata =====
-    # print_flow_metadata(
-    #     model_id,
-    #     run_id,
-    #     data_paths,
-    #     dest,
-    #     compute_monthly,
-    #     compute_annual,
-    #     compute_summary,
-    #     compute_tiles,
-    #     upstream_tasks=[summary_values],
-    # )
+    # ==== Record the results in Minio =====
+    record_results(
+        dest,
+        model_id,
+        run_id,
+        summary_values,
+        num_rows,
+        rows_per_feature,
+        region_columns,
+        feature_list,
+        raw_count_threshold,
+        compute_monthly,
+        compute_annual,
+        compute_tiles,
+        month_ts_size,
+        year_ts_size,
+        num_missing_ts,
+        num_invalid_ts,
+        num_missing_val,
+        weight_column,
+    )
+
+    # === Print out useful information about the flow metadata =====
+    print_flow_metadata(
+        model_id,
+        run_id,
+        data_paths,
+        dest,
+        compute_monthly,
+        compute_annual,
+        compute_summary,
+        compute_tiles,
+        upstream_tasks=[summary_values],
+    )
 
     # TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful.
     # Then same data can be used for producing tiles and also used for doing regional aggregation and other computation in other tasks.
@@ -1454,7 +1257,7 @@ if __name__ == "__main__" and LOCAL_RUN:
         #         qualifier_map={"sam_rate": ["qual_1"], "gam_rate": ["qual_1"]},
         #         weight_column="weights",
         #         model_id="_weight-test-small",
-        #         run_id="indicator",
+        #         run_id="test-run-1",
         #         data_paths=["s3://test/weight-col.bin"],
         #     )
         # )
@@ -1477,7 +1280,7 @@ if __name__ == "__main__" and LOCAL_RUN:
         # )
         # flow.run(
         #     parameters=dict(  # Real weights
-        #         compute_tiles=True,
+        #         compute_tiles=False,
         #         is_indicator=False,
         #         qualifier_map={
         #             "HWAM_AVE": ["year", "mgn", "season"],
@@ -1487,7 +1290,7 @@ if __name__ == "__main__" and LOCAL_RUN:
         #         },
         #         weight_column="HAREA_TOT",
         #         model_id="2af38a88-aa34-4f4a-94f6-a3e1e6630833",
-        #         run_id="eba6ca6b-8c7f-44d1-b008-4349491cabf5",
+        #         run_id="test-run-1",
         #         data_paths=[
         #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/eba6ca6b-8c7f-44d1-b008-4349491cabf5/eba6ca6b-8c7f-44d1-b008-4349491cabf5_2af38a88-aa34-4f4a-94f6-a3e1e6630833.1.parquet.gzip"
         #         ],
@@ -1535,90 +1338,12 @@ if __name__ == "__main__" and LOCAL_RUN:
         #     )
         # )
 
-
-        # flow.run(
-        #     parameters=dict(  # Real weights
-        #         compute_tiles=False,
-        #         is_indicator=False,
-        #         qualifier_map={
-        #             "HWAM_AVE": ["year", "mgn", "season"],
-        #             "production": ["year", "mgn", "season"],
-        #             "crop_failure_area": ["year", "mgn", "season"],
-        #             "TOTAL_NITROGEN_APPLIED": ["year", "mgn", "season"]
-        #         },
-        #         weight_column="HAREA_TOT",
-        #         model_id="2af38a88-aa34-4f4a-94f6-a3e1e6630833",
-        #         run_id="eba6ca6b-8c7f-44d1-b008-4349491cabf5",
-        #         data_paths=[
-        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/eba6ca6b-8c7f-44d1-b008-4349491cabf5/eba6ca6b-8c7f-44d1-b008-4349491cabf5_2af38a88-aa34-4f4a-94f6-a3e1e6630833.1.parquet.gzip"
-        #         ],
-        #     )
-        # )
-        
-
-        # ========= Temporally run commands. Remove below when finished =======
-
-        # flow.run(
-        #     parameters=dict(  # Real weights
-        #         compute_tiles=False,
-        #         is_indicator=False,
-        #         qualifier_map={
-        #             "HWAM_AVE": ["year", "mgn", "season"],
-        #             "production": ["year", "mgn", "season"],
-        #             "crop_failure_area": ["year", "mgn", "season"],
-        #             "TOTAL_NITROGEN_APPLIED": ["year", "mgn", "season"]
-        #         },
-        #         weight_column="HAREA_TOT",
-        #         model_id="2af38a88-aa34-4f4a-94f6-a3e1e6630833",
-        #         run_id="test-run",
-        #         data_paths=[
-        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/eba6ca6b-8c7f-44d1-b008-4349491cabf5/eba6ca6b-8c7f-44d1-b008-4349491cabf5_2af38a88-aa34-4f4a-94f6-a3e1e6630833.1.parquet.gzip"
-        #         ],
-        #     )
-        # )
-        # flow.run(
-        #     parameters=dict(  # Real weights
-        #         compute_tiles=False,
-        #         is_indicator=False,
-        #         qualifier_map={
-        #             "HWAM_AVE": ["year", "mgn", "season"],
-        #             "production": ["year", "mgn", "season"],
-        #             "crop_failure_area": ["year", "mgn", "season"],
-        #             "TOTAL_NITROGEN_APPLIED": ["year", "mgn", "season"]
-        #         },
-        #         weight_column="HAREA_TOT",
-        #         model_id="2af38a88-aa34-4f4a-94f6-a3e1e6630833",
-        #         run_id="test-run",
-        #         data_paths=[
-        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/eba6ca6b-8c7f-44d1-b008-4349491cabf5/eba6ca6b-8c7f-44d1-b008-4349491cabf5_2af38a88-aa34-4f4a-94f6-a3e1e6630833.1.parquet.gzip"
-        #         ],
-        #     )
-        # )
-
-        # flow.run(
-        #     parameters=dict(  # Weights
-        #         compute_tiles=False,
-        #         is_indicator=True,
-        #         qualifier_map={
-        #             "Surveyed Area": ["Locust Presence", "Control Pesticide Name"],
-        #             "Control Area Treated": ["Control Pesticide Name"],
-        #             "Estimated Control Kill (Mortality Rate)": ["Control Pesticide Name"],
-        #         },
-        #         weight_column="Locust Breeding",
-        #         model_id="_weight-test-1",
-        #         run_id="indicator",
-        #         data_paths=[
-        #             "https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/39f7959d-a63e-4db4-a54d-24c66184cf82/39f7959d-a63e-4db4-a54d-24c66184cf82.parquet.gzip"
-        #         ],
-        #     )
-        # )
-        flow.run(  # For testing weight column
-            parameters=dict(  # Weights small
+        # For testing tile data
+        flow.run(
+            parameters=dict(
                 compute_tiles=True,
-                qualifier_map={"sam_rate": ["qual_1"], "gam_rate": ["qual_1"]},
-                weight_column="weights",
-                model_id="_weight-test-small",
-                run_id="indicator",
-                data_paths=["s3://test/weight-col.bin"],
+                model_id="geo-test-data",
+                run_id="test-run-1",
+                data_paths=[f"file://{Path(os.getcwd()).parent}/tests/data/geo-test-data.parquet"],
             )
         )

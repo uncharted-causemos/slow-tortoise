@@ -86,27 +86,32 @@ def run_temporal_aggregation(df, time_res, weight_column):
     )
     return temporal_df
 
-# Run spatial aggregation on provided groupby columns of given temporally aggregated dataframe
-def run_spatial_aggregation(df, groupby, weight_column):
-    # TODO: Optimization: remove all spatial mean columns since spatial mean can be calculated on the fly in `wm-go` by `spatial sum / spatial count`
-    # In order to achieve this, we first need to implement on the fly `spatial sum / spatial count` calculation in `wm-go`
-    spatial_aggs = ["sum", "mean"]
-    rename_lookup = {
-        ("t_sum", "sum"): "s_sum_t_sum",
-        ("t_sum", "mean"): "s_mean_t_sum", # spatial mean of temporal sum
-        ("t_mean", "sum"): "s_sum_t_mean",
-        ("t_mean", "mean"): "s_mean_t_mean", # spatial mean of temporal mean
-        ("t_mean", "count"): "s_count",
-    }
-    agg_columns = [
-        "s_sum_t_sum",
-        "s_mean_t_sum",
-        "s_sum_t_mean",
-        "s_mean_t_mean",
-        "s_count",
-    ]
 
-    columns_to_agg = {"t_sum": spatial_aggs, "t_mean": spatial_aggs + ['count']}
+# returns a look uptable for renaming temporal aggregatd columns
+# For example, with temporal agg column `t_sum`, and spatial_aggs, ['sum', 'mean],
+# It returns { ("t_sum", "sum"): "s_sum_t_sum", ("t_sum", "mean"): "s_mean_t_sum" }
+def create_spatial_agg_rename_lookup(temporal_agg_col, spatial_aggs):
+    lookup = {}
+    for agg in spatial_aggs:
+        col = (temporal_agg_col, agg)
+        renamed = f"s_{agg}_{temporal_agg_col}"
+        lookup[col] = renamed
+    return lookup
+
+
+# Run spatial aggregation with given spatial_aggs grouped by groupby columns on temporally aggregated dataframe
+def run_spatial_aggregation(df, groupby, spatial_aggs, weight_column):
+
+    spatial_aggs = [
+        agg for agg in spatial_aggs if agg != "count"
+    ]  # remove `count` agg if it exists since it's handled below
+
+    rename_lookup = {}
+    rename_lookup.update(create_spatial_agg_rename_lookup("t_sum", spatial_aggs))
+    rename_lookup.update(create_spatial_agg_rename_lookup("t_mean", spatial_aggs))
+    rename_lookup.update({("t_mean", "count"): "s_count"})
+
+    columns_to_agg = {"t_sum": spatial_aggs, "t_mean": spatial_aggs + ["count"]}
     if weight_column != "":
         df = df.assign(
             _weighted_t_sum=df["t_sum"] * df[weight_column],
@@ -122,46 +127,35 @@ def run_spatial_aggregation(df, groupby, weight_column):
 
         rename_lookup.update(
             {
-                # wavg of temporal
-                ("_weighted_t_sum", "sum"): "s_wssum_t_sum",
+                ("_weighted_t_sum", "sum"): "s_wsum_t_sum",
                 ("_weighted_t_mean", "sum"): "s_wsum_t_mean",
                 ("_weighted_t_wavg", "sum"): "s_wsum_t_wavg",
                 (weight_column, "sum"): "s_weight",
-                # spatial agg of wavg
-                ("t_wavg", "sum"): "s_sum_t_wavg",
-                ("t_wavg", "mean"): "s_mean_t_wavg", # spatial mean of temporal weighted average
             }
         )
-        agg_columns.extend(
-            [
-                "s_sum_t_wavg",
-                "s_mean_t_wavg",
-                # next 3 columns are computed below
-                "s_wavg_t_sum",
-                "s_wavg_t_mean",
-                "s_wavg_t_wavg",
-            ]
-        )
+        # spatial agg of wavg
+        rename_lookup.update(create_spatial_agg_rename_lookup("t_wavg", spatial_aggs))
 
     df = df.groupby(groupby).agg(columns_to_agg, split_out=DEFAULT_PARTITIONS)
     df.columns = df.columns.to_flat_index()
     df = df.rename(columns=rename_lookup).reset_index()
 
+    agg_columns = list(rename_lookup.values())
+
     if weight_column != "":
-        df["s_wavg_t_sum"] = (
-            df["s_wssum_t_sum"] / df["s_weight"]
-        )
-        df["s_wavg_t_mean"] = (
-            df["s_wsum_t_mean"] / df["s_weight"]
-        )
-        df["s_wavg_t_wavg"] = (
-            df["s_wsum_t_wavg"] / df["s_weight"]
-        )
-        df = df.drop(
-            columns=["s_wssum_t_sum", "s_wsum_t_mean", "s_wsum_t_wavg", "s_weight"]
-        )
+        # Add s_wavg cols
+        df["s_wavg_t_sum"] = df["s_wsum_t_sum"] / df["s_weight"]
+        df["s_wavg_t_mean"] = df["s_wsum_t_mean"] / df["s_weight"]
+        df["s_wavg_t_wavg"] = df["s_wsum_t_wavg"] / df["s_weight"]
+        agg_columns.extend(["s_wavg_t_sum", "s_wavg_t_mean", "s_wavg_t_wavg"])
+
+        # Drop unnecessary columns
+        cols_to_drop = ["s_wsum_t_sum", "s_wsum_t_mean", "s_wsum_t_wavg", "s_weight"]
+        df = df.drop(columns=cols_to_drop)
+        agg_columns = [col for col in agg_columns if col not in cols_to_drop]
 
     return (df, agg_columns)
+
 
 # More details on tile calculations https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames
 # Convert lat, long to tile coord
@@ -414,14 +408,6 @@ def output_values_to_json_array(df):
     return json.loads(json_str)
 
 
-# save stats as a json file
-def stats_to_json(x, dest, model_id, run_id, feature, time_res, filename, writer):
-    path = f"{model_id}/{run_id}/{time_res}/{feature}/stats/{filename}.json"
-    # print(x)
-    body = x.to_json(orient="index")
-    writer(body, path, dest)
-
-
 # save any generic info as a json file (gadm regions lists, qualifier lists, etc)
 def info_to_json(contents, dest, model_id, run_id, feature, filename, writer):
     path = f"{model_id}/{run_id}/raw/{feature}/info/{filename}.json"
@@ -537,6 +523,7 @@ def join_region_columns(df, columns, level=3, deli="__"):
     else:
         return regions[0]
 
+
 def extract_region_columns(df):
     columns = df.columns.to_list()
     # find the intersection
@@ -597,7 +584,7 @@ def save_regional_aggregation(
 
     if len(qualifier_col) == 0:
         df = df[["region_id"] + agg_columns]
-        df = df.rename(columns={ 'region_id': 'id' })
+        df = df.rename(columns={"region_id": "id"})
 
         path = f"{model_id}/{run_id}/{time_res}/{feature}/regional/{region_level}/aggs/{timestamp}/default/default.csv"
         body = df.to_csv(index=False)
@@ -605,11 +592,12 @@ def save_regional_aggregation(
     elif feature in qualifier_map and qualifier_col[0] in qualifier_map[feature]:
         qualifier = qualifier_col[0]
         df = df[["region_id"] + qualifier_col + agg_columns]
-        df = df.rename(columns={ 'region_id': 'id', qualifier: 'qualifier' })
+        df = df.rename(columns={"region_id": "id", qualifier: "qualifier"})
 
         path = f"{model_id}/{run_id}/{time_res}/{feature}/regional/{region_level}/aggs/{timestamp}/qualifiers/{qualifier}.csv"
-        body = df.to_csv(index=False, mode='a')
+        body = df.to_csv(index=False, mode="a")
         writer(body, path, dest)
+
 
 # Save regional timeseries data to csv
 def save_regional_timeseries(
@@ -642,6 +630,7 @@ def save_regional_timeseries(
         body = df.to_csv(index=False)
         writer(body, path, dest)
 
+
 # Compute timeseries by region
 def compute_timeseries_by_region(
     temporal_df,
@@ -658,14 +647,23 @@ def compute_timeseries_by_region(
     admin_level = REGION_LEVELS.index(region_level)
     regions_cols = extract_region_columns(temporal_df)
 
-    temporal_df = temporal_df.assign(region_id=join_region_columns(temporal_df, regions_cols, admin_level))
+    temporal_df = temporal_df.assign(
+        region_id=join_region_columns(temporal_df, regions_cols, admin_level)
+    )
     # persist the result in memory since this df is going to be used for multiple qualifiers
     temporal_df = temporal_df.persist()
 
     # Iterate through all the qualifier columns. Not all columns map to
     # all the features, they will be excluded when processing each feature
     for qualifier_col in qualifier_cols:
-        (timeseries_df, timeseries_agg_columns) = run_spatial_aggregation(temporal_df, ["feature", "region_id", "timestamp"] + qualifier_col, weight_column)
+        # TODO: Optimization: remove spatial 'mean' aggregation since spatial mean can be calculated on the fly in `wm-go` by `spatial sum / spatial count`
+        # In order to achieve this, we first need to implement on the fly `spatial sum / spatial count` calculation in `wm-go`
+        (timeseries_df, timeseries_agg_columns) = run_spatial_aggregation(
+            temporal_df,
+            ["feature", "region_id", "timestamp"] + qualifier_col,
+            ["sum", "mean"],
+            weight_column,
+        )
         timeseries_df = (
             timeseries_df.repartition(npartitions=12)
             .groupby(["feature", "region_id"] + qualifier_col)
@@ -715,6 +713,9 @@ def compute_subtile_stats(subtile_df, dest, model_id, run_id, time_res, min_prec
     )
     df = df.assign(subtile=tiles_series)
     # Explode data and duplicate data points for each zoom level (zoom level is defined by subtile coordinates)
+    #
+    # TODO: compute iteratively by level instead of using `explode` which is very memory intensive (look at `compute_tiling` in data_pipeline.py)
+    #
     df = df.explode("subtile").repartition(npartitions=12)
     # Group data points by unique subtile and sum their values and counts up
     df = df.groupby(["feature", "timestamp", "subtile"]).agg("sum")
