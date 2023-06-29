@@ -337,6 +337,7 @@ def validate_and_fix(df, weight_column, fill_timestamp) -> Tuple[dd.DataFrame, s
     num_missing_val = int(df["value"].isna().sum().compute().item())
     return (df, weight_column, num_missing_ts, num_invalid_ts, num_missing_val)
 
+
 @task(log_stdout=True)
 def get_qualifier_columns(df, weight_col):
     base_cols = REQUIRED_COLS
@@ -346,6 +347,7 @@ def get_qualifier_columns(df, weight_col):
     qualifier_cols = [[col] for col in set(all_cols) - base_cols]
 
     return qualifier_cols
+
 
 @task(log_stdout=True, skip_on_upstream_skip=False)
 def temporal_aggregation(df, time_res, should_run, weight_column):
@@ -372,7 +374,9 @@ def compute_global_timeseries(
     for qualifier_col in qualifier_cols:
         # TODO: Optimization: remove spatial 'mean' aggregation since spatial mean can be calculated on the fly in `wm-go` by `spatial sum / spatial count`
         # In order to achieve this, we first need to implement on the fly `spatial sum / spatial count` calculation in `wm-go`
-        (timeseries_df, timeseries_agg_columns) = run_spatial_aggregation(df, ["feature", "timestamp"] + qualifier_col, ['sum', 'mean'], weight_column)
+        (timeseries_df, timeseries_agg_columns) = run_spatial_aggregation(
+            df, ["feature", "timestamp"] + qualifier_col, ["sum", "mean"], weight_column
+        )
         timeseries_df = timeseries_df.groupby(["feature"]).apply(
             lambda x: save_timeseries_as_csv(
                 x,
@@ -393,6 +397,7 @@ def compute_global_timeseries(
             timeseries_size = timeseries_pdf.to_json(orient="index")
 
     return timeseries_size
+
 
 @task(log_stdout=True)
 def compute_regional_timeseries(
@@ -438,16 +443,10 @@ def compute_regional_timeseries(
             WRITE_TYPES[DEST_TYPE],
         )
 
+
 @task(log_stdout=True)
 def compute_regional_aggregation(
-    df,
-    dest,
-    time_res,
-    model_id,
-    run_id,
-    qualifier_map,
-    qualifier_columns,
-    weight_column
+    df, dest, time_res, model_id, run_id, qualifier_map, qualifier_columns, weight_column
 ):
     print(
         f"\ncompute regional aggregate to csv dataframe length={len(df.index)},"
@@ -469,7 +468,12 @@ def compute_regional_aggregation(
         for qualifier_col in qualifier_cols:
             # TODO: Optimization: remove spatial 'mean' aggregation since spatial mean can be calculated on the fly in `wm-go` by `spatial sum / spatial count`
             # In order to achieve this, we first need to implement on the fly `spatial sum / spatial count` calculation in `wm-go`
-            (regional_df, agg_columns) = run_spatial_aggregation(temporal_df, ["feature", "timestamp", "region_id"] + qualifier_col, ['sum', 'mean'], weight_column)
+            (regional_df, agg_columns) = run_spatial_aggregation(
+                temporal_df,
+                ["feature", "timestamp", "region_id"] + qualifier_col,
+                ["sum", "mean"],
+                weight_column,
+            )
             regional_df = (
                 regional_df.repartition(npartitions=12)
                 .groupby(["feature", "timestamp"])
@@ -484,12 +488,13 @@ def compute_regional_aggregation(
                         REGION_LEVELS[region_level],
                         qualifier_map,
                         qualifier_col,
-                        WRITE_TYPES[DEST_TYPE]
+                        WRITE_TYPES[DEST_TYPE],
                     ),
-                    meta=(None, "object")
+                    meta=(None, "object"),
                 )
             )
             regional_df.compute()
+
 
 @task(log_stdout=True)
 def subtile_aggregation(df, weight_column, should_run):
@@ -506,7 +511,9 @@ def subtile_aggregation(df, weight_column, should_run):
         lambda x: deg2num(x.lat, x.lng, MAX_SUBTILE_PRECISION), axis=1, meta=(None, "object")
     )
     temporal_df = df.assign(subtile=stile)
-    (subtile_df, _) = run_spatial_aggregation(temporal_df, ["feature", "timestamp", "subtile"], ["sum"], weight_column)
+    (subtile_df, _) = run_spatial_aggregation(
+        temporal_df, ["feature", "timestamp", "subtile"], ["sum"], weight_column
+    )
 
     return subtile_df
 
@@ -516,11 +523,11 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
     print(f"\ncompute tiling dataframe length={len(df.index)}, npartitions={df.npartitions}\n")
 
     save_tile_fn = save_tile
-    to_tile_file_fn = to_proto 
+    to_tile_file_fn = to_proto
 
     if DEBUG_TILE:
         save_tile_fn = save_tile_to_csv
-        to_tile_file_fn = to_tile_csv 
+        to_tile_file_fn = to_tile_csv
 
     df = df.persist()
 
@@ -639,12 +646,13 @@ def compute_stats(df, dest, time_res, model_id, run_id):
         WRITE_TYPES[DEST_TYPE],
     )
 
+
 @task(log_stdout=True)
 def compute_output_summary(df, weight_column):
     groupby = ["feature", "timestamp"]
     aggs = ["min", "max", "sum", "mean"]
     (summary_df, summary_agg_columns) = run_spatial_aggregation(df, groupby, aggs, weight_column)
-    summary_agg_columns.remove('s_count')
+    summary_agg_columns.remove("s_count")
     summary = output_values_to_json_array(summary_df[["feature"] + summary_agg_columns])
     return summary
 

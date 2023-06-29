@@ -86,8 +86,9 @@ def run_temporal_aggregation(df, time_res, weight_column):
     )
     return temporal_df
 
+
 # returns a look uptable for renaming temporal aggregatd columns
-# For example, with temporal agg column `t_sum`, and spatial_aggs, ['sum', 'mean], 
+# For example, with temporal agg column `t_sum`, and spatial_aggs, ['sum', 'mean],
 # It returns { ("t_sum", "sum"): "s_sum_t_sum", ("t_sum", "mean"): "s_mean_t_sum" }
 def create_spatial_agg_rename_lookup(temporal_agg_col, spatial_aggs):
     lookup = {}
@@ -97,17 +98,20 @@ def create_spatial_agg_rename_lookup(temporal_agg_col, spatial_aggs):
         lookup[col] = renamed
     return lookup
 
+
 # Run spatial aggregation with given spatial_aggs grouped by groupby columns on temporally aggregated dataframe
 def run_spatial_aggregation(df, groupby, spatial_aggs, weight_column):
 
-    spatial_aggs = [agg for agg in spatial_aggs if agg != 'count'] # remove `count` agg if it exists since it's handled below
+    spatial_aggs = [
+        agg for agg in spatial_aggs if agg != "count"
+    ]  # remove `count` agg if it exists since it's handled below
 
     rename_lookup = {}
     rename_lookup.update(create_spatial_agg_rename_lookup("t_sum", spatial_aggs))
     rename_lookup.update(create_spatial_agg_rename_lookup("t_mean", spatial_aggs))
-    rename_lookup.update({ ("t_mean", "count"): "s_count" })
+    rename_lookup.update({("t_mean", "count"): "s_count"})
 
-    columns_to_agg = {"t_sum": spatial_aggs, "t_mean": spatial_aggs + ['count']}
+    columns_to_agg = {"t_sum": spatial_aggs, "t_mean": spatial_aggs + ["count"]}
     if weight_column != "":
         df = df.assign(
             _weighted_t_sum=df["t_sum"] * df[weight_column],
@@ -140,16 +144,10 @@ def run_spatial_aggregation(df, groupby, spatial_aggs, weight_column):
 
     if weight_column != "":
         # Add s_wavg cols
-        df["s_wavg_t_sum"] = (
-            df["s_wsum_t_sum"] / df["s_weight"]
-        )
-        df["s_wavg_t_mean"] = (
-            df["s_wsum_t_mean"] / df["s_weight"]
-        )
-        df["s_wavg_t_wavg"] = (
-            df["s_wsum_t_wavg"] / df["s_weight"]
-        )
-        agg_columns.extend(['s_wavg_t_sum', 's_wavg_t_mean', 's_wavg_t_wavg'])
+        df["s_wavg_t_sum"] = df["s_wsum_t_sum"] / df["s_weight"]
+        df["s_wavg_t_mean"] = df["s_wsum_t_mean"] / df["s_weight"]
+        df["s_wavg_t_wavg"] = df["s_wsum_t_wavg"] / df["s_weight"]
+        agg_columns.extend(["s_wavg_t_sum", "s_wavg_t_mean", "s_wavg_t_wavg"])
 
         # Drop unnecessary columns
         cols_to_drop = ["s_wsum_t_sum", "s_wsum_t_mean", "s_wsum_t_wavg", "s_weight"]
@@ -157,6 +155,7 @@ def run_spatial_aggregation(df, groupby, spatial_aggs, weight_column):
         agg_columns = [col for col in agg_columns if col not in cols_to_drop]
 
     return (df, agg_columns)
+
 
 # More details on tile calculations https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames
 # Convert lat, long to tile coord
@@ -524,6 +523,7 @@ def join_region_columns(df, columns, level=3, deli="__"):
     else:
         return regions[0]
 
+
 def extract_region_columns(df):
     columns = df.columns.to_list()
     # find the intersection
@@ -534,6 +534,7 @@ def extract_region_columns(df):
         result.remove("country")
         result.insert(0, "country")
     return result
+
 
 # Save regional aggregation data to csv
 def save_regional_aggregation(
@@ -553,7 +554,7 @@ def save_regional_aggregation(
 
     if len(qualifier_col) == 0:
         df = df[["region_id"] + agg_columns]
-        df = df.rename(columns={ 'region_id': 'id' })
+        df = df.rename(columns={"region_id": "id"})
 
         path = f"{model_id}/{run_id}/{time_res}/{feature}/regional/{region_level}/aggs/{timestamp}/default/default.csv"
         body = df.to_csv(index=False)
@@ -561,11 +562,12 @@ def save_regional_aggregation(
     elif feature in qualifier_map and qualifier_col[0] in qualifier_map[feature]:
         qualifier = qualifier_col[0]
         df = df[["region_id"] + qualifier_col + agg_columns]
-        df = df.rename(columns={ 'region_id': 'id', qualifier: 'qualifier' })
+        df = df.rename(columns={"region_id": "id", qualifier: "qualifier"})
 
         path = f"{model_id}/{run_id}/{time_res}/{feature}/regional/{region_level}/aggs/{timestamp}/qualifiers/{qualifier}.csv"
-        body = df.to_csv(index=False, mode='a')
+        body = df.to_csv(index=False, mode="a")
         writer(body, path, dest)
+
 
 # Save regional timeseries data to csv
 def save_regional_timeseries(
@@ -598,6 +600,7 @@ def save_regional_timeseries(
         body = df.to_csv(index=False)
         writer(body, path, dest)
 
+
 # Compute timeseries by region
 def compute_timeseries_by_region(
     temporal_df,
@@ -614,7 +617,9 @@ def compute_timeseries_by_region(
     admin_level = REGION_LEVELS.index(region_level)
     regions_cols = extract_region_columns(temporal_df)
 
-    temporal_df = temporal_df.assign(region_id=join_region_columns(temporal_df, regions_cols, admin_level))
+    temporal_df = temporal_df.assign(
+        region_id=join_region_columns(temporal_df, regions_cols, admin_level)
+    )
     # persist the result in memory since this df is going to be used for multiple qualifiers
     temporal_df = temporal_df.persist()
 
@@ -623,7 +628,12 @@ def compute_timeseries_by_region(
     for qualifier_col in qualifier_cols:
         # TODO: Optimization: remove spatial 'mean' aggregation since spatial mean can be calculated on the fly in `wm-go` by `spatial sum / spatial count`
         # In order to achieve this, we first need to implement on the fly `spatial sum / spatial count` calculation in `wm-go`
-        (timeseries_df, timeseries_agg_columns) = run_spatial_aggregation(temporal_df, ["feature", "region_id", "timestamp"] + qualifier_col, ['sum', 'mean'], weight_column)
+        (timeseries_df, timeseries_agg_columns) = run_spatial_aggregation(
+            temporal_df,
+            ["feature", "region_id", "timestamp"] + qualifier_col,
+            ["sum", "mean"],
+            weight_column,
+        )
         timeseries_df = (
             timeseries_df.repartition(npartitions=12)
             .groupby(["feature", "region_id"] + qualifier_col)
