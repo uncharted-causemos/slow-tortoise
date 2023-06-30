@@ -402,14 +402,7 @@ def compute_global_timeseries(
 
 
 @task(log_stdout=True)
-def compute_regional_stats(
-    df,
-    dest,
-    time_res,
-    model_id,
-    run_id,
-    weight_column
-):
+def compute_regional_stats(df, dest, time_res, model_id, run_id, weight_column):
     print(
         f"\ncompute regional stats. dataframe length={len(df.index)},"
         f" npartitions={df.npartitions}\n"
@@ -424,29 +417,24 @@ def compute_regional_stats(
         # Add region_id columns to the data frame
         temporal_df = df.assign(region_id=join_region_columns(df, regions_cols, region_level))
         (regional_df, agg_columns) = run_spatial_aggregation(
-            temporal_df,
-            ["feature", "timestamp", "region_id"],
-            ["sum", "mean"],
-            weight_column)
-        agg_columns.remove('s_count')
-        regional_df = (
-            regional_df
-                .groupby(['feature'])
-                .apply(
-                    lambda x: save_regional_stats(
-                        x,
-                        dest,
-                        model_id,
-                        run_id,
-                        time_res,
-                        agg_columns,
-                        REGION_LEVELS[region_level],
-                        WRITE_TYPES[DEST_TYPE]
-                    ),
-                    meta=(None, "object")
-                )
+            temporal_df, ["feature", "timestamp", "region_id"], ["sum", "mean"], weight_column
+        )
+        agg_columns.remove("s_count")
+        regional_df = regional_df.groupby(["feature"]).apply(
+            lambda x: save_regional_stats(
+                x,
+                dest,
+                model_id,
+                run_id,
+                time_res,
+                agg_columns,
+                REGION_LEVELS[region_level],
+                WRITE_TYPES[DEST_TYPE],
+            ),
+            meta=(None, "object"),
         )
         regional_df.compute()
+
 
 @task(log_stdout=True)
 def compute_regional_timeseries(
