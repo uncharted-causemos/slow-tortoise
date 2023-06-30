@@ -546,6 +546,11 @@ def save_regional_stats(
     region_level,
     writer,
 ):
+    # Note: we want to limit the number of rows that will be saved with minimum/maximum value
+    # For example, in a worst case scenario, let's say the value of all the rows in a dataset is 0,
+    # we don't want to save all the rows where each value is 0 which is also the min/max value.
+    max_num_items = 20
+
     feature = df["feature"].values[0]
 
     result = {"min": {}, "max": {}}
@@ -559,12 +564,16 @@ def save_regional_stats(
         rows_with_min_df = df[df[col] == min_values[col]][select_cols].rename(
             columns={col: "value"}
         )
-        result["min"][col] = rows_with_min_df.to_dict(orient="records")
+        result["min"][col] = (rows_with_min_df
+                              .nlargest(max_num_items, ['timestamp'])
+                              .to_dict(orient="records"))
 
         rows_with_max_df = df[df[col] == max_values[col]][select_cols].rename(
             columns={col: "value"}
         )
-        result["max"][col] = rows_with_max_df.to_dict(orient="records")
+        result["max"][col] = (rows_with_max_df
+                              .nlargest(max_num_items, ['timestamp'])
+                              .to_dict(orient="records"))
 
     path = f"{model_id}/{run_id}/{time_res}/{feature}/regional/{region_level}/stats/default/extrema.json"
     body = str(json.dumps(result))
