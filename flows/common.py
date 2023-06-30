@@ -561,7 +561,7 @@ def save_regional_stats(
         rows_with_max_df = df[df[col] == max_values[col]][select_cols].rename(columns={col: 'value'})
         result['max'][col] = rows_with_max_df.to_dict(orient="records") 
 
-    path = f"{model_id}/{run_id}/{time_res}/{feature}/regional/{region_level}/stats/default/default.json"
+    path = f"{model_id}/{run_id}/{time_res}/{feature}/regional/{region_level}/stats/default/extrema.json"
     body = str(json.dumps(result))
     writer(body, path, dest)
 
