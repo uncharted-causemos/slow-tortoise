@@ -20,11 +20,6 @@ Note: our convention is that indicators always have a single `run_id` with the v
         \- stats
           \- grid
             -- {timestamp}.csv    | zoom | min_agg_func1 | max_agg_func1 | ...
-          \- regional
-            -- country.json
-            -- admin1.json
-            -- admin2.json
-            -- admin3.json
         \- tiles
           -- {timestamp}-{zoom}-{x}-{y}.tile
         \- timeseries
@@ -35,6 +30,9 @@ Note: our convention is that indicators always have a single `run_id` with the v
               -- {agg-func.csv}    | timestamp | qualifier-value-1 | ...
         \- regional
           \- {country | admin1 | admin2 | admin3}
+            \- stats
+              \- default
+                extrema.json
             \- timeseries
               \- default
                 -- {region-id}.csv    | timestamp | agg-func-1 | ...
@@ -57,10 +55,10 @@ Note: our convention is that indicators always have a single `run_id` with the v
 - Raw data: [raw.csv](./examples/raw.csv)
 - Pipeline results: [results.json](./examples/results.json)
 - Grid stats: [{timestamp.csv}](./examples/1614556800000.csv)
-- Regional stats: [country.json](./examples/country.json)
 - Tile data (protobuf binary): [{timestamp}-{zoom}-{x}-{y}.tile](./examples/1606780800000-7-78-59.tile)
 - Global timeseries: [global.csv](./examples/global.csv)
 - Qualifier timeseries: [{agg-func}.csv](./examples/s_mean_t_mean.csv)
+- Regional stats: [extrema.json](./examples/extrema.json)
 - Regional timesereis: [{region-id}.csv](./examples/Eritrea__Maekel.csv)
 - Regional qualifier timeseries: [{region-id}.csv](./examples/Djibouti__Dikhil.csv)
 - Regional data: [default.csv](./examples/default.csv)

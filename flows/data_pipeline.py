@@ -1,5 +1,6 @@
 from dask import delayed
 from typing import Tuple, List
+from pathlib import Path
 import dask.dataframe as dd
 import pandas as pd
 import numpy as np
@@ -26,6 +27,7 @@ from flows.common import (
     save_tile_to_csv,
     to_tile_csv,
     save_timeseries_as_csv,
+    save_regional_stats,
     save_regional_aggregation,
     info_to_json,
     results_to_json,
@@ -397,6 +399,41 @@ def compute_global_timeseries(
             timeseries_size = timeseries_pdf.to_json(orient="index")
 
     return timeseries_size
+
+
+@task(log_stdout=True)
+def compute_regional_stats(df, dest, time_res, model_id, run_id, weight_column):
+    print(
+        f"\ncompute regional stats. dataframe length={len(df.index)},"
+        f" npartitions={df.npartitions}\n"
+    )
+
+    print(f"weight column: {weight_column}")
+    regions_cols = extract_region_columns(df)
+
+    df = df.persist()
+
+    for region_level in range(len(regions_cols)):
+        # Add region_id columns to the data frame
+        temporal_df = df.assign(region_id=join_region_columns(df, regions_cols, region_level))
+        (regional_df, agg_columns) = run_spatial_aggregation(
+            temporal_df, ["feature", "timestamp", "region_id"], ["sum", "mean"], weight_column
+        )
+        agg_columns.remove("s_count")
+        regional_df = regional_df.groupby(["feature"]).apply(
+            lambda x: save_regional_stats(
+                x,
+                dest,
+                model_id,
+                run_id,
+                time_res,
+                agg_columns,
+                REGION_LEVELS[region_level],
+                WRITE_TYPES[DEST_TYPE],
+            ),
+            meta=(None, "object"),
+        )
+        regional_df.compute()
 
 
 @task(log_stdout=True)
@@ -957,6 +994,15 @@ with Flow(FLOW_NAME) as flow:
         weight_column,
         upstream_tasks=[monthly_data],
     )
+    monthly_regional_stats_task = compute_regional_stats(
+        monthly_data,
+        dest,
+        "month",
+        model_id,
+        run_id,
+        weight_column,
+        upstream_tasks=[monthly_data],
+    )
     monthly_regional_timeseries_task = compute_regional_timeseries(
         monthly_data,
         dest,
@@ -1003,6 +1049,14 @@ with Flow(FLOW_NAME) as flow:
     )
     year_ts_size = compute_global_timeseries(
         annual_data, dest, "year", model_id, run_id, qualifier_map, qualifier_columns, weight_column
+    )
+    annual_regional_stats_task = compute_regional_stats(
+        annual_data,
+        dest,
+        "year",
+        model_id,
+        run_id,
+        weight_column,
     )
     annual_regional_timeseries_task = compute_regional_timeseries(
         annual_data,
@@ -1214,7 +1268,7 @@ if __name__ == "__main__" and LOCAL_RUN:
         # )
         # flow.run(
         #     parameters=dict(  # Real weights
-        #         compute_tiles=True,
+        #         compute_tiles=False,
         #         is_indicator=False,
         #         qualifier_map={
         #             "HWAM_AVE": ["year", "mgn", "season"],
@@ -1224,7 +1278,7 @@ if __name__ == "__main__" and LOCAL_RUN:
         #         },
         #         weight_column="HAREA_TOT",
         #         model_id="2af38a88-aa34-4f4a-94f6-a3e1e6630833",
-        #         run_id="eba6ca6b-8c7f-44d1-b008-4349491cabf5",
+        #         run_id="test-run-1",
         #         data_paths=[
         #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/eba6ca6b-8c7f-44d1-b008-4349491cabf5/eba6ca6b-8c7f-44d1-b008-4349491cabf5_2af38a88-aa34-4f4a-94f6-a3e1e6630833.1.parquet.gzip"
         #         ],
@@ -1251,33 +1305,33 @@ if __name__ == "__main__" and LOCAL_RUN:
         #     )
         # )
 
-        # # For testing tile data
         # flow.run(
         #     parameters=dict(
         #         compute_tiles=True,
-        #         model_id="geo-test-data",
-        #         run_id="test-run-1",
-        #         data_paths=["s3://test/geo-test-data.parquet"],
+        #         is_indicator=False,
+        #         model_id="2281e058-d521-4180-8216-54832700cedd",
+        #         run_id="22045d57-aa6a-4df6-a11d-793225878dab",
+        #         data_paths=[
+        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/22045d57-aa6a-4df6-a11d-793225878dab/22045d57-aa6a-4df6-a11d-793225878dab_2281e058-d521-4180-8216-54832700cedd.1.parquet.gzip"
+        #         ],
+        #         fill_timestamp=0,
+        #         qualifier_map={
+        #             "max": ["Date", "camp"],
+        #             "min": ["Date", "camp"],
+        #             "data": ["Date", "camp"],
+        #             "mean": ["Date", "camp"],
+        #             "error": ["Date", "camp"],
+        #             "median": ["Date", "camp"],
+        #         },
         #     )
         # )
 
+        # For testing tile data
         flow.run(
             parameters=dict(
                 compute_tiles=True,
-                is_indicator=False,
-                model_id="2281e058-d521-4180-8216-54832700cedd",
-                run_id="22045d57-aa6a-4df6-a11d-793225878dab",
-                data_paths=[
-                    "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/22045d57-aa6a-4df6-a11d-793225878dab/22045d57-aa6a-4df6-a11d-793225878dab_2281e058-d521-4180-8216-54832700cedd.1.parquet.gzip"
-                ],
-                fill_timestamp=0,
-                qualifier_map={
-                    "max": ["Date", "camp"],
-                    "min": ["Date", "camp"],
-                    "data": ["Date", "camp"],
-                    "mean": ["Date", "camp"],
-                    "error": ["Date", "camp"],
-                    "median": ["Date", "camp"],
-                },
+                model_id="geo-test-data",
+                run_id="test-run-1",
+                data_paths=[f"file://{Path(os.getcwd()).parent}/tests/data/geo-test-data.parquet"],
             )
         )

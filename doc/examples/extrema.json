@@ -1,0 +1,152 @@
+{
+  "min": {
+    "s_sum_t_sum": [
+      {
+        "region_id": "Burkina Faso__Haut-Bassins",
+        "timestamp": 1328054400000,
+        "value": 0.0
+      },
+      {
+        "region_id": "Niger__Niamey",
+        "timestamp": 1328054400000,
+        "value": 0.0
+      },
+      {
+        "region_id": "Niger__Niamey",
+        "timestamp": 1330560000000,
+        "value": 0.0
+      },
+      {
+        "region_id": "Burkina Faso__Sahel",
+        "timestamp": 1328054400000,
+        "value": 0.0
+      }
+    ],
+    "s_mean_t_sum": [
+      {
+        "region_id": "Burkina Faso__Haut-Bassins",
+        "timestamp": 1328054400000,
+        "value": 0.0
+      },
+      {
+        "region_id": "Niger__Niamey",
+        "timestamp": 1328054400000,
+        "value": 0.0
+      },
+      {
+        "region_id": "Niger__Niamey",
+        "timestamp": 1330560000000,
+        "value": 0.0
+      },
+      {
+        "region_id": "Burkina Faso__Sahel",
+        "timestamp": 1328054400000,
+        "value": 0.0
+      }
+    ],
+    "s_sum_t_mean": [
+      {
+        "region_id": "Burkina Faso__Haut-Bassins",
+        "timestamp": 1328054400000,
+        "value": 0.0
+      },
+      {
+        "region_id": "Niger__Niamey",
+        "timestamp": 1328054400000,
+        "value": 0.0
+      },
+      {
+        "region_id": "Niger__Niamey",
+        "timestamp": 1330560000000,
+        "value": 0.0
+      },
+      {
+        "region_id": "Burkina Faso__Sahel",
+        "timestamp": 1328054400000,
+        "value": 0.0
+      }
+    ],
+    "s_mean_t_mean": [
+      {
+        "region_id": "Burkina Faso__Haut-Bassins",
+        "timestamp": 1328054400000,
+        "value": 0.0
+      },
+      {
+        "region_id": "Niger__Niamey",
+        "timestamp": 1328054400000,
+        "value": 0.0
+      },
+      {
+        "region_id": "Niger__Niamey",
+        "timestamp": 1330560000000,
+        "value": 0.0
+      },
+      {
+        "region_id": "Burkina Faso__Sahel",
+        "timestamp": 1328054400000,
+        "value": 0.0
+      }
+    ]
+  },
+  "max": {
+    "s_sum_t_sum": [
+      {
+        "region_id": "Mauritania__Hodh ech Chargui",
+        "timestamp": 1349049600000,
+        "value": 1674868.0
+      }
+    ],
+    "s_mean_t_sum": [
+      {
+        "region_id": "Mauritania__Hodh ech Chargui",
+        "timestamp": 1349049600000,
+        "value": 1674868.0
+      }
+    ],
+    "s_sum_t_mean": [
+      {
+        "region_id": "Mauritania__Hodh ech Chargui",
+        "timestamp": 1349049600000,
+        "value": 54028.0
+      },
+      {
+        "region_id": "Mauritania__Hodh ech Chargui",
+        "timestamp": 1351728000000,
+        "value": 54028.0
+      },
+      {
+        "region_id": "Mauritania__Hodh ech Chargui",
+        "timestamp": 1354320000000,
+        "value": 54028.0
+      },
+      {
+        "region_id": "Mauritania__Hodh ech Chargui",
+        "timestamp": 1346457600000,
+        "value": 54028.0
+      }
+    ],
+    "s_mean_t_mean": [
+      {
+        "region_id": "Mauritania__Hodh ech Chargui",
+        "timestamp": 1349049600000,
+        "value": 54028.0
+      },
+      {
+        "region_id": "Mauritania__Hodh ech Chargui",
+        "timestamp": 1351728000000,
+        "value": 54028.0
+      },
+      {
+        "region_id": "Mauritania__Hodh ech Chargui",
+        "timestamp": 1354320000000,
+        "value": 54028.0
+      },
+      {
+        "region_id": "Mauritania__Hodh ech Chargui",
+        "timestamp": 1346457600000,
+        "value": 54028.0
+      }
+    ]
+  }
+}
