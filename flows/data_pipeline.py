@@ -1,6 +1,7 @@
 from dask import delayed
-from typing import Tuple, List
+from typing import Tuple, List, Dict
 from pathlib import Path
+from enum import Enum
 import dask.dataframe as dd
 import pandas as pd
 import numpy as np
@@ -139,6 +140,17 @@ MAX_TIMESTAMP = np.iinfo(np.int64).max / 1_000_000
 
 DEFAULT_PARTITIONS = 8
 
+# Defines output tasks which can be configured to be executed or skipped
+class OutputTasks(str, Enum):
+    compute_global_timeseries = "compute_global_timeseries"
+    compute_regional_stats = "compute_regional_stats"
+    compute_regional_timeseries = "compute_regional_timeseries"
+    compute_regional_aggregation = "compute_regional_aggregation"
+    compute_tiles = "compute_tiles"
+
+
+RECORD_RESULTS_TASK = "record_results"
+
 
 @task(log_stdout=True)
 def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
@@ -250,10 +262,11 @@ def get_null_or_empty_cols(df):
 
 @task(log_stdout=True)
 def configure_pipeline(
-    df, dest, indicator_bucket, model_bucket, compute_tiles, is_indicator
-) -> Tuple[dict, bool, bool, bool, bool]:
+    df, dest, indicator_bucket, model_bucket, is_indicator, selected_output_tasks
+) -> Tuple[dict, bool, bool, bool, Dict[OutputTasks, bool]]:
     all_cols = df.columns.to_list()
-    compute_tiles = compute_tiles and set(LAT_LONG_COLUMNS).issubset(all_cols)
+
+    has_lat_lng_columns = set(LAT_LONG_COLUMNS).issubset(all_cols)
 
     if is_indicator:
         dest["bucket"] = indicator_bucket
@@ -266,17 +279,35 @@ def configure_pipeline(
         compute_annual = True
         compute_summary = True
 
+    run_record_results = (selected_output_tasks == None) or (
+        set(selected_output_tasks) == set([e.value for e in OutputTasks])
+    )
+
+    skipped_tasks = {RECORD_RESULTS_TASK: run_record_results == False}
+
+    if not selected_output_tasks:
+        # if selected_output_tasks list is empty, default to run all the output tasks
+        for t in OutputTasks:
+            skipped_tasks[t.value] = False
+    else:
+        for t in OutputTasks:
+            skipped_tasks[t.value] = t.value not in selected_output_tasks
+    # Compute tiles only when there are lat and lng columns
+    skipped_tasks[OutputTasks.compute_tiles] = (
+        skipped_tasks[OutputTasks.compute_tiles] and has_lat_lng_columns
+    )
+
     return (
         dest,
         compute_monthly,
         compute_annual,
         compute_summary,
-        compute_tiles,
+        skipped_tasks,
     )
 
 
 @task(log_stdout=True)
-def save_raw_data(df, dest, time_res, model_id, run_id, raw_count_threshold):
+def save_raw_data(df, dest, time_res, model_id, run_id, raw_count_threshold, skip=False):
     raw_df = df.copy()
     output_columns = raw_df.columns.drop("feature")
 
@@ -360,8 +391,11 @@ def temporal_aggregation(df, time_res, should_run, weight_column):
 
 @task(log_stdout=True)
 def compute_global_timeseries(
-    df, dest, time_res, model_id, run_id, qualifier_map, qualifer_columns, weight_column
+    df, dest, time_res, model_id, run_id, qualifier_map, qualifer_columns, weight_column, skip=False
 ):
+    if skip is True:
+        raise SKIP(f"'{compute_global_timeseries.__name__}' is skipped.")
+
     print(
         f"\ncompute timeseries as csv dataframe length={len(df.index)},"
         f" npartitions={df.npartitions}\n"
@@ -402,7 +436,11 @@ def compute_global_timeseries(
 
 
 @task(log_stdout=True)
-def compute_regional_stats(df, dest, time_res, model_id, run_id, weight_column):
+def compute_regional_stats(df, dest, time_res, model_id, run_id, weight_column, skip=False):
+
+    if skip is True:
+        raise SKIP(f"'{compute_regional_stats.__name__}' is skipped.")
+
     print(
         f"\ncompute regional stats. dataframe length={len(df.index)},"
         f" npartitions={df.npartitions}\n"
@@ -448,7 +486,12 @@ def compute_regional_timeseries(
     qualifier_counts,
     qualifier_thresholds,
     weight_column,
+    skip=False,
 ):
+
+    if skip is True:
+        raise SKIP(f"'{compute_regional_timeseries.__name__}' is skipped.")
+
     print(
         f"\ncompute regional timeseries dataframe length={len(df.index)},"
         f" npartitions={df.npartitions}\n"
@@ -483,8 +526,20 @@ def compute_regional_timeseries(
 
 @task(log_stdout=True)
 def compute_regional_aggregation(
-    df, dest, time_res, model_id, run_id, qualifier_map, qualifier_columns, weight_column
+    df,
+    dest,
+    time_res,
+    model_id,
+    run_id,
+    qualifier_map,
+    qualifier_columns,
+    weight_column,
+    skip=False,
 ):
+
+    if skip is True:
+        raise SKIP(f"'{compute_regional_aggregation.__name__}' is skipped.")
+
     print(
         f"\ncompute regional aggregate to csv dataframe length={len(df.index)},"
         f" npartitions={df.npartitions}\n"
@@ -533,12 +588,13 @@ def compute_regional_aggregation(
             regional_df.compute()
 
 
-@task(log_stdout=True)
-def subtile_aggregation(df, weight_column, should_run):
+@task(log_stdout=True, skip_on_upstream_skip=False)
+def subtile_aggregation(df, weight_column, skip=False):
+
+    if skip is True:
+        raise SKIP(f"'{subtile_aggregation.__name__}' is skipped.")
 
     print(f"\nsubtile aggregation dataframe length={len(df.index)}, npartitions={df.npartitions}\n")
-    if should_run is False:
-        raise SKIP("Tiling was not requested")
 
     # Note: Tile data format (tile proto buff) currently doesn't support weighted average. Assign "" to weight_column
     weight_column = ""
@@ -707,7 +763,7 @@ def record_results(
     raw_count_threshold,
     compute_monthly,
     compute_annual,
-    compute_tiles,
+    skip_task,
     month_ts_size,
     year_ts_size,
     num_missing_ts,
@@ -715,7 +771,14 @@ def record_results(
     num_missing_val,
     weight_column,
 ):
-    if compute_tiles == True:
+    if skip_task[RECORD_RESULTS_TASK]:
+        raise SKIP(
+            "'record_results' is skipped. 'record_results' task only runs when the pipeline is running with all output tasks."
+        )
+
+    compute_tiles = skip_task[OutputTasks.compute_tiles] == False
+    if compute_tiles:
+        print("grid data added")
         region_columns.append("grid data")
 
     data = {
@@ -867,7 +930,7 @@ def print_flow_metadata(
     compute_monthly,
     compute_annual,
     compute_summary,
-    compute_tiles,
+    skip_task,
 ):
     # Print out useful/debugging information
     print("===== Flow Summary =====")
@@ -880,7 +943,7 @@ def print_flow_metadata(
     print(f"Compute monthly: {compute_monthly}")
     print(f"Compute yearly: {compute_annual}")
     print(f"Compute summary: {compute_summary}")
-    print(f"Compute tiles: {compute_tiles}")
+    print(f"Skipped tasks: {skip_task}")
 
 
 ###########################################################################
@@ -913,7 +976,6 @@ with Flow(FLOW_NAME) as flow:
     model_id = Parameter("model_id", default="geo-test-data")
     run_id = Parameter("run_id", default="test-run")
     data_paths = Parameter("data_paths", default=["s3://test/geo-test-data.parquet"])
-    compute_tiles = Parameter("compute_tiles", default=True)
     raw_count_threshold = Parameter("raw_count_threshold", default=10000)
     is_indicator = Parameter("is_indicator", default=False)
     qualifier_map = Parameter("qualifier_map", default={})
@@ -921,6 +983,10 @@ with Flow(FLOW_NAME) as flow:
     model_bucket = Parameter("model_bucket", default=S3_DEFAULT_MODEL_BUCKET)
     fill_timestamp = Parameter("fill_timestamp", default=0)
     weight_column = Parameter("weight_column", default="")
+    selected_output_tasks = Parameter(
+        "selected_output_tasks", default=None
+    )  # Available values are defined by OutputTasks
+
     # The thresholds are values that the pipeline uses for processing qualifiers
     # It tells the user what sort of data they can expect to be available
     # For ex, no regional_timeseries for qualifier with more than 100 values
@@ -959,8 +1025,8 @@ with Flow(FLOW_NAME) as flow:
     (raw_df, num_rows) = read_data(source, data_paths)
 
     # ==== Set parameters that determine which tasks should run based on the type of data we're ingesting ====
-    (dest, compute_monthly, compute_annual, compute_summary, compute_tiles) = configure_pipeline(
-        raw_df, dest, indicator_bucket, model_bucket, compute_tiles, is_indicator
+    (dest, compute_monthly, compute_annual, compute_summary, skip_task) = configure_pipeline(
+        raw_df, dest, indicator_bucket, model_bucket, is_indicator, selected_output_tasks
     )
 
     # ==== Save raw data =====
@@ -992,6 +1058,7 @@ with Flow(FLOW_NAME) as flow:
         qualifier_map,
         qualifier_columns,
         weight_column,
+        skip=skip_task[OutputTasks.compute_global_timeseries],
         upstream_tasks=[monthly_data],
     )
     monthly_regional_stats_task = compute_regional_stats(
@@ -1001,6 +1068,7 @@ with Flow(FLOW_NAME) as flow:
         model_id,
         run_id,
         weight_column,
+        skip=skip_task[OutputTasks.compute_regional_stats],
         upstream_tasks=[monthly_data],
     )
     monthly_regional_timeseries_task = compute_regional_timeseries(
@@ -1014,9 +1082,10 @@ with Flow(FLOW_NAME) as flow:
         qualifier_counts,
         qualifier_thresholds,
         weight_column,
+        skip=skip_task[OutputTasks.compute_regional_timeseries],
         upstream_tasks=[monthly_data],
     )
-    monthly_csv_regional_df = compute_regional_aggregation(
+    monthly_regional_aggregation_task = compute_regional_aggregation(
         monthly_data,
         dest,
         "month",
@@ -1025,18 +1094,23 @@ with Flow(FLOW_NAME) as flow:
         qualifier_map,
         qualifier_columns,
         weight_column,
+        skip=skip_task[OutputTasks.compute_regional_aggregation],
         upstream_tasks=[monthly_data],
     )
 
     monthly_spatial_data = subtile_aggregation(
         monthly_data,
         weight_column,
-        compute_tiles,
-        upstream_tasks=[month_ts_size, monthly_regional_timeseries_task, monthly_csv_regional_df],
+        skip=skip_task[OutputTasks.compute_tiles],
+        upstream_tasks=[
+            month_ts_size,
+            monthly_regional_timeseries_task,
+            monthly_regional_aggregation_task,
+        ],
     )
     month_stats_done = compute_stats(monthly_spatial_data, dest, "month", model_id, run_id)
     month_done = compute_tiling(
-        monthly_spatial_data, dest, "month", model_id, run_id, upstream_tasks=[monthly_spatial_data]
+        monthly_spatial_data, dest, "month", model_id, run_id, upstream_tasks=[month_stats_done]
     )
 
     # ==== Run aggregations based on annual time resolution =====
@@ -1045,10 +1119,18 @@ with Flow(FLOW_NAME) as flow:
         "year",
         compute_annual,
         weight_column,
-        upstream_tasks=[monthly_csv_regional_df, month_done],
+        upstream_tasks=[monthly_regional_aggregation_task, month_done],
     )
     year_ts_size = compute_global_timeseries(
-        annual_data, dest, "year", model_id, run_id, qualifier_map, qualifier_columns, weight_column
+        annual_data,
+        dest,
+        "year",
+        model_id,
+        run_id,
+        qualifier_map,
+        qualifier_columns,
+        weight_column,
+        skip=skip_task[OutputTasks.compute_global_timeseries],
     )
     annual_regional_stats_task = compute_regional_stats(
         annual_data,
@@ -1057,6 +1139,7 @@ with Flow(FLOW_NAME) as flow:
         model_id,
         run_id,
         weight_column,
+        skip=skip_task[OutputTasks.compute_regional_stats],
     )
     annual_regional_timeseries_task = compute_regional_timeseries(
         annual_data,
@@ -1069,20 +1152,33 @@ with Flow(FLOW_NAME) as flow:
         qualifier_counts,
         qualifier_thresholds,
         weight_column,
+        skip=skip_task[OutputTasks.compute_regional_timeseries],
     )
-    annual_csv_regional_df = compute_regional_aggregation(
-        annual_data, dest, "year", model_id, run_id, qualifier_map, qualifier_columns, weight_column
+    annual_regional_aggregation_task = compute_regional_aggregation(
+        annual_data,
+        dest,
+        "year",
+        model_id,
+        run_id,
+        qualifier_map,
+        qualifier_columns,
+        weight_column,
+        skip=skip_task[OutputTasks.compute_regional_aggregation],
     )
 
     annual_spatial_data = subtile_aggregation(
         annual_data,
         weight_column,
-        compute_tiles,
-        upstream_tasks=[year_ts_size, annual_regional_timeseries_task, annual_csv_regional_df],
+        skip=skip_task[OutputTasks.compute_tiles],
+        upstream_tasks=[
+            year_ts_size,
+            annual_regional_timeseries_task,
+            annual_regional_aggregation_task,
+        ],
     )
     year_stats_done = compute_stats(annual_spatial_data, dest, "year", model_id, run_id)
     year_done = compute_tiling(
-        annual_spatial_data, dest, "year", model_id, run_id, upstream_tasks=[annual_spatial_data]
+        annual_spatial_data, dest, "year", model_id, run_id, upstream_tasks=[year_stats_done]
     )
 
     # ==== Generate a single aggregate value per feature =====
@@ -1091,11 +1187,13 @@ with Flow(FLOW_NAME) as flow:
         "all",
         compute_summary,
         weight_column,
-        upstream_tasks=[year_done, year_ts_size, annual_csv_regional_df],
+        upstream_tasks=[year_done, year_ts_size, annual_regional_aggregation_task],
     )
     summary_values = compute_output_summary(summary_data, weight_column)
 
     # ==== Record the results in Minio =====
+    # This runs only when the pipeline is ran with all tasks, ie. when selected_output_tasks is None or has all tasks
+    # (When the pipeline is triggered by data registration from Dojo, selected_output_tasks is None)
     record_results(
         dest,
         model_id,
@@ -1108,7 +1206,7 @@ with Flow(FLOW_NAME) as flow:
         raw_count_threshold,
         compute_monthly,
         compute_annual,
-        compute_tiles,
+        skip_task,
         month_ts_size,
         year_ts_size,
         num_missing_ts,
@@ -1126,7 +1224,7 @@ with Flow(FLOW_NAME) as flow:
         compute_monthly,
         compute_annual,
         compute_summary,
-        compute_tiles,
+        skip_task,
         upstream_tasks=[summary_values],
     )
 
@@ -1142,7 +1240,6 @@ if __name__ == "__main__" and LOCAL_RUN:
     with raise_on_exception():
         # flow.run(
         #     parameters=dict(  # Maxhop
-        #         compute_tiles=True,
         #         model_id="maxhop-v0.2",
         #         run_id="4675d89d-904c-466f-a588-354c047ecf72",
         #         data_paths=[
@@ -1169,7 +1266,6 @@ if __name__ == "__main__" and LOCAL_RUN:
         # )
         # flow.run( # Test combining multiple parquet files with different columns
         #     parameters={
-        #         "compute_tiles": True,
         #         "data_paths": [
         #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/9d7db850-0abe-486f-8979-b1e9ad2ef6ad/9d7db850-0abe-486f-8979-b1e9ad2ef6ad_7b1ceeb4-95a3-4bfd-b7cd-e2a89391742f.1.parquet.gzip",
         #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/9d7db850-0abe-486f-8979-b1e9ad2ef6ad/9d7db850-0abe-486f-8979-b1e9ad2ef6ad_7b1ceeb4-95a3-4bfd-b7cd-e2a89391742f.2.parquet.gzip"
@@ -1190,7 +1286,6 @@ if __name__ == "__main__" and LOCAL_RUN:
         # )
         # flow.run(  # Test combining multiple parquet files with different columns
         #     parameters={
-        #         "compute_tiles": True,
         #         "data_paths": [
         #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/f2818712-09f7-49c6-b920-ea21c764d1c7/f2818712-09f7-49c6-b920-ea21c764d1c7_84fd427f-3a7d-473f-aa25-0c0a150ca216.3.parquet.gzip",
         #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/f2818712-09f7-49c6-b920-ea21c764d1c7/f2818712-09f7-49c6-b920-ea21c764d1c7_84fd427f-3a7d-473f-aa25-0c0a150ca216.2.parquet.gzip",
@@ -1222,7 +1317,6 @@ if __name__ == "__main__" and LOCAL_RUN:
         # )
         # flow.run(
         #     parameters=dict(  # Invalid timestamps
-        #         compute_tiles=True,
         #         model_id="087c3e5a-cd3d-4ebc-bc5e-e13a4654005c",
         #         run_id="9e1100d5-06e8-48b6-baea-56b3b820f82d",
         #         data_paths=[
@@ -1241,7 +1335,6 @@ if __name__ == "__main__" and LOCAL_RUN:
         # )
         # flow.run(  # For testing weight column
         #     parameters=dict(  # Weights small
-        #         compute_tiles=True,
         #         qualifier_map={"sam_rate": ["qual_1"], "gam_rate": ["qual_1"]},
         #         weight_column="weights",
         #         model_id="_weight-test-small",
@@ -1251,7 +1344,6 @@ if __name__ == "__main__" and LOCAL_RUN:
         # )
         # flow.run(
         #     parameters=dict(  # Weights
-        #         compute_tiles=True,
         #         is_indicator=True,
         #         qualifier_map={
         #             "Surveyed Area": ["Locust Presence", "Control Pesticide Name"],
@@ -1268,7 +1360,7 @@ if __name__ == "__main__" and LOCAL_RUN:
         # )
         # flow.run(
         #     parameters=dict(  # Real weights
-        #         compute_tiles=False,
+        #         selected_output_tasks=["compute_global_timeseries", "compute_regional_stats", "compute_regional_timeseries", "compute_regional_aggregation"],
         #         is_indicator=False,
         #         qualifier_map={
         #             "HWAM_AVE": ["year", "mgn", "season"],
@@ -1288,7 +1380,6 @@ if __name__ == "__main__" and LOCAL_RUN:
         # DC Test 30K records
         # flow.run(
         #     parameters=dict(
-        #         compute_tiles=True,
         #         is_indicator=True,
         #         model_id="3a013cd3-6064-4888-9cc6-0e9d637c690e",
         #         run_id="indicator",
@@ -1307,7 +1398,6 @@ if __name__ == "__main__" and LOCAL_RUN:
 
         # flow.run(
         #     parameters=dict(
-        #         compute_tiles=True,
         #         is_indicator=False,
         #         model_id="2281e058-d521-4180-8216-54832700cedd",
         #         run_id="22045d57-aa6a-4df6-a11d-793225878dab",
@@ -1329,9 +1419,15 @@ if __name__ == "__main__" and LOCAL_RUN:
         # For testing tile data
         flow.run(
             parameters=dict(
-                compute_tiles=True,
                 model_id="geo-test-data",
                 run_id="test-run-1",
                 data_paths=[f"file://{Path(os.getcwd()).parent}/tests/data/geo-test-data.parquet"],
+                selected_output_tasks=[
+                    "compute_global_timeseries",
+                    "compute_regional_stats",
+                    "compute_regional_timeseries",
+                    "compute_regional_aggregation",
+                    "compute_tiles",
+                ],
             )
         )
