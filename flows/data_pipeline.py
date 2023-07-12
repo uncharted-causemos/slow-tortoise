@@ -1109,6 +1109,7 @@ with Flow(FLOW_NAME) as flow:
         ],
     )
     month_stats_done = compute_stats(monthly_spatial_data, dest, "month", model_id, run_id)
+    # Since both 'compute_stats' and 'compute_tiling' are memory intensive run 'compute_stats' before 'compute_tiling' sequentially
     month_done = compute_tiling(
         monthly_spatial_data, dest, "month", model_id, run_id, upstream_tasks=[month_stats_done]
     )
@@ -1177,6 +1178,7 @@ with Flow(FLOW_NAME) as flow:
         ],
     )
     year_stats_done = compute_stats(annual_spatial_data, dest, "year", model_id, run_id)
+    # Since both 'compute_stats' and 'compute_tiling' are memory intensive run 'compute_stats' before 'compute_tiling' sequentially
     year_done = compute_tiling(
         annual_spatial_data, dest, "year", model_id, run_id, upstream_tasks=[year_stats_done]
     )
