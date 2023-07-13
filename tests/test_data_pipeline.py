@@ -26,7 +26,6 @@ def test_model(update_env):
         with debug.raise_on_exception():
             flow.run(
                 parameters=dict(
-                    compute_tiles=True,
                     model_id="geo-test-data",
                     run_id="test-run",
                     data_paths=["file://tests/data/geo-test-data.parquet"],

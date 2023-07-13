@@ -294,7 +294,7 @@ def configure_pipeline(
             skipped_tasks[t.value] = t.value not in selected_output_tasks
     # Compute tiles only when there are lat and lng columns
     skipped_tasks[OutputTasks.compute_tiles] = (
-        skipped_tasks[OutputTasks.compute_tiles] and has_lat_lng_columns
+        skipped_tasks[OutputTasks.compute_tiles] or not has_lat_lng_columns
     )
 
     return (
