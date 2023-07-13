@@ -1,5 +1,5 @@
 from dask import delayed
-from typing import Tuple, List, Dict
+from typing import Tuple, List
 from pathlib import Path
 from enum import Enum
 import dask.dataframe as dd
