@@ -307,7 +307,7 @@ def configure_pipeline(
 
 
 @task(log_stdout=True)
-def save_raw_data(df, dest, time_res, model_id, run_id, raw_count_threshold, skip=False):
+def save_raw_data(df, dest, time_res, model_id, run_id, raw_count_threshold):
     raw_df = df.copy()
     output_columns = raw_df.columns.drop("feature")
 
