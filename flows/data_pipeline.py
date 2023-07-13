@@ -263,7 +263,7 @@ def get_null_or_empty_cols(df):
 @task(log_stdout=True)
 def configure_pipeline(
     df, dest, indicator_bucket, model_bucket, is_indicator, selected_output_tasks
-) -> Tuple[dict, bool, bool, bool, Dict[OutputTasks, bool]]:
+) -> Tuple[dict, bool, bool, bool, dict]:
     all_cols = df.columns.to_list()
 
     has_lat_lng_columns = set(LAT_LONG_COLUMNS).issubset(all_cols)
