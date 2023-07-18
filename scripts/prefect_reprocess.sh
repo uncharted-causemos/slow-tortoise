@@ -1,14 +1,14 @@
 #!/bin/bash
 
 print_usage() {
-  echo "Usage: $0 [-t OUTPUT_TASKS] ENV_FILE_PATH DATA_ID [DATA_ID ...]"
+  echo "Usage: $0 [-m] [-t OUTPUT_TASKS] ENV_FILE_PATH DATA_ID [DATA_ID ...]"
   echo
   echo "Re-process the ouput data for provided DATA_ID. DATA_ID is either dataset id for indicator dataset or model run id for model run."
   echo 
   echo "Options:"
   echo "  -t OUTPUT_TASKS     Set selected output tasks to be ran. OUTPUT_TASKS is a comma seperated list of output tasks. e.g. 'compute_regional_stats,compute_regional_timeseries' "
   echo "  -m                  Indicates if reprocessing model runs and provided DATA_ID is model run id from Causemos ES. If the flag is not provided, by default, It reprocesses the indicator dataset with metadata fetched from DOJO"
-  echo "  -h                  Display this help message"
+  echo "  -h                  Print usage"
   echo
   echo "Examples:"
   echo "  $0 ./env/analyst.env 7ae6001f-2227-4e1b-8ac1-10bd012325e2 b9232bf2-b8a3-4718-bb94-08f0254415d9" # 
