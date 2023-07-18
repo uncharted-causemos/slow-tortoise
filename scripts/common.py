@@ -42,15 +42,18 @@ def get_model_run_from_dojo(run_id, dojo_url=DOJO_URL):
         raise
     return indicator_metadata
 
-def process_model_run(run_metadata, causemos_url=CAUSEMOS_URL):
+def process_model_run(run_metadata, causemos_url=CAUSEMOS_URL, selected_output_tasks=[]):
     run_id = run_metadata["id"]
     auth = None
+    query = ""
     if CAUSEMOS_USER != "":
         auth=HTTPBasicAuth(CAUSEMOS_USER, CAUSEMOS_PWD)
+    if len(selected_output_tasks) > 0:
+        query = f"?selected_output_tasks={','.join(selected_output_tasks)}"
     # Send request to cuasemos for processing
     try:
         r = requests.post(
-            f"{causemos_url}/api/maas/model-runs/{run_id}/post-process", auth=auth, json=run_metadata
+            f"{causemos_url}/api/maas/model-runs/{run_id}/post-process{query}", auth=auth, json=run_metadata
         )
         r.raise_for_status()
         print(f">> Causemos: Submitted {run_id}")
@@ -108,16 +111,19 @@ def delete_by_query_string_from_es(index, field, query, es_url=ES_URL):
         print(f">> ES: Error removing documents")
         raise
 
-def reprocess_indicator(indicator_metadata, causemos_url=CAUSEMOS_URL):
+def reprocess_indicator(indicator_metadata, causemos_url=CAUSEMOS_URL, selected_output_tasks=[]):
     indicator_id = indicator_metadata["id"]
     auth = None
+    query = ""
     if CAUSEMOS_USER != "":
         auth=HTTPBasicAuth(CAUSEMOS_USER, CAUSEMOS_PWD)
+    if len(selected_output_tasks) > 0:
+        query = f"?selected_output_tasks={','.join(selected_output_tasks)}"
     # Send request to cuasemos for processing
     try:
         print(auth)
         r = requests.post(
-            f"{causemos_url}/api/maas/indicators/post-process", auth=auth, json=indicator_metadata
+            f"{causemos_url}/api/maas/indicators/post-process{query}", auth=auth, json=indicator_metadata
         )
         r.raise_for_status()
         print(f">> Causemos: Submitted {indicator_id}")
