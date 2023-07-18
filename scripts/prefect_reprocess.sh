@@ -21,7 +21,7 @@ print_usage() {
   echo "    Run with selected output tasks"
   echo 
   echo "  $0 -m -t compute_regional_stats,compute_regional_timeseries ./env/analyst.env 01ad71a7-7c66-4738-92d9-28581770c73a" # 
-  echo "    Reprocess a model run with model run id"
+  echo "    Submit a reprodess rquest for a model run with provided model run id"
 }
 
 data_output_type="indicators"
