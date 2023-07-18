@@ -18,7 +18,7 @@ print_usage() {
   echo "    Run with a file, datasetids.txt containing list of dataset ids"
   echo
   echo "  $0 -t compute_regional_stats,compute_regional_timeseries ./env/analyst.env 7ae6001f-2227-4e1b-8ac1-10bd012325e2" # 
-  echo "    Run with selected output tasks"
+  echo "    Run with selected output tasks, 'compute_regional_stats' and 'compute_regional_timeseries'"
   echo 
   echo "  $0 -m -t compute_regional_stats,compute_regional_timeseries ./env/analyst.env 01ad71a7-7c66-4738-92d9-28581770c73a" # 
   echo "    Submit a reprodess rquest for a model run with provided model run id"
