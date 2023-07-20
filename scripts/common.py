@@ -16,6 +16,12 @@ CAUSEMOS_URL = os.getenv("CAUSEMOS_URL", "http://localhost:3000")
 CAUSEMOS_USER = os.getenv("CAUSEMOS_USER", "")
 CAUSEMOS_PWD = os.getenv("CAUSEMOS_PWD", "")
 
+DEFAULT_ES_CONFIG = {
+    "url": "http://localhost:9200",
+    "user": "",
+    "pwd": "",
+}
+
 def get_model_run_from_es(run_id, es_url=ES_URL):
     # Fetch existing model run metadata
     auth = None
@@ -29,6 +35,70 @@ def get_model_run_from_es(run_id, es_url=ES_URL):
         print(f">> ES: Error fetching model run metadata for {run_id}")
         raise
     return run_metadata
+
+def get_indicator_dataset_ids_from_es(status="READY", config=DEFAULT_ES_CONFIG):
+    limit = 10000
+    query = {
+        "query": {
+            "bool": {
+                "filter": [
+                    {"term": { "status": status }},
+                    {"term": { "type": "indicator" }}
+                ]
+            }
+        },
+        "fields": [
+            "data_id"
+        ],
+        "collapse": {
+            "field": "data_id"
+        },
+        "_source": False
+    }
+    ids = []
+    auth = None
+    if config.get("user"):
+        auth=HTTPBasicAuth(config.get("user"), config.get("pwd"))
+    try:
+        res = requests.get(f"{config.get('url')}/data-datacube/_search?size={limit}", auth=auth, json=query)
+        res.raise_for_status()
+        data = res.json()["hits"]["hits"]
+        for d in data:
+            ids.append(d["fields"]["data_id"][0])
+    except Exception as exc:
+        print(f">> ES: Error fetching indicator dataset ids")
+        raise
+    return ids
+
+def get_model_run_ids_from_es(status="READY", config=DEFAULT_ES_CONFIG):
+    limit = 10000
+    query = {
+        "query": {
+            "bool": {
+                "filter": [
+                    {"term": { "status": status }},
+                ]
+            }
+        },
+        "fields": [
+            "id"
+        ],
+        "_source": False
+    }
+    auth = None
+    ids = []
+    if config.get("user"):
+        auth=HTTPBasicAuth(config.get("user"), config.get("pwd"))
+    try:
+        res = requests.get(f"{config.get('url')}/data-model-run/_search?size={limit}", auth=auth, json=query)
+        res.raise_for_status()
+        data = res.json()["hits"]["hits"]
+        for d in data:
+            ids.append(d["fields"]["id"][0])
+    except Exception as exc:
+        print(f">> ES: Error fetching indicator dataset ids")
+        raise
+    return ids
 
 def get_model_run_from_dojo(run_id, dojo_url=DOJO_URL):
     try:
@@ -85,18 +155,21 @@ def get_indicator_metadata_from_dojo(indicator_id, dojo_url=DOJO_URL):
     return indicator_metadata
 
 
-def delete_indicator_from_es(indicator_id, es_url=ES_URL):
+def delete_indicator_from_es(indicator_data_id, config=DEFAULT_ES_CONFIG):
     # Remove existing indicator metadata in ES
+    payload = {"query": {"term": {"data_id": indicator_data_id}}}
+    auth = None
+    if config.get("user"):
+        auth=HTTPBasicAuth(config.get("user"), config.get("pwd"))
     try:
-        payload = {"query": {"term": {"data_id": indicator_id}}}
-        res = requests.post(f"{es_url}/data-datacube/_delete_by_query", auth=HTTPBasicAuth(ES_USER, ES_PWD), json=payload)
+        res = requests.post(f"{config.get('url')}/data-datacube/_delete_by_query", auth=auth, json=payload)
         res.raise_for_status()
         result = res.json()
         # explicitly wait for index to be refreshed since delete_by_query doesn't support refresh=wait_for
         time.sleep(2)
-        print(f">> ES: Metadata successfully deleted for indicator, {indicator_id}")
+        print(f">> ES: Metadata successfully deleted for indicator with data_id, {indicator_data_id}")
     except Exception as exc:
-        print(f">> ES: Error removing existing indicator metadata for {indicator_id}")
+        print(f">> ES: Error removing existing indicator metadata for {indicator_data_id}")
         raise
 
 def delete_by_query_string_from_es(index, field, query, es_url=ES_URL):
