@@ -24,16 +24,7 @@ butcket_info = {
     },
 }
 
-# s3_client = boto3.client("s3")
-#### For testing only, uncomment above line and remove below lines before committing to main branch
-s3_client = boto3.client(
-    "s3",
-    endpoint_url="http://10.65.18.73:9000",
-    region_name=minio_config.get("region_name"),
-    aws_access_key_id=minio_config.get("key"),
-    aws_secret_access_key=minio_config.get("secret"),
-)
-####
+s3_client = boto3.client("s3")
 
 minio_client = boto3.client(
     "s3",
