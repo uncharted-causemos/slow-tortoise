@@ -6,10 +6,17 @@ The pipeline is tested and deployed with **Python 3.8.5**. While small differenc
 
 ### Environment
 From a suitable virtual environment (venv, conda, etc.), dependencies for local development can be installed by running
-```
-pip install -e .
-prefect backend server
-```
+
+- Setup the virtual environment using `venv` (Recommended)
+  ```
+  python3 -m venv .venv
+  source .venv/bin/activate
+  ```
+
+- Install dependencies
+  ```
+  pip install -e .[dev]
+  ```
 ---
 
 ## Setup Code Formatting

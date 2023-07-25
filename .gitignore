@@ -12,3 +12,5 @@ wm_data_pipeline.egg-info
 tests/output
 test-models
 test-indicators
+.env
+.venv
