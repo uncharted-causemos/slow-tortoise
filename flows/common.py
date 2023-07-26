@@ -34,6 +34,7 @@ REQUIRED_COLS = {
 
 DEFAULT_PARTITIONS = 8
 
+
 # Run temporal aggregation on given provided dataframe
 def run_temporal_aggregation(df, time_res, weight_column):
     print(
@@ -101,7 +102,6 @@ def create_spatial_agg_rename_lookup(temporal_agg_col, spatial_aggs):
 
 # Run spatial aggregation with given spatial_aggs grouped by groupby columns on temporally aggregated dataframe
 def run_spatial_aggregation(df, groupby, spatial_aggs, weight_column):
-
     spatial_aggs = [
         agg for agg in spatial_aggs if agg != "count"
     ]  # remove `count` agg if it exists since it's handled below
@@ -715,7 +715,9 @@ def save_subtile_stats(df, dest, model_id, run_id, time_res, writer):
 
 
 # Compute min/max stats of subtiles (grid cells) at each zoom level
-def compute_subtile_stats(subtile_df, dest, model_id, run_id, time_res, min_precision, max_precision, writer):
+def compute_subtile_stats(
+    subtile_df, dest, model_id, run_id, time_res, min_precision, max_precision, writer
+):
     print(
         f"\ncompute subtile stats dataframe length={len(subtile_df.index)}, npartitions={subtile_df.npartitions}\n"
     )
@@ -759,7 +761,9 @@ def compute_subtile_stats(subtile_df, dest, model_id, run_id, time_res, min_prec
         df = df.compute()
         result_dfs.append(df)
 
-    result_df = dd.from_pandas(pd.concat(result_dfs, ignore_index=True), npartitions=DEFAULT_PARTITIONS)
+    result_df = dd.from_pandas(
+        pd.concat(result_dfs, ignore_index=True), npartitions=DEFAULT_PARTITIONS
+    )
 
     # Save the stats for each timestamp
     result_df = result_df.groupby(["feature", "timestamp"]).apply(

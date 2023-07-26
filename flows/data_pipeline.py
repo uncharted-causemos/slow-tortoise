@@ -140,6 +140,7 @@ MAX_TIMESTAMP = np.iinfo(np.int64).max / 1_000_000
 
 DEFAULT_PARTITIONS = 8
 
+
 # Defines output tasks which can be configured to be executed or skipped
 class OutputTasks(str, Enum):
     compute_global_timeseries = "compute_global_timeseries"
@@ -437,7 +438,6 @@ def compute_global_timeseries(
 
 @task(log_stdout=True)
 def compute_regional_stats(df, dest, time_res, model_id, run_id, weight_column, skip=False):
-
     if skip is True:
         raise SKIP(f"'{compute_regional_stats.__name__}' is skipped.")
 
@@ -488,7 +488,6 @@ def compute_regional_timeseries(
     weight_column,
     skip=False,
 ):
-
     if skip is True:
         raise SKIP(f"'{compute_regional_timeseries.__name__}' is skipped.")
 
@@ -536,7 +535,6 @@ def compute_regional_aggregation(
     weight_column,
     skip=False,
 ):
-
     if skip is True:
         raise SKIP(f"'{compute_regional_aggregation.__name__}' is skipped.")
 
@@ -590,7 +588,6 @@ def compute_regional_aggregation(
 
 @task(log_stdout=True, skip_on_upstream_skip=False)
 def subtile_aggregation(df, weight_column, skip=False):
-
     if skip is True:
         raise SKIP(f"'{subtile_aggregation.__name__}' is skipped.")
 
@@ -1109,9 +1106,7 @@ with Flow(FLOW_NAME) as flow:
         ],
     )
     month_stats_done = compute_stats(monthly_spatial_data, dest, "month", model_id, run_id)
-    month_done = compute_tiling(
-        monthly_spatial_data, dest, "month", model_id, run_id
-    )
+    month_done = compute_tiling(monthly_spatial_data, dest, "month", model_id, run_id)
 
     # ==== Run aggregations based on annual time resolution =====
     annual_data = temporal_aggregation(
@@ -1177,9 +1172,7 @@ with Flow(FLOW_NAME) as flow:
         ],
     )
     year_stats_done = compute_stats(annual_spatial_data, dest, "year", model_id, run_id)
-    year_done = compute_tiling(
-        annual_spatial_data, dest, "year", model_id, run_id
-    )
+    year_done = compute_tiling(annual_spatial_data, dest, "year", model_id, run_id)
 
     # ==== Generate a single aggregate value per feature =====
     summary_data = temporal_aggregation(
