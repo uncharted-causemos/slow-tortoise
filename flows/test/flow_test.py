@@ -19,9 +19,9 @@ def foo():
 
 LOCAL_RUN = os.getenv("WM_LOCAL", "False").lower() in ("true", "1", "t")
 
-WM_DATA_PIPELINE_IMAGE = os.getenv("WM_DATA_PIPELINE_IMAGE")
-WM_FLOW_STORAGE_S3_BUCKET_NAME = os.getenv("WM_FLOW_STORAGE_S3_BUCKET_NAME")
-WM_RUN_CONFIG_TYPE = os.getenv("WM_RUN_CONFIG_TYPE")  # docker, local, kubernetes
+WM_DATA_PIPELINE_IMAGE = os.getenv("WM_DATA_PIPELINE_IMAGE", "")
+WM_FLOW_STORAGE_S3_BUCKET_NAME = os.getenv("WM_FLOW_STORAGE_S3_BUCKET_NAME", "")
+WM_RUN_CONFIG_TYPE = os.getenv("WM_RUN_CONFIG_TYPE", "")  # docker, local, kubernetes
 
 with Flow("basic_flow") as flow:
     # The flow code will be stored in and retrieved from following s3 bucket
@@ -48,4 +48,5 @@ with Flow("basic_flow") as flow:
 if __name__ == "__main__" and LOCAL_RUN:
     print("Task run result: ")
     state = flow.run()
-    print(state.result[foo_result].result)
+    if state:
+        print(state.result[foo_result].result)

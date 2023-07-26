@@ -33,7 +33,7 @@ def foo():
     return result
 
 
-DASK_SCHEDULER = os.getenv("WM_DASK_SCHEDULER")
+DASK_SCHEDULER = os.getenv("WM_DASK_SCHEDULER", "")
 LOCAL_RUN = os.getenv("WM_LOCAL", "False").lower() in ("true", "1", "t")
 
 with Flow("throughput_test") as flow:
