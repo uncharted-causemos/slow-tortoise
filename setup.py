@@ -28,4 +28,9 @@ setup(
         "pyarrow==12.0.1",
         "prometheus_client==0.14.1",
     ],
+    extras_require={
+        "dev": [
+            "python-dotenv==1.0.0"
+        ]
+    }
 )
