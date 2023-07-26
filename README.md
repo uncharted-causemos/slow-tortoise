@@ -2,14 +2,14 @@
 
 ## Setup
 ### Python Version
-The pipeline is tested and deployed with **Python 3.8.5**. While small differences to the patch version should work there are some dependencies with known issues on versions other than 3.8.*.
+The pipeline is tested and deployed with **Python 3.11**. While small differences to the patch version should work there are some dependencies with known issues on versions other than 3.11.*. 
 
 ### Environment
 From a suitable virtual environment (venv, conda, etc.), dependencies for local development can be installed by running
 
 - Setup the virtual environment using `venv` (Recommended)
   ```
-  python3 -m venv .venv
+  python3.11 -m venv .venv
   source .venv/bin/activate
   ```
 
@@ -21,7 +21,7 @@ From a suitable virtual environment (venv, conda, etc.), dependencies for local 
 
 ## Setup Code Formatting
 
-This repo uses [black](https://black.readthedocs.io/en/stable/index.html). You can install it with `pip install black==21.9b0`. Once installed, you can configure it in your IDE with the instructions [here](https://black.readthedocs.io/en/stable/integrations/editors.html).  
+This repo uses [black](https://black.readthedocs.io/en/stable/index.html). You can install it with `pip install black==23.7.0`. Once installed, you can configure it in your IDE with the instructions [here](https://black.readthedocs.io/en/stable/integrations/editors.html).  
 In VS Code, you simply need to add the folowing lines into `settings.json`
 ```
     "python.formatting.provider": "black",
@@ -34,7 +34,7 @@ You can apply formatting rules to the current document with `Format Document` (O
 
 ## Setup Linting
 
-The Gitlab CI pipeline uses `mypy`. You can install it with `pip install mypy==0.910`.  
+The Gitlab CI pipeline uses `mypy`. You can install it with `pip install mypy==1.4.1`.
 After installing, you will need to download type definitions using `mypy --install-types`.  
 In VS Code, you can configure it with the `Python: Select Linter` action.  
 

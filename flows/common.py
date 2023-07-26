@@ -34,6 +34,7 @@ REQUIRED_COLS = {
 
 DEFAULT_PARTITIONS = 8
 
+
 # Run temporal aggregation on given provided dataframe
 def run_temporal_aggregation(df, time_res, weight_column):
     print(
@@ -101,7 +102,6 @@ def create_spatial_agg_rename_lookup(temporal_agg_col, spatial_aggs):
 
 # Run spatial aggregation with given spatial_aggs grouped by groupby columns on temporally aggregated dataframe
 def run_spatial_aggregation(df, groupby, spatial_aggs, weight_column):
-
     spatial_aggs = [
         agg for agg in spatial_aggs if agg != "count"
     ]  # remove `count` agg if it exists since it's handled below
@@ -702,6 +702,7 @@ def compute_timeseries_by_region(
 
 # Save subtile stats to csv
 def save_subtile_stats(df, dest, model_id, run_id, time_res, writer):
+    df = df.sort_values(by=["zoom"])
     feature = df["feature"].values[0]
     timestamp = df["timestamp"].values[0]
     columns = df.columns.tolist()
@@ -714,45 +715,59 @@ def save_subtile_stats(df, dest, model_id, run_id, time_res, writer):
 
 
 # Compute min/max stats of subtiles (grid cells) at each zoom level
-def compute_subtile_stats(subtile_df, dest, model_id, run_id, time_res, min_precision, writer):
-    df = subtile_df.copy()
+def compute_subtile_stats(
+    subtile_df, dest, model_id, run_id, time_res, min_precision, max_precision, writer
+):
     print(
-        f"\ncompute subtile stats dataframe length={len(df.index)}, npartitions={df.npartitions}\n"
+        f"\ncompute subtile stats dataframe length={len(subtile_df.index)}, npartitions={subtile_df.npartitions}\n"
     )
-    # Get a list of all acestor tiles at different zoom level for each subtile
-    tiles_series = df.apply(
-        lambda x: filter_by_min_zoom(ancestor_tiles(x.subtile), min_precision),
-        axis=1,
-        meta=(None, "object"),
-    )
-    df = df.assign(subtile=tiles_series)
-    # Explode data and duplicate data points for each zoom level (zoom level is defined by subtile coordinates)
-    #
-    # TODO: compute iteratively by level instead of using `explode` which is very memory intensive (look at `compute_tiling` in data_pipeline.py)
-    #
-    df = df.explode("subtile").repartition(npartitions=12)
-    # Group data points by unique subtile and sum their values and counts up
-    df = df.groupby(["feature", "timestamp", "subtile"]).agg("sum")
-    df = df.reset_index()
 
-    # Compute mean from sum and count
-    # Note that s_mean_t_wavg is calulated in subtile_aggregation
-    df = df.assign(
-        s_mean_t_sum=df["s_sum_t_sum"] / df["s_count"],
-        s_mean_t_mean=df["s_sum_t_mean"] / df["s_count"],
+    result_dfs = []
+
+    for level_idx in range(max_precision + 1):
+        actual_level = max_precision - level_idx
+        if actual_level < min_precision:
+            continue
+
+        print(f"Compute subtile stats at level {actual_level}")
+
+        tile_at_actual_level = subtile_df.apply(
+            lambda x: parent_tile(x.subtile, level_idx),
+            axis=1,
+            meta=(None, "object"),
+        )
+        df = subtile_df.assign(subtile=tile_at_actual_level)
+
+        # Group data points by unique subtile and sum their values and counts up
+        df = df.groupby(["feature", "timestamp", "subtile"]).agg("sum")
+        df = df.reset_index()
+
+        # Compute mean from sum and count
+        # Note that s_mean_t_wavg is calculated in subtile_aggregation
+        df = df.assign(
+            s_mean_t_sum=df["s_sum_t_sum"] / df["s_count"],
+            s_mean_t_mean=df["s_sum_t_mean"] / df["s_count"],
+        )
+
+        # Extract zoom level from subtile coordinates
+        zoom = df["subtile"].apply(lambda x: x[0], meta=("subtile", "int8"))
+        df = df.assign(zoom=zoom).drop(["subtile", "s_count"], axis=1)
+        # Group by zoom level and compute min and max value
+        df = df.groupby(["feature", "timestamp", "zoom"]).agg(["min", "max"])
+        # Flatten multi index columns to single index e.g (s_sum_t_sum, min) -> min_s_sum_t_sum
+        df.columns = ["_".join(tuple(reversed(cols))) for cols in df.columns.to_flat_index()]
+        df = df.reset_index()
+
+        df = df.compute()
+        result_dfs.append(df)
+
+    result_df = dd.from_pandas(
+        pd.concat(result_dfs, ignore_index=True), npartitions=DEFAULT_PARTITIONS
     )
-    # Extract zoom level from subtile cooridnates
-    zoom = df["subtile"].apply(lambda x: x[0], meta=("subtile", "int8"))
-    df = df.assign(zoom=zoom).drop(["subtile", "s_count"], axis=1)
-    # Group by zoom level and compute min and max value
-    df = df.groupby(["feature", "timestamp", "zoom"]).agg(["min", "max"])
-    # Flatten multi index columns to single index e.g (s_sum_t_sum, min) -> min_s_sum_t_sum
-    df.columns = ["_".join(tuple(reversed(cols))) for cols in df.columns.to_flat_index()]
-    df = df.reset_index()
 
     # Save the stats for each timestamp
-    df = df.groupby(["feature", "timestamp"]).apply(
+    result_df = result_df.groupby(["feature", "timestamp"]).apply(
         lambda x: save_subtile_stats(x, dest, model_id, run_id, time_res, writer),
         meta=(None, "object"),
     )
-    df.compute()
+    result_df.compute()

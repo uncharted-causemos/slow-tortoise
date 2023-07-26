@@ -140,6 +140,7 @@ MAX_TIMESTAMP = np.iinfo(np.int64).max / 1_000_000
 
 DEFAULT_PARTITIONS = 8
 
+
 # Defines output tasks which can be configured to be executed or skipped
 class OutputTasks(str, Enum):
     compute_global_timeseries = "compute_global_timeseries"
@@ -437,7 +438,6 @@ def compute_global_timeseries(
 
 @task(log_stdout=True)
 def compute_regional_stats(df, dest, time_res, model_id, run_id, weight_column, skip=False):
-
     if skip is True:
         raise SKIP(f"'{compute_regional_stats.__name__}' is skipped.")
 
@@ -488,7 +488,6 @@ def compute_regional_timeseries(
     weight_column,
     skip=False,
 ):
-
     if skip is True:
         raise SKIP(f"'{compute_regional_timeseries.__name__}' is skipped.")
 
@@ -536,7 +535,6 @@ def compute_regional_aggregation(
     weight_column,
     skip=False,
 ):
-
     if skip is True:
         raise SKIP(f"'{compute_regional_aggregation.__name__}' is skipped.")
 
@@ -590,7 +588,6 @@ def compute_regional_aggregation(
 
 @task(log_stdout=True, skip_on_upstream_skip=False)
 def subtile_aggregation(df, weight_column, skip=False):
-
     if skip is True:
         raise SKIP(f"'{subtile_aggregation.__name__}' is skipped.")
 
@@ -608,6 +605,7 @@ def subtile_aggregation(df, weight_column, skip=False):
         temporal_df, ["feature", "timestamp", "subtile"], ["sum"], weight_column
     )
 
+    subtile_df = subtile_df.persist()
     return subtile_df
 
 
@@ -622,12 +620,10 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
         save_tile_fn = save_tile_to_csv
         to_tile_file_fn = to_tile_csv
 
-    df = df.persist()
-
-    # Starting with level 14, work our way up until the subgrid offset
-    for level_idx in range(15):
-        actual_level = 14 - level_idx
-        if actual_level < 6:
+    # Starting with level MAX_SUBTILE_PRECISION, work our way up until the subgrid offset
+    for level_idx in range(MAX_SUBTILE_PRECISION + 1):
+        actual_level = MAX_SUBTILE_PRECISION - level_idx
+        if actual_level < MIN_SUBTILE_PRECISION:
             continue
 
         cdf = df.copy()
@@ -736,6 +732,7 @@ def compute_stats(df, dest, time_res, model_id, run_id):
         run_id,
         time_res,
         MIN_SUBTILE_PRECISION,
+        MAX_SUBTILE_PRECISION,
         WRITE_TYPES[DEST_TYPE],
     )
 
@@ -1109,10 +1106,7 @@ with Flow(FLOW_NAME) as flow:
         ],
     )
     month_stats_done = compute_stats(monthly_spatial_data, dest, "month", model_id, run_id)
-    # Since both 'compute_stats' and 'compute_tiling' are memory intensive run 'compute_stats' before 'compute_tiling' sequentially
-    month_done = compute_tiling(
-        monthly_spatial_data, dest, "month", model_id, run_id, upstream_tasks=[month_stats_done]
-    )
+    month_done = compute_tiling(monthly_spatial_data, dest, "month", model_id, run_id)
 
     # ==== Run aggregations based on annual time resolution =====
     annual_data = temporal_aggregation(
@@ -1120,7 +1114,7 @@ with Flow(FLOW_NAME) as flow:
         "year",
         compute_annual,
         weight_column,
-        upstream_tasks=[monthly_regional_aggregation_task, month_done],
+        upstream_tasks=[monthly_regional_aggregation_task, month_stats_done, month_done],
     )
     year_ts_size = compute_global_timeseries(
         annual_data,
@@ -1178,10 +1172,7 @@ with Flow(FLOW_NAME) as flow:
         ],
     )
     year_stats_done = compute_stats(annual_spatial_data, dest, "year", model_id, run_id)
-    # Since both 'compute_stats' and 'compute_tiling' are memory intensive run 'compute_stats' before 'compute_tiling' sequentially
-    year_done = compute_tiling(
-        annual_spatial_data, dest, "year", model_id, run_id, upstream_tasks=[year_stats_done]
-    )
+    year_done = compute_tiling(annual_spatial_data, dest, "year", model_id, run_id)
 
     # ==== Generate a single aggregate value per feature =====
     summary_data = temporal_aggregation(
@@ -1189,7 +1180,7 @@ with Flow(FLOW_NAME) as flow:
         "all",
         compute_summary,
         weight_column,
-        upstream_tasks=[year_done, year_ts_size, annual_regional_aggregation_task],
+        upstream_tasks=[year_stats_done, year_done, year_ts_size, annual_regional_aggregation_task],
     )
     summary_values = compute_output_summary(summary_data, weight_column)
 

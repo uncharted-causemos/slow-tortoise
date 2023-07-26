@@ -1,5 +1,6 @@
 # build on top of dask
-FROM docker-hub.uncharted.software/daskdev/dask:2022.7.1
+FROM docker-hub.uncharted.software/daskdev/dask:2023.7.1-py3.11
+
 # the prefect docker flow registration step always upgrades pip, so if we do the same here we can
 # ensure that flow registration uses this cached layer
 RUN pip install --upgrade pip

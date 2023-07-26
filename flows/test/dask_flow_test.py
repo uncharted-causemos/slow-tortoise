@@ -38,8 +38,8 @@ def simple_add():
 LOCAL_RUN = os.getenv("WM_LOCAL", "False").lower() in ("true", "1", "t")
 DASK_SCHEDULER = os.getenv("WM_DASK_SCHEDULER")
 
-WM_DATA_PIPELINE_IMAGE = os.getenv("WM_DATA_PIPELINE_IMAGE")
-WM_FLOW_STORAGE_S3_BUCKET_NAME = os.getenv("WM_FLOW_STORAGE_S3_BUCKET_NAME")
+WM_DATA_PIPELINE_IMAGE = os.getenv("WM_DATA_PIPELINE_IMAGE", "")
+WM_FLOW_STORAGE_S3_BUCKET_NAME = os.getenv("WM_FLOW_STORAGE_S3_BUCKET_NAME", "")
 WM_RUN_CONFIG_TYPE = os.getenv("WM_RUN_CONFIG_TYPE")  # docker, local, kubernetes
 
 # DO NOT DECLARE FLOW IN MAIN.  During registration, prefect calls `exec` on this
@@ -72,4 +72,5 @@ with Flow("dask_flow") as flow:
 # fails.
 if __name__ == "__main__" and LOCAL_RUN:
     state = flow.run()
-    print(state.result[simple_add_result].result)
+    if state:
+        print(state.result[simple_add_result].result)
