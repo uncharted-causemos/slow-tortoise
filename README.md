@@ -21,7 +21,7 @@ From a suitable virtual environment (venv, conda, etc.), dependencies for local 
 
 ## Setup Code Formatting
 
-This repo uses [black](https://black.readthedocs.io/en/stable/index.html). You can install it with `pip install black==21.9b0`. Once installed, you can configure it in your IDE with the instructions [here](https://black.readthedocs.io/en/stable/integrations/editors.html).  
+This repo uses [black](https://black.readthedocs.io/en/stable/index.html). You can install it with `pip install black==23.7.0`. Once installed, you can configure it in your IDE with the instructions [here](https://black.readthedocs.io/en/stable/integrations/editors.html).  
 In VS Code, you simply need to add the folowing lines into `settings.json`
 ```
     "python.formatting.provider": "black",
