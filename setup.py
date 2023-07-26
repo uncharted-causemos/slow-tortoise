@@ -15,15 +15,17 @@ setup(
     license="Apache-2.0",
     install_requires=[
         "prefect==1.4.1",
-        "dask==2022.7.1", # This dask version should match with the dask base image tag in infra/docker/Dockerfile. e.g  docker-hub.uncharted.software/daskdev/dask:2022.7.1
+        "dask==2023.7.1", # This dask version should match with the dask base image tag in infra/docker/Dockerfile. e.g  docker-hub.uncharted.software/daskdev/dask:2023.7.1
         "bokeh==2.4.3",
         "lz4==4.0.2",
         "blosc==1.10.6",
-        "pandas==1.3.5", # There's a groupby.apply breaking change in >= 1.4.0 version (https://pandas.pydata.org/pandas-docs/stable/whatsnew/v1.4.0.html#groupby-apply-consistent-transform-detection)
+        # There's a groupby.apply breaking change in >= 1.4.0 version (https://pandas.pydata.org/pandas-docs/stable/whatsnew/v1.4.0.html#groupby-apply-consistent-transform-detection) 
+        # TODO: Upgrade pandas version and fix breaking changes in the code
+        "pandas==1.3.5",
         "s3fs==2022.5.0",
         "boto3==1.21.21",
         "protobuf==4.21.4",
-        "pyarrow==8.0.0",
+        "pyarrow==12.0.1",
         "prometheus_client==0.14.1",
     ],
 )

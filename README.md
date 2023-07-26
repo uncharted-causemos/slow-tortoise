@@ -2,7 +2,7 @@
 
 ## Setup
 ### Python Version
-The pipeline is tested and deployed with **Python 3.8.5**. While small differences to the patch version should work there are some dependencies with known issues on versions other than 3.8.*.
+The pipeline is tested and deployed with **Python 3.11**. While small differences to the patch version should work there are some dependencies with known issues on versions other than 3.11.*. 
 
 ### Environment
 From a suitable virtual environment (venv, conda, etc.), dependencies for local development can be installed by running

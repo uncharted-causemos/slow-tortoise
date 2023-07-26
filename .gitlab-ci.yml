@@ -14,7 +14,7 @@ stages:
   only:
     - main
     - merge_requests
-  image: docker-hub.uncharted.software/python:3.8
+  image: docker-hub.uncharted.software/python:3.11
   before_script:
     - echo "machine gitlab.uncharted.software login ${GITLAB_LOGIN} password ${GITLAB_TOKEN}" > ~/.netrc
     # install formatters

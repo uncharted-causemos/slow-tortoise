@@ -1,5 +1,5 @@
 #!/bin/bash
-export WM_DASK_SCHEDULER="" # spawn local cluster eg. tcp://localhost:8786
+export WM_DASK_SCHEDULER="" # spawn local cluster eg. tcp://localhost:8786. Local dask cluster can be set up by running `dask scheduler` in a terminal and `dask worker tcp://127.0.0.1:8786` in a second terminal
 export WM_LOCAL=true # run flow locally
 export WM_S3_DEST_URL=http://10.65.18.73:9000 # dev s3 cluster
 export WM_S3_DEST_KEY="foobar"
