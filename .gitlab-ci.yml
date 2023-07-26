@@ -19,7 +19,7 @@ stages:
     - echo "machine gitlab.uncharted.software login ${GITLAB_LOGIN} password ${GITLAB_TOKEN}" > ~/.netrc
     # install formatters
     - pip install black==23.7.0
-    - pip install mypy==0.971
+    - pip install mypy==1.4.1
     - pip install pytest
     # install dependencies
     - pip install -e .

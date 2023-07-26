@@ -34,7 +34,7 @@ You can apply formatting rules to the current document with `Format Document` (O
 
 ## Setup Linting
 
-The Gitlab CI pipeline uses `mypy`. You can install it with `pip install mypy==0.910`.  
+The Gitlab CI pipeline uses `mypy`. You can install it with `pip install mypy==1.4.1`.
 After installing, you will need to download type definitions using `mypy --install-types`.  
 In VS Code, you can configure it with the `Python: Select Linter` action.  
 
