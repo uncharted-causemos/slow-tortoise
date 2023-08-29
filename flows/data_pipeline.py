@@ -5,6 +5,7 @@ from enum import Enum
 import dask.dataframe as dd
 import pandas as pd
 import numpy as np
+import pyarrow as pa
 import os
 import json
 import re
@@ -19,10 +20,10 @@ from prefect.run_configs import DockerRun, KubernetesRun, LocalRun
 from flows.common import (
     run_temporal_aggregation,
     run_spatial_aggregation,
+    fromStrCoord,
+    toStrCoord,
     deg2num,
     parent_tile,
-    ancestor_tiles,
-    filter_by_min_zoom,
     tile_coord,
     save_tile,
     save_tile_to_csv,
@@ -468,7 +469,7 @@ def compute_regional_stats(df, dest, time_res, model_id, run_id, weight_column, 
                 REGION_LEVELS[region_level],
                 WRITE_TYPES[DEST_TYPE],
             ),
-            meta=(None, "object"),
+            meta=(None, "string[pyarrow]"),
         )
         regional_df.compute()
 
@@ -597,8 +598,9 @@ def subtile_aggregation(df, weight_column, skip=False):
 
     # Spatial aggregation to the hightest supported precision(subtile z) level
     stile = df.apply(
-        lambda x: deg2num(x.lat, x.lng, MAX_SUBTILE_PRECISION), axis=1, meta=(None, "object")
+        lambda x: toStrCoord(deg2num(x.lat, x.lng, MAX_SUBTILE_PRECISION)), axis=1, meta=(None, 'string')
     )
+
     temporal_df = df.assign(subtile=stile)
     (subtile_df, _) = run_spatial_aggregation(
         temporal_df, ["feature", "timestamp", "subtile"], ["sum"], weight_column
@@ -633,33 +635,21 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
         cdf["subtile"] = df.apply(
             lambda x: parent_tile(x.subtile, level_idx),
             axis=1,
-            meta=(None, "object"),
+            meta=(None, "string"),
         )
-        tile_df = cdf.apply(
-            lambda x: tile_coord(x["subtile"], LEVEL_DIFF), axis=1, meta=(None, "object")
-        )
-        cdf = cdf.assign(tile=tile_df)
 
-        temp_df = (
-            cdf.groupby(["feature", "timestamp", "tile"])
-            .agg(list, split_out=DEFAULT_PARTITIONS)
-            .reset_index()
+        tile_series = cdf.apply(
+            lambda x: tile_coord(x["subtile"], LEVEL_DIFF), axis=1, meta=(None, "string")
+        )
+        cdf = cdf.assign(tile=tile_series)
+
+        temp_df = cdf.groupby(["feature", "timestamp", "tile"]).apply(
+            lambda x: to_tile_file_fn(x),
+            meta=(None, "string"),
         )
         npart = int(min(math.ceil(len(temp_df.index) / 2), 500))
-        temp_df = temp_df.repartition(npartitions=npart).apply(
-            lambda x: save_tile_fn(
-                to_tile_file_fn(x),
-                dest,
-                model_id,
-                run_id,
-                x.feature,
-                time_res,
-                x.timestamp,
-                WRITE_TYPES[DEST_TYPE],
-            ),
-            axis=1,
-            meta=(None, "object"),
-        )
+        temp_df = temp_df.repartition(npartitions=npart).apply(lambda x: save_tile_fn(x, dest, model_id, run_id, time_res, WRITE_TYPES[DEST_TYPE]), meta=(None, "string"))
+
         temp_df.compute()
         end = time.time()
         print(
@@ -668,59 +658,6 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
         )
         del temp_df
         del cdf
-
-
-# Deprecated
-@task(log_stdout=True)
-def compute_tiling_current(df, dest, time_res, model_id, run_id):
-    print(f"\ncompute tiling dataframe length={len(df.index)}, npartitions={df.npartitions}\n")
-    stile = df.apply(
-        lambda x: filter_by_min_zoom(ancestor_tiles(x.subtile), MIN_SUBTILE_PRECISION),
-        axis=1,
-        meta=(None, "object"),
-    )
-    tiling_df = df.assign(subtile=stile)
-    tiling_df = tiling_df.explode("subtile").repartition(npartitions=DEFAULT_PARTITIONS)
-
-    print(
-        f"\nexploded tiling dataframe length={len(tiling_df.index)},"
-        f" npartitions={tiling_df.npartitions}\n"
-    )
-
-    # Assign main tile coord for each subtile
-    tiling_df["tile"] = tiling_df.apply(
-        lambda x: tile_coord(x.subtile, LEVEL_DIFF), axis=1, meta=(None, "object")
-    )
-
-    start = time.time()
-
-    # convert each row to protobuf and save
-    tiling_df = (
-        tiling_df.groupby(["feature", "timestamp", "tile"])
-        .agg(list)
-        .reset_index()
-        .repartition(npartitions=DEFAULT_PARTITIONS * 20)
-        .apply(
-            lambda x: save_tile(  # To test use: save_tile_to_csv
-                to_proto(x),  # To test use: to_tile_csv
-                dest,
-                model_id,
-                run_id,
-                x.feature,
-                time_res,
-                x.timestamp,
-                WRITE_TYPES[DEST_TYPE],
-            ),
-            axis=1,
-            meta=(None, "object"),
-        )
-    )
-    print(
-        f"\ngrouped tiling dataframe length={len(tiling_df.index)},"
-        f" npartitions={tiling_df.npartitions}\n"
-    )
-    tiling_df.compute()
-
 
 @task(log_stdout=True)
 def compute_stats(df, dest, time_res, model_id, run_id):
@@ -1104,121 +1041,121 @@ with Flow(FLOW_NAME) as flow:
             monthly_regional_aggregation_task,
         ],
     )
-    # month_stats_done = compute_stats(monthly_spatial_data, dest, "month", model_id, run_id)
-    # month_done = compute_tiling(monthly_spatial_data, dest, "month", model_id, run_id)
+    month_stats_done = compute_stats(monthly_spatial_data, dest, "month", model_id, run_id)
+    month_done = compute_tiling(monthly_spatial_data, dest, "month", model_id, run_id)
 
-    # # ==== Run aggregations based on annual time resolution =====
-    # annual_data = temporal_aggregation(
-    #     df,
-    #     "year",
-    #     compute_annual,
-    #     weight_column,
-    #     upstream_tasks=[monthly_regional_aggregation_task, month_stats_done, month_done],
-    # )
-    # year_ts_size = compute_global_timeseries(
-    #     annual_data,
-    #     dest,
-    #     "year",
-    #     model_id,
-    #     run_id,
-    #     qualifier_map,
-    #     qualifier_columns,
-    #     weight_column,
-    #     skip=skip_task[OutputTasks.compute_global_timeseries],
-    # )
-    # annual_regional_stats_task = compute_regional_stats(
-    #     annual_data,
-    #     dest,
-    #     "year",
-    #     model_id,
-    #     run_id,
-    #     weight_column,
-    #     skip=skip_task[OutputTasks.compute_regional_stats],
-    # )
-    # annual_regional_timeseries_task = compute_regional_timeseries(
-    #     annual_data,
-    #     dest,
-    #     "year",
-    #     model_id,
-    #     run_id,
-    #     qualifier_map,
-    #     qualifier_columns,
-    #     qualifier_counts,
-    #     qualifier_thresholds,
-    #     weight_column,
-    #     skip=skip_task[OutputTasks.compute_regional_timeseries],
-    # )
-    # annual_regional_aggregation_task = compute_regional_aggregation(
-    #     annual_data,
-    #     dest,
-    #     "year",
-    #     model_id,
-    #     run_id,
-    #     qualifier_map,
-    #     qualifier_columns,
-    #     weight_column,
-    #     skip=skip_task[OutputTasks.compute_regional_aggregation],
-    # )
+    # ==== Run aggregations based on annual time resolution =====
+    annual_data = temporal_aggregation(
+        df,
+        "year",
+        compute_annual,
+        weight_column,
+        upstream_tasks=[monthly_regional_aggregation_task, month_stats_done, month_done],
+    )
+    year_ts_size = compute_global_timeseries(
+        annual_data,
+        dest,
+        "year",
+        model_id,
+        run_id,
+        qualifier_map,
+        qualifier_columns,
+        weight_column,
+        skip=skip_task[OutputTasks.compute_global_timeseries],
+    )
+    annual_regional_stats_task = compute_regional_stats(
+        annual_data,
+        dest,
+        "year",
+        model_id,
+        run_id,
+        weight_column,
+        skip=skip_task[OutputTasks.compute_regional_stats],
+    )
+    annual_regional_timeseries_task = compute_regional_timeseries(
+        annual_data,
+        dest,
+        "year",
+        model_id,
+        run_id,
+        qualifier_map,
+        qualifier_columns,
+        qualifier_counts,
+        qualifier_thresholds,
+        weight_column,
+        skip=skip_task[OutputTasks.compute_regional_timeseries],
+    )
+    annual_regional_aggregation_task = compute_regional_aggregation(
+        annual_data,
+        dest,
+        "year",
+        model_id,
+        run_id,
+        qualifier_map,
+        qualifier_columns,
+        weight_column,
+        skip=skip_task[OutputTasks.compute_regional_aggregation],
+    )
 
-    # annual_spatial_data = subtile_aggregation(
-    #     annual_data,
-    #     weight_column,
-    #     skip=skip_task[OutputTasks.compute_tiles],
-    #     upstream_tasks=[
-    #         year_ts_size,
-    #         annual_regional_timeseries_task,
-    #         annual_regional_aggregation_task,
-    #     ],
-    # )
-    # year_stats_done = compute_stats(annual_spatial_data, dest, "year", model_id, run_id)
-    # year_done = compute_tiling(annual_spatial_data, dest, "year", model_id, run_id)
+    annual_spatial_data = subtile_aggregation(
+        annual_data,
+        weight_column,
+        skip=skip_task[OutputTasks.compute_tiles],
+        upstream_tasks=[
+            year_ts_size,
+            annual_regional_timeseries_task,
+            annual_regional_aggregation_task,
+        ],
+    )
+    year_stats_done = compute_stats(annual_spatial_data, dest, "year", model_id, run_id)
+    year_done = compute_tiling(annual_spatial_data, dest, "year", model_id, run_id)
 
-    # # ==== Generate a single aggregate value per feature =====
-    # summary_data = temporal_aggregation(
-    #     df,
-    #     "all",
-    #     compute_summary,
-    #     weight_column,
-    #     upstream_tasks=[year_stats_done, year_done, year_ts_size, annual_regional_aggregation_task],
-    # )
-    # summary_values = compute_output_summary(summary_data, weight_column)
+    # ==== Generate a single aggregate value per feature =====
+    summary_data = temporal_aggregation(
+        df,
+        "all",
+        compute_summary,
+        weight_column,
+        upstream_tasks=[year_stats_done, year_done, year_ts_size, annual_regional_aggregation_task],
+    )
+    summary_values = compute_output_summary(summary_data, weight_column)
 
-    # # ==== Record the results in Minio =====
-    # # This runs only when the pipeline is ran with all tasks, ie. when selected_output_tasks is None or has all tasks
-    # # (When the pipeline is triggered by data registration from Dojo, selected_output_tasks is None)
-    # record_results(
-    #     dest,
-    #     model_id,
-    #     run_id,
-    #     summary_values,
-    #     num_rows,
-    #     rows_per_feature,
-    #     region_columns,
-    #     feature_list,
-    #     raw_count_threshold,
-    #     compute_monthly,
-    #     compute_annual,
-    #     skip_task,
-    #     month_ts_size,
-    #     year_ts_size,
-    #     num_missing_ts,
-    #     num_invalid_ts,
-    #     num_missing_val,
-    #     weight_column,
-    # )
+    # ==== Record the results in Minio =====
+    # This runs only when the pipeline is ran with all tasks, ie. when selected_output_tasks is None or has all tasks
+    # (When the pipeline is triggered by data registration from Dojo, selected_output_tasks is None)
+    record_results(
+        dest,
+        model_id,
+        run_id,
+        summary_values,
+        num_rows,
+        rows_per_feature,
+        region_columns,
+        feature_list,
+        raw_count_threshold,
+        compute_monthly,
+        compute_annual,
+        skip_task,
+        month_ts_size,
+        year_ts_size,
+        num_missing_ts,
+        num_invalid_ts,
+        num_missing_val,
+        weight_column,
+    )
 
-    # # === Print out useful information about the flow metadata =====
-    # print_flow_metadata(
-    #     model_id,
-    #     run_id,
-    #     data_paths,
-    #     dest,
-    #     compute_monthly,
-    #     compute_annual,
-    #     compute_summary,
-    #     skip_task,
-    #     upstream_tasks=[summary_values],
-    # )
+    # === Print out useful information about the flow metadata =====
+    print_flow_metadata(
+        model_id,
+        run_id,
+        data_paths,
+        dest,
+        compute_monthly,
+        compute_annual,
+        compute_summary,
+        skip_task,
+        upstream_tasks=[summary_values],
+    )
 
     # TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful.
     # Then same data can be used for producing tiles and also used for doing regional aggregation and other computation in other tasks.
@@ -1409,43 +1346,43 @@ if __name__ == "__main__" and LOCAL_RUN:
         # )
 
         # For testing tile data
-        # flow.run(
-        #     parameters=dict(
-        #         model_id="geo-test-data",
-        #         run_id="test-run-1",
-        #         data_paths=[f"file://{Path(os.getcwd()).parent}/tests/data/geo-test-data.parquet"],
-        #         selected_output_tasks=[
-        #             "compute_global_timeseries",
-        #             "compute_regional_stats",
-        #             "compute_regional_timeseries",
-        #             "compute_regional_aggregation",
-        #             "compute_tiles",
-        #         ],
-        #     )
-        # )
         flow.run(
-            parameters=(
-                {
-                    "data_paths": ["https://jataware-world-modelers.s3.amazonaws.com/transition/datasets/d991a644-b657-47f3-8424-37f36b981e79/d991a644-b657-47f3-8424-37f36b981e79.parquet.gzip"],
-                    "indicator_bucket": "test-indicators",
-                    "is_indicator": True,
-                    "model_bucket": "analyst-models",
-
-                    "model_id": "d991a644-b657-47f3-8424-37f36b981e79",
-                    "raw_count_threshold": 10000,
-                    "run_id": "indicator",
-
-                    "fill_timestamp": 0,
-                    "qualifier_map": {
-                        "value": ["date"]
-                    },
-                    "qualifier_thresholds": {
-                        "max_count": 10000,
-                        "regional_timeseries_count": 100,
-                        "regional_timeseries_max_level": 1
-                    },
-                    "weight_column": "",
-                    "selected_output_tasks": None
-                } 
+            parameters=dict(
+                model_id="geo-test-data",
+                run_id="test-run-1",
+                data_paths=[f"file://{Path(os.getcwd()).parent}/tests/data/geo-test-data.parquet"],
+                selected_output_tasks=[
+                    "compute_global_timeseries",
+                    "compute_regional_stats",
+                    "compute_regional_timeseries",
+                    "compute_regional_aggregation",
+                    "compute_tiles",
+                ],
             )
         )
+        # flow.run(
+        #     parameters=(
+        #         {
+        #             "data_paths": ["https://jataware-world-modelers.s3.amazonaws.com/transition/datasets/d991a644-b657-47f3-8424-37f36b981e79/d991a644-b657-47f3-8424-37f36b981e79.parquet.gzip"],
+        #             "indicator_bucket": "test-indicators",
+        #             "is_indicator": True,
+        #             "model_bucket": "analyst-models",
+
+        #             "model_id": "d991a644-b657-47f3-8424-37f36b981e79",
+        #             "raw_count_threshold": 10000,
+        #             "run_id": "indicator",
+
+        #             "fill_timestamp": 0,
+        #             "qualifier_map": {
+        #                 "value": ["date"]
+        #             },
+        #             "qualifier_thresholds": {
+        #                 "max_count": 10000,
+        #                 "regional_timeseries_count": 100,
+        #                 "regional_timeseries_max_level": 1
+        #             },
+        #             "weight_column": "",
+        #             "selected_output_tasks": None
+        #         } 
+        #     )
+        # )
