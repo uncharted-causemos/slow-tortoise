@@ -18,16 +18,8 @@ setup(
         "dask[complete]==2023.8.1",
         "pandas==2.0.3",
         "pyarrow==13.0.0",
-        # https://docs.dask.org/en/stable/changelog.html#v2023-7-1 pandas >=2 and pyarrow>=12
-        # "dask==2023.8.1", # This dask version should match with the dask base image tag in infra/docker/Dockerfile. e.g  docker-hub.uncharted.software/daskdev/dask:2023.7.1
-        # "bokeh==2.4.3",
-        # "lz4==4.0.2",
-        # "blosc==1.10.6",
-        # There's a groupby.apply breaking change in >= 1.4.0 version (https://pandas.pydata.org/pandas-docs/stable/whatsnew/v1.4.0.html#groupby-apply-consistent-transform-detection) 
-        # TODO: Upgrade pandas version and fix breaking changes in the code
         "boto3==1.21.21",
         "protobuf==4.21.4",
-        # "prometheus_client==0.14.1",
     ],
     extras_require={
         "dev": [

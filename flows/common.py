@@ -302,18 +302,20 @@ def save_tile(tile, dest, model_id, run_id, time_res, writer):
     writer(base64.b64decode(content), path, dest)
     return tile
 
-# only used for testing
-def save_tile_to_csv(tile, dest, model_id, run_id, time_res, writer):
+# Saves the tile as string representation of the proto buff. This is used for testing and debugging tile files. 
+def save_tile_to_str(tile, dest, model_id, run_id, time_res, writer):
     tile = json.loads(tile)
     if tile["content"] is None:
         return None
-    z, x, y = from_str_coord(tile["coord"])
-    content = tile['content']
+    tile_pb = tiles_pb2.Tile()
+    tile_pb.ParseFromString(base64.b64decode(tile['content']))
 
-    path = f"{model_id}/{run_id}/{time_res}/{tile['feature']}/tiles/{tile['timestamp']}-{z}-{x}-{y}-{tile['totalBins']}.csv"
-    writer(content, path, dest)
+    z = tile_pb.coord.z
+    x = tile_pb.coord.x
+    y = tile_pb.coord.y
 
-    return tile
+    path = f"{model_id}/{run_id}/{time_res}/{tile['feature']}/tiles/{tile['timestamp']}-{z}-{x}-{y}.txt"
+    writer(str(tile_pb), path, dest)
 
 # write timeseries to json in S3
 def timeseries_to_json(df, dest, model_id, run_id, feature, time_res, column, writer):
@@ -451,45 +453,6 @@ def to_proto(df):
         "timestamp": f"{df['timestamp'].iloc[0]}", 
         "coord": to_tile_coord(z, x, y),
         "content":  b64encoded_content,
-    })
-
-# transform given row to tile csv, only used for testing
-def to_tile_csv(df):
-    tile = df['tile'].iloc[0]
-    z, x, y = from_str_coord(tile)
-    if z < 0 or x < 0 or y < 0:
-        return None
-
-    totalBins = int(
-        math.pow(4, from_str_coord(df["subtile"].iloc[0])[0] - z)
-    )  # Total number of bins (subtile) for the tile
-
-    subtiles = df['subtile'].tolist()
-    s_sum_t_sum = df['s_sum_t_sum'].tolist()
-    s_sum_t_mean = df['s_sum_t_mean'].tolist()
-    s_count = df['s_count'].tolist()
-
-    stats = {}
-    for i in range(len(subtiles)):
-        bin_index = project(subtiles[i], tile)
-        if bin_index not in stats:
-            stats[bin_index] = {"s_sum_t_sum": 0, "s_sum_t_mean": 0, "weight": 0}
-        stats[bin_index]["s_sum_t_sum"] += s_sum_t_sum[i]
-        stats[bin_index]["s_sum_t_mean"] += s_sum_t_mean[i]
-        stats[bin_index]["weight"] += s_count[i]
-
-    tableRows = [
-        [key, value["s_sum_t_sum"], value["s_sum_t_mean"], value["weight"]]
-        for key, value in stats.items()
-    ]
-    table = pd.DataFrame(tableRows, columns=["bin_index", "s_sum_t_sum", "s_sum_t_mean", "weight"])
-
-    return json.dumps({
-        "feature": f"{df['feature'].iloc[0]}",
-        "timestamp": f"{df['timestamp'].iloc[0]}", 
-        "coord": to_tile_coord(z, x, y),
-        "content": table.to_csv(index=False),
-        "totalBins": totalBins,
     })
 
 # convert given datetime object to monthly epoch timestamp

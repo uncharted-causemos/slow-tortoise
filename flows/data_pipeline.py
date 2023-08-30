@@ -25,8 +25,7 @@ from flows.common import (
     parent_tile,
     tile_coord,
     save_tile,
-    save_tile_to_csv,
-    to_tile_csv,
+    save_tile_to_str,
     save_timeseries_as_csv,
     save_regional_stats,
     save_regional_aggregation,
@@ -613,12 +612,7 @@ def subtile_aggregation(df, weight_column, skip=False):
 def compute_tiling(df, dest, time_res, model_id, run_id):
     print(f"\ncompute tiling dataframe length={len(df.index)}, npartitions={df.npartitions}\n")
 
-    save_tile_fn = save_tile
-    to_tile_file_fn = to_proto
-
-    if DEBUG_TILE:
-        save_tile_fn = save_tile_to_csv
-        to_tile_file_fn = to_tile_csv
+    save_tile_fn = save_tile_to_str if DEBUG_TILE else save_tile
 
     # Starting with level MAX_SUBTILE_PRECISION, work our way up until the subgrid offset
     for level_idx in range(MAX_SUBTILE_PRECISION + 1):
@@ -643,7 +637,7 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
         cdf = cdf.assign(tile=tile_series)
 
         temp_df = cdf.groupby(["feature", "timestamp", "tile"]).apply(
-            lambda x: to_tile_file_fn(x),
+            lambda x: to_proto(x),
             meta=(None, "string"),
         )
         npart = int(min(math.ceil(len(temp_df.index) / 2), 500))
@@ -1359,29 +1353,3 @@ if __name__ == "__main__" and LOCAL_RUN:
                 ],
             )
         )
-        # flow.run(
-        #     parameters=(
-        #         {
-        #             "data_paths": ["https://jataware-world-modelers.s3.amazonaws.com/transition/datasets/d991a644-b657-47f3-8424-37f36b981e79/d991a644-b657-47f3-8424-37f36b981e79.parquet.gzip"],
-        #             "indicator_bucket": "test-indicators",
-        #             "is_indicator": True,
-        #             "model_bucket": "analyst-models",
-
-        #             "model_id": "d991a644-b657-47f3-8424-37f36b981e79",
-        #             "raw_count_threshold": 10000,
-        #             "run_id": "indicator",
-
-        #             "fill_timestamp": 0,
-        #             "qualifier_map": {
-        #                 "value": ["date"]
-        #             },
-        #             "qualifier_thresholds": {
-        #                 "max_count": 10000,
-        #                 "regional_timeseries_count": 100,
-        #                 "regional_timeseries_max_level": 1
-        #             },
-        #             "weight_column": "",
-        #             "selected_output_tasks": None
-        #         } 
-        #     )
-        # )
