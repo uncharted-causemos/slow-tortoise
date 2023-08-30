@@ -161,13 +161,13 @@ def run_spatial_aggregation(df, groupby, spatial_aggs, weight_column):
 
     return (df, agg_columns)
 
-def fromStrCoord(coord: str) -> tuple[int, int, int]:
+def from_str_coord(coord: str) -> tuple[int, int, int]:
     return tuple(int(el) for el in coord.split("/"))
 
-def toStrCoord(coord: tuple[int, int, int]) -> str:
+def to_str_coord(coord: tuple[int, int, int]) -> str:
     return f'{coord[0]}/{coord[1]}/{coord[2]}' # z/x/y
 
-def toTileCoord(z: int, x: int, y: int) -> str:
+def to_tile_coord(z: int, x: int, y: int) -> str:
     return f'{z}/{x}/{y}'
 
 # More details on tile calculations https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames
@@ -181,14 +181,14 @@ def deg2num(lat_deg: float, lon_deg: float, zoom: int):
     return (zoom, xtile, ytile)
 
 def parent_tile(coord: str, l=1) -> str:
-    z, x, y = fromStrCoord(coord)
-    return toTileCoord(z - l, math.floor(x / (2**l)), math.floor(y / (2**l)))
+    z, x, y = from_str_coord(coord)
+    return to_tile_coord(z - l, math.floor(x / (2**l)), math.floor(y / (2**l)))
 
 # Return the tile that is leveldiff up of given tile. Eg. return (1, 0, 0) for (6, 0, 0) with leveldiff = 5
 # The main tile will contain up to 4^leveldiff subtiles with same level
 def tile_coord(coord: str, leveldiff=6):
-    z, x, y = fromStrCoord(coord)
-    return toTileCoord(
+    z, x, y = from_str_coord(coord)
+    return to_tile_coord(
         z - leveldiff,
         math.floor(x / math.pow(2, leveldiff)),
         math.floor(y / math.pow(2, leveldiff)),
@@ -197,8 +197,8 @@ def tile_coord(coord: str, leveldiff=6):
 # project subtile coord into xy coord of the main tile grid (n*n grid where n*n = 4^zdiff)
 # https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames
 def project(subtilecoord, tilecoord):
-    z, x, y = fromStrCoord(tilecoord)
-    sz, sx, sy = fromStrCoord(subtilecoord)
+    z, x, y = from_str_coord(tilecoord)
+    sz, sx, sy = from_str_coord(subtilecoord)
     zdiff = sz - z  # zoom level (prececsion) difference
 
     # Calculate the x and y of the coordinate of the subtile located at the most top left corner of the main tile
@@ -295,7 +295,7 @@ def save_tile(tile, dest, model_id, run_id, time_res, writer):
     tile = json.loads(tile)
     if tile["content"] is None:
         return None
-    z, x, y = fromStrCoord(tile["coord"])
+    z, x, y = from_str_coord(tile["coord"])
     content = tile['content']
 
     path = f"{model_id}/{run_id}/{time_res}/{tile['feature']}/tiles/{tile['timestamp']}-{z}-{x}-{y}.tile"
@@ -307,7 +307,7 @@ def save_tile_to_csv(tile, dest, model_id, run_id, time_res, writer):
     tile = json.loads(tile)
     if tile["content"] is None:
         return None
-    z, x, y = fromStrCoord(tile["coord"])
+    z, x, y = from_str_coord(tile["coord"])
     content = tile['content']
 
     path = f"{model_id}/{run_id}/{time_res}/{tile['feature']}/tiles/{tile['timestamp']}-{z}-{x}-{y}-{tile['totalBins']}.csv"
@@ -417,7 +417,7 @@ def results_to_json(contents, dest, model_id, run_id, writer):
 
 def to_proto(df):
     tile_coord = df["tile"].iloc[0]
-    z, x, y = fromStrCoord(tile_coord)
+    z, x, y = from_str_coord(tile_coord)
     if z < 0 or x < 0 or y < 0:
         return None
 
@@ -428,7 +428,7 @@ def to_proto(df):
     tile.coord.y = y
 
     tile.bins.totalBins = int(
-        math.pow(4, fromStrCoord(df["subtile"].iloc[0])[0] - z)
+        math.pow(4, from_str_coord(df["subtile"].iloc[0])[0] - z)
     )  # Total number of bins (subtile) for the tile
 
     subtiles = df['subtile'].tolist()
@@ -449,19 +449,19 @@ def to_proto(df):
     return json.dumps({
         "feature": f"{df['feature'].iloc[0]}",
         "timestamp": f"{df['timestamp'].iloc[0]}", 
-        "coord": toTileCoord(z, x, y),
+        "coord": to_tile_coord(z, x, y),
         "content":  b64encoded_content,
     })
 
 # transform given row to tile csv, only used for testing
 def to_tile_csv(df):
     tile = df['tile'].iloc[0]
-    z, x, y = fromStrCoord(tile)
+    z, x, y = from_str_coord(tile)
     if z < 0 or x < 0 or y < 0:
         return None
 
     totalBins = int(
-        math.pow(4, fromStrCoord(df["subtile"].iloc[0])[0] - z)
+        math.pow(4, from_str_coord(df["subtile"].iloc[0])[0] - z)
     )  # Total number of bins (subtile) for the tile
 
     subtiles = df['subtile'].tolist()
@@ -487,7 +487,7 @@ def to_tile_csv(df):
     return json.dumps({
         "feature": f"{df['feature'].iloc[0]}",
         "timestamp": f"{df['timestamp'].iloc[0]}", 
-        "coord": toTileCoord(z, x, y),
+        "coord": to_tile_coord(z, x, y),
         "content": table.to_csv(index=False),
         "totalBins": totalBins,
     })

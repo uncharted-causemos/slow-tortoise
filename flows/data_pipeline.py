@@ -20,8 +20,7 @@ from prefect.run_configs import DockerRun, KubernetesRun, LocalRun
 from flows.common import (
     run_temporal_aggregation,
     run_spatial_aggregation,
-    fromStrCoord,
-    toStrCoord,
+    to_str_coord,
     deg2num,
     parent_tile,
     tile_coord,
@@ -598,7 +597,7 @@ def subtile_aggregation(df, weight_column, skip=False):
 
     # Spatial aggregation to the hightest supported precision(subtile z) level
     stile = df.apply(
-        lambda x: toStrCoord(deg2num(x.lat, x.lng, MAX_SUBTILE_PRECISION)), axis=1, meta=(None, 'string')
+        lambda x: to_str_coord(deg2num(x.lat, x.lng, MAX_SUBTILE_PRECISION)), axis=1, meta=(None, 'string')
     )
 
     temporal_df = df.assign(subtile=stile)
