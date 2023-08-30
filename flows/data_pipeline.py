@@ -160,6 +160,8 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
     if "s3://" in data_paths[0]:
         df = dd.read_parquet(
             data_paths,
+            engine="pyarrow",
+            dtype_backend="pyarrow",
             storage_options={
                 "anon": False,
                 "use_ssl": False,
@@ -183,7 +185,7 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
 
         # Note: dask read_parquet doesn't work for gzip files. So here is the work around using pandas read_parquet
         # Read each parquet file in separately, and ensure that all columns match before joining together
-        delayed_dfs = [delayed(pd.read_parquet)(path) for path in numeric_files]
+        delayed_dfs = [delayed(pd.read_parquet)(path, engine="pyarrow", dtype_backend="pyarrow") for path in numeric_files]
         dfs: List[pd.DataFrame] = [dd.from_delayed(d) for d in delayed_dfs]
 
         if len(dfs) == 0:
@@ -201,10 +203,10 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
                 cols_to_add = list(all_extra_cols - extra_cols[i])
                 for col in cols_to_add:
                     dfs[i][col] = ""
-                    dfs[i] = dfs[i].astype({col: "str"})
+                    dfs[i] = dfs[i].astype({col: "string[pyarrow]"})
 
                 # Force the new columns as well as 'feature' to type "str"
-                type_dict = {col: "str" for col in cols_to_add + ["feature"]}
+                type_dict = {col: "string[pyarrow]" for col in cols_to_add + ["feature"]}
                 dfs[i] = dfs[i].astype(type_dict)
 
                 # Create a mapping of REGION_LEVELS to their actual types
@@ -220,7 +222,7 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
 
             for i in range(len(dfs)):
                 dfs[i][cols_to_retype] = (
-                    dfs[i][cols_to_retype].fillna(value="None", axis=1).astype("str")
+                    dfs[i][cols_to_retype].fillna(value="None", axis=1).astype("string[pyarrow]")
                 )
 
             df = dd.concat(dfs, ignore_unknown_divisions=True).repartition(
@@ -242,7 +244,7 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
     else:
         df["lat"] = dd.to_numeric(df["lat"], errors="coerce")
         df["lng"] = dd.to_numeric(df["lng"], errors="coerce")
-        df = df.astype({"lat": "float64", "lng": "float64"})
+        df = df.astype({"lat": "float64[pyarrow]", "lng": "float64[pyarrow]"})
 
     num_rows = len(df.index)
     print(f"\nRead {num_rows} rows of data\n")
@@ -250,7 +252,7 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
         raise FAIL("DataFrame has no rows")
 
     # Ensure types
-    df = df.astype({"value": "float64"})
+    df = df.astype({"value": "float64[pyarrow]"})
     return (df, num_rows)
 
 
@@ -345,7 +347,7 @@ def validate_and_fix(df, weight_column, fill_timestamp) -> Tuple[dd.DataFrame, s
     # In the remaining columns, fill all null values with "None"
     # TODO: When adding support for different qualifier roles, we will need to fill numeric roles with something else
     remaining_columns = list(set(df.columns.to_list()) - exclude_columns - null_cols)
-    df[remaining_columns] = df[remaining_columns].fillna(value="None", axis=1).astype("str")
+    df[remaining_columns] = df[remaining_columns].fillna(value="None", axis=1).astype("string[pyarrow]")
 
     # Remove characters that Minio can't handle
     for col in REGION_LEVELS:
@@ -356,7 +358,7 @@ def validate_and_fix(df, weight_column, fill_timestamp) -> Tuple[dd.DataFrame, s
         weight_column = ""  # rest of the checks in the script will use this
     elif weight_column != "":
         df[weight_column] = dd.to_numeric(df[weight_column], errors="coerce")
-        df = df.fillna(value={weight_column: 0}).astype({weight_column: "float64"})
+        df = df.fillna(value={weight_column: 0}).astype({weight_column: "float64[pyarrow]"})
 
     # Fill missing timestamp values (0 by default)
     num_missing_ts = int(df["timestamp"].isna().sum().compute().item())
@@ -628,11 +630,11 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
         cdf["subtile"] = df.apply(
             lambda x: parent_tile(x.subtile, level_idx),
             axis=1,
-            meta=(None, "string"),
+            meta=(None, "string[pyarrow]"),
         )
 
         tile_series = cdf.apply(
-            lambda x: tile_coord(x["subtile"], LEVEL_DIFF), axis=1, meta=(None, "string")
+            lambda x: tile_coord(x["subtile"], LEVEL_DIFF), axis=1, meta=(None, "string[pyarrow]")
         )
         cdf = cdf.assign(tile=tile_series)
 
@@ -780,7 +782,7 @@ def record_region_lists(df, dest, model_id, run_id) -> Tuple[list, list]:
         .groupby(["feature"])
         .apply(
             lambda x: cols_to_lists(x, id_cols, x["feature"].values[0]),
-            meta=(None, "str"),
+            meta=(None, "string[pyarrow]"),
         )
     )
 
