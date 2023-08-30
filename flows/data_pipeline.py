@@ -5,7 +5,6 @@ from enum import Enum
 import dask.dataframe as dd
 import pandas as pd
 import numpy as np
-import pyarrow as pa
 import os
 import json
 import re
@@ -185,7 +184,10 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
 
         # Note: dask read_parquet doesn't work for gzip files. So here is the work around using pandas read_parquet
         # Read each parquet file in separately, and ensure that all columns match before joining together
-        delayed_dfs = [delayed(pd.read_parquet)(path, engine="pyarrow", dtype_backend="pyarrow") for path in numeric_files]
+        delayed_dfs = [
+            delayed(pd.read_parquet)(path, engine="pyarrow", dtype_backend="pyarrow")
+            for path in numeric_files
+        ]
         dfs: List[pd.DataFrame] = [dd.from_delayed(d) for d in delayed_dfs]
 
         if len(dfs) == 0:
@@ -331,6 +333,7 @@ def save_raw_data(df, dest, time_res, model_id, run_id, raw_count_threshold):
 
     return rows_per_feature
 
+
 @task(log_stdout=True)
 def validate_and_fix(df, weight_column, fill_timestamp) -> Tuple[dd.DataFrame, str, int, int, int]:
     print(f"\nValidate and fix dataframe length={len(df.index)}, npartitions={df.npartitions}\n")
@@ -347,7 +350,9 @@ def validate_and_fix(df, weight_column, fill_timestamp) -> Tuple[dd.DataFrame, s
     # In the remaining columns, fill all null values with "None"
     # TODO: When adding support for different qualifier roles, we will need to fill numeric roles with something else
     remaining_columns = list(set(df.columns.to_list()) - exclude_columns - null_cols)
-    df[remaining_columns] = df[remaining_columns].fillna(value="None", axis=1).astype("string[pyarrow]")
+    df[remaining_columns] = (
+        df[remaining_columns].fillna(value="None", axis=1).astype("string[pyarrow]")
+    )
 
     # Remove characters that Minio can't handle
     for col in REGION_LEVELS:
@@ -598,7 +603,9 @@ def subtile_aggregation(df, weight_column, skip=False):
 
     # Spatial aggregation to the hightest supported precision(subtile z) level
     stile = df.apply(
-        lambda x: to_str_coord(deg2num(x.lat, x.lng, MAX_SUBTILE_PRECISION)), axis=1, meta=(None, 'string')
+        lambda x: to_str_coord(deg2num(x.lat, x.lng, MAX_SUBTILE_PRECISION)),
+        axis=1,
+        meta=(None, "string"),
     )
 
     temporal_df = df.assign(subtile=stile)
@@ -643,7 +650,10 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
             meta=(None, "string[pyarrow]"),
         )
         npart = int(min(math.ceil(len(temp_df.index) / 2), 500))
-        temp_df = temp_df.repartition(npartitions=npart).apply(lambda x: save_tile_fn(x, dest, model_id, run_id, time_res, WRITE_TYPES[DEST_TYPE]), meta=(None, "string[pyarrow]"))
+        temp_df = temp_df.repartition(npartitions=npart).apply(
+            lambda x: save_tile_fn(x, dest, model_id, run_id, time_res, WRITE_TYPES[DEST_TYPE]),
+            meta=(None, "string[pyarrow]"),
+        )
 
         temp_df.compute()
         end = time.time()
@@ -653,6 +663,7 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
         )
         del temp_df
         del cdf
+
 
 @task(log_stdout=True)
 def compute_stats(df, dest, time_res, model_id, run_id):

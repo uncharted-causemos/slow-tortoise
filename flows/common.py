@@ -1,5 +1,5 @@
 import datetime
-from typing import Tuple
+from typing import cast
 import pandas as pd
 import dask.dataframe as dd
 import numpy as np
@@ -162,14 +162,18 @@ def run_spatial_aggregation(df, groupby, spatial_aggs, weight_column):
 
     return (df, agg_columns)
 
+
 def from_str_coord(coord: str) -> tuple[int, int, int]:
-    return tuple(int(el) for el in coord.split("/"))
+    return cast(tuple[int, int, int], tuple(int(el) for el in coord.split("/")))
+
 
 def to_str_coord(coord: tuple[int, int, int]) -> str:
-    return f'{coord[0]}/{coord[1]}/{coord[2]}' # z/x/y
+    return f"{coord[0]}/{coord[1]}/{coord[2]}"  # z/x/y
+
 
 def to_tile_coord(z: int, x: int, y: int) -> str:
-    return f'{z}/{x}/{y}'
+    return f"{z}/{x}/{y}"
+
 
 # More details on tile calculations https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames
 # Convert lat, long to tile coord
@@ -181,9 +185,11 @@ def deg2num(lat_deg: float, lon_deg: float, zoom: int):
     ytile = int((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n)
     return (zoom, xtile, ytile)
 
+
 def parent_tile(coord: str, l=1) -> str:
     z, x, y = from_str_coord(coord)
     return to_tile_coord(z - l, math.floor(x / (2**l)), math.floor(y / (2**l)))
+
 
 # Return the tile that is leveldiff up of given tile. Eg. return (1, 0, 0) for (6, 0, 0) with leveldiff = 5
 # The main tile will contain up to 4^leveldiff subtiles with same level
@@ -194,6 +200,7 @@ def tile_coord(coord: str, leveldiff=6):
         math.floor(x / math.pow(2, leveldiff)),
         math.floor(y / math.pow(2, leveldiff)),
     )
+
 
 # project subtile coord into xy coord of the main tile grid (n*n grid where n*n = 4^zdiff)
 # https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames
@@ -219,7 +226,7 @@ def project(subtilecoord, tilecoord):
     return int(bin_index)
 
 
-def apply_qualifier_count_limit(qualifier_map, columns, counts, max_count) -> Tuple[dict, list]:
+def apply_qualifier_count_limit(qualifier_map, columns, counts, max_count) -> tuple[dict, list]:
     # Modify qualifier_map to remove qualifiers with too many categories
     new_qualifier_map = {}
     small_qualifiers = set()
@@ -284,12 +291,13 @@ def write_to_file(body, path, dest):
     if not os.path.exists(dirname):
         pathlib.Path(dirname).mkdir(parents=True, exist_ok=True)
     # write the file
-    if (type(body) is bytes):
+    if type(body) is bytes:
         with open(bucket_path, "wb+") as outfile:
             outfile.write(body)
     else:
         with open(bucket_path, "w+") as outfile:
             outfile.write(str(body))
+
 
 # save proto tile file
 def save_tile(tile, dest, model_id, run_id, time_res, writer):
@@ -297,19 +305,20 @@ def save_tile(tile, dest, model_id, run_id, time_res, writer):
     if tile["content"] is None:
         return None
     z, x, y = from_str_coord(tile["coord"])
-    content = tile['content']
+    content = tile["content"]
 
     path = f"{model_id}/{run_id}/{time_res}/{tile['feature']}/tiles/{tile['timestamp']}-{z}-{x}-{y}.tile"
     writer(base64.b64decode(content), path, dest)
     return tile
 
-# Saves the tile as string representation of the proto buff. This is used for testing and debugging tile files. 
+
+# Saves the tile as string representation of the proto buff. This is used for testing and debugging tile files.
 def save_tile_to_str(tile, dest, model_id, run_id, time_res, writer):
     tile = json.loads(tile)
     if tile["content"] is None:
         return None
     tile_pb = tiles_pb2.Tile()
-    tile_pb.ParseFromString(base64.b64decode(tile['content']))
+    tile_pb.ParseFromString(base64.b64decode(tile["content"]))
 
     z = tile_pb.coord.z
     x = tile_pb.coord.x
@@ -317,6 +326,7 @@ def save_tile_to_str(tile, dest, model_id, run_id, time_res, writer):
 
     path = f"{model_id}/{run_id}/{time_res}/{tile['feature']}/tiles/{tile['timestamp']}-{z}-{x}-{y}.txt"
     writer(str(tile_pb), path, dest)
+
 
 # write timeseries to json in S3
 def timeseries_to_json(df, dest, model_id, run_id, feature, time_res, column, writer):
@@ -418,6 +428,7 @@ def results_to_json(contents, dest, model_id, run_id, writer):
     body = str(json.dumps(contents))
     writer(body, path, dest)
 
+
 def to_proto(df):
     tile_coord = df["tile"].iloc[0]
     z, x, y = from_str_coord(tile_coord)
@@ -434,10 +445,10 @@ def to_proto(df):
         math.pow(4, from_str_coord(df["subtile"].iloc[0])[0] - z)
     )  # Total number of bins (subtile) for the tile
 
-    subtiles = df['subtile'].tolist()
-    s_sum_t_sum = df['s_sum_t_sum'].tolist()
-    s_sum_t_mean = df['s_sum_t_mean'].tolist()
-    s_count = df['s_count'].tolist()
+    subtiles = df["subtile"].tolist()
+    s_sum_t_sum = df["s_sum_t_sum"].tolist()
+    s_sum_t_mean = df["s_sum_t_mean"].tolist()
+    s_count = df["s_count"].tolist()
 
     for i in range(len(subtiles)):
         bin_index = project(subtiles[i], tile_coord)
@@ -447,14 +458,17 @@ def to_proto(df):
 
     tile_content = tile.SerializeToString()
     # To convert bytes to b64 encoded string value since json string doesn't support bytes
-    b64encoded_content = base64.b64encode(tile_content).decode('utf-8')
+    b64encoded_content = base64.b64encode(tile_content).decode("utf-8")
 
-    return json.dumps({
-        "feature": f"{df['feature'].iloc[0]}",
-        "timestamp": f"{df['timestamp'].iloc[0]}", 
-        "coord": to_tile_coord(z, x, y),
-        "content":  b64encoded_content,
-    })
+    return json.dumps(
+        {
+            "feature": f"{df['feature'].iloc[0]}",
+            "timestamp": f"{df['timestamp'].iloc[0]}",
+            "coord": to_tile_coord(z, x, y),
+            "content": b64encoded_content,
+        }
+    )
+
 
 # convert given datetime object to monthly epoch timestamp
 def to_normalized_time(date, time_res):
