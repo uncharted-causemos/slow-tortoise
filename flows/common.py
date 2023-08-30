@@ -677,7 +677,7 @@ def compute_timeseries_by_region(
                     qualifier_col,
                     writer,
                 ),
-                meta=(None, "object"),
+                meta=(None, "string[pyarrow]"),
             )
         )
         timeseries_df.compute()
@@ -751,6 +751,6 @@ def compute_subtile_stats(
     # Save the stats for each timestamp
     result_df = result_df.groupby(["feature", "timestamp"]).apply(
         lambda x: save_subtile_stats(x, dest, model_id, run_id, time_res, writer),
-        meta=(None, "object"),
+        meta=(None, "string[pyarrow]"),
     )
     result_df.compute()

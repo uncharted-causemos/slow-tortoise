@@ -578,7 +578,7 @@ def compute_regional_aggregation(
                         qualifier_col,
                         WRITE_TYPES[DEST_TYPE],
                     ),
-                    meta=(None, "object"),
+                    meta=(None, "string[pyarrow]"),
                 )
             )
             regional_df.compute()
@@ -638,10 +638,10 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
 
         temp_df = cdf.groupby(["feature", "timestamp", "tile"]).apply(
             lambda x: to_proto(x),
-            meta=(None, "string"),
+            meta=(None, "string[pyarrow]"),
         )
         npart = int(min(math.ceil(len(temp_df.index) / 2), 500))
-        temp_df = temp_df.repartition(npartitions=npart).apply(lambda x: save_tile_fn(x, dest, model_id, run_id, time_res, WRITE_TYPES[DEST_TYPE]), meta=(None, "string"))
+        temp_df = temp_df.repartition(npartitions=npart).apply(lambda x: save_tile_fn(x, dest, model_id, run_id, time_res, WRITE_TYPES[DEST_TYPE]), meta=(None, "string[pyarrow]"))
 
         temp_df.compute()
         end = time.time()
@@ -834,7 +834,7 @@ def record_qualifier_lists(df, dest, model_id, run_id, qualifiers, thresholds):
     counts = (
         save_df[["feature"] + qualifier_columns]
         .groupby(["feature"])
-        .apply(lambda x: save_qualifier_lists(x), meta=(None, "object"))
+        .apply(lambda x: save_qualifier_lists(x), meta=(None, "string[pyarrow]"))
     )
     pdf_counts = counts.compute()
     json_str = pdf_counts.to_json(orient="index")
