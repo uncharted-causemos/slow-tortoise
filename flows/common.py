@@ -171,10 +171,6 @@ def to_str_coord(coord: tuple[int, int, int]) -> str:
     return f"{coord[0]}/{coord[1]}/{coord[2]}"  # z/x/y
 
 
-def to_tile_coord(z: int, x: int, y: int) -> str:
-    return f"{z}/{x}/{y}"
-
-
 # More details on tile calculations https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames
 # Convert lat, long to tile coord
 # https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames#Python
@@ -188,18 +184,18 @@ def deg2num(lat_deg: float, lon_deg: float, zoom: int):
 
 def parent_tile(coord: str, l=1) -> str:
     z, x, y = from_str_coord(coord)
-    return to_tile_coord(z - l, math.floor(x / (2**l)), math.floor(y / (2**l)))
+    return to_str_coord((z - l, math.floor(x / (2**l)), math.floor(y / (2**l))))
 
 
 # Return the tile that is leveldiff up of given tile. Eg. return (1, 0, 0) for (6, 0, 0) with leveldiff = 5
 # The main tile will contain up to 4^leveldiff subtiles with same level
 def tile_coord(coord: str, leveldiff=6):
     z, x, y = from_str_coord(coord)
-    return to_tile_coord(
+    return to_str_coord((
         z - leveldiff,
         math.floor(x / math.pow(2, leveldiff)),
         math.floor(y / math.pow(2, leveldiff)),
-    )
+    ))
 
 
 # project subtile coord into xy coord of the main tile grid (n*n grid where n*n = 4^zdiff)
@@ -464,7 +460,7 @@ def to_proto(df):
         {
             "feature": f"{df['feature'].iloc[0]}",
             "timestamp": f"{df['timestamp'].iloc[0]}",
-            "coord": to_tile_coord(z, x, y),
+            "coord": to_str_coord((z, x, y)),
             "content": b64encoded_content,
         }
     )
