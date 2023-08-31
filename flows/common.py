@@ -191,11 +191,13 @@ def parent_tile(coord: str, l=1) -> str:
 # The main tile will contain up to 4^leveldiff subtiles with same level
 def tile_coord(coord: str, leveldiff=6):
     z, x, y = from_str_coord(coord)
-    return to_str_coord((
-        z - leveldiff,
-        math.floor(x / math.pow(2, leveldiff)),
-        math.floor(y / math.pow(2, leveldiff)),
-    ))
+    return to_str_coord(
+        (
+            z - leveldiff,
+            math.floor(x / math.pow(2, leveldiff)),
+            math.floor(y / math.pow(2, leveldiff)),
+        )
+    )
 
 
 # project subtile coord into xy coord of the main tile grid (n*n grid where n*n = 4^zdiff)
