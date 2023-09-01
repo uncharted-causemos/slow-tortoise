@@ -605,7 +605,7 @@ def subtile_aggregation(df, weight_column, skip=False):
     stile = df.apply(
         lambda x: to_str_coord(deg2num(x.lat, x.lng, MAX_SUBTILE_PRECISION)),
         axis=1,
-        meta=(None, "string"),
+        meta=(None, "string[pyarrow]"),
     )
 
     temporal_df = df.assign(subtile=stile)
