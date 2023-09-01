@@ -13,4 +13,4 @@ tests/output
 test-models
 test-indicators
 .env
-.venv
+.venv*

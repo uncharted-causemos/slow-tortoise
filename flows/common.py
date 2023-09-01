@@ -1,5 +1,5 @@
 import datetime
-from typing import Tuple
+from typing import cast
 import pandas as pd
 import dask.dataframe as dd
 import numpy as np
@@ -9,6 +9,7 @@ import json
 import sys
 import os
 import pathlib
+import base64
 
 # Bit of a WTF here, but it is well considered.  Dask will serialize the tiles_pb2.Task *class* since it is passed
 # to workers within a lambda that calls to_proto.  The problem is that pickling a class object can result in the
@@ -46,13 +47,14 @@ def run_temporal_aggregation(df, time_res, weight_column):
 
     # Monthly temporal aggregation (compute for both sum and mean)
     t = dd.to_datetime(df["timestamp"], unit="ms", errors="coerce").apply(
-        lambda x: to_normalized_time(x, time_res), meta=(None, "int")
+        lambda x: to_normalized_time(x, time_res), meta=(None, "int64[pyarrow]")
     )
     temporal_df = df.assign(timestamp=t)
     # Note: It's not clear why dask is doing this but df.assign(timestamp=t) changes the timestamp column type from int64 to float64 with series t in int64 in some cases
     # (e.g. with "https://jataware-world-modelers.s3.amazonaws.com/transition/datasets/f90318f2-0ac1-4384-ad3b-98f52fff1543/f90318f2-0ac1-4384-ad3b-98f52fff1543.parquet.gzip").
+    # TODO: Double check if the issue still exists. Since we've migrated to pyarrow types, the issue may no longer exist anymore
     # We need to change the column type back to int64.
-    temporal_df["timestamp"] = temporal_df["timestamp"].astype("int64")
+    temporal_df["timestamp"] = temporal_df["timestamp"].astype("int64[pyarrow]")
 
     aggs = {"value": ["sum", "mean"]}
     rename_map = {
@@ -77,7 +79,7 @@ def run_temporal_aggregation(df, time_res, weight_column):
             }
         )
 
-    temporal_df = temporal_df.groupby(columns).agg(aggs, split_out=DEFAULT_PARTITIONS)
+    temporal_df = temporal_df.groupby(columns).agg(aggs)
     temporal_df.columns = temporal_df.columns.to_flat_index()
     temporal_df = temporal_df.rename(columns=rename_map).reset_index()
 
@@ -140,7 +142,7 @@ def run_spatial_aggregation(df, groupby, spatial_aggs, weight_column):
         # spatial agg of wavg
         rename_lookup.update(create_spatial_agg_rename_lookup("t_wavg", spatial_aggs))
 
-    df = df.groupby(groupby).agg(columns_to_agg, split_out=DEFAULT_PARTITIONS)
+    df = df.groupby(groupby).agg(columns_to_agg)
     df.columns = df.columns.to_flat_index()
     df = df.rename(columns=rename_lookup).reset_index()
 
@@ -161,10 +163,18 @@ def run_spatial_aggregation(df, groupby, spatial_aggs, weight_column):
     return (df, agg_columns)
 
 
+def from_str_coord(coord: str) -> tuple[int, int, int]:
+    return cast(tuple[int, int, int], tuple(int(el) for el in coord.split("/")))
+
+
+def to_str_coord(coord: tuple[int, int, int]) -> str:
+    return f"{coord[0]}/{coord[1]}/{coord[2]}"  # z/x/y
+
+
 # More details on tile calculations https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames
 # Convert lat, long to tile coord
 # https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames#Python
-def deg2num(lat_deg, lon_deg, zoom):
+def deg2num(lat_deg: float, lon_deg: float, zoom: int):
     lat_rad = math.radians(lat_deg)
     n = 2.0**zoom
     xtile = int((lon_deg + 180.0) / 360.0 * n)
@@ -172,41 +182,29 @@ def deg2num(lat_deg, lon_deg, zoom):
     return (zoom, xtile, ytile)
 
 
-# Get the parent tile coord of the given tile coord
-def parent_tile(coord, l=1):
-    z, x, y = coord
-    return (z - l, math.floor(x / (2**l)), math.floor(y / (2**l)))
-
-
-# Return all acestor tile coords of the given tile coord
-def ancestor_tiles(coord, min_zoom=0):
-    tiles = [coord]
-    while tiles[0][0] > min_zoom:
-        tiles.insert(0, parent_tile(tiles[0]))
-    return tiles
-
-
-# Filter tiles by minimum zoom level
-def filter_by_min_zoom(tiles, min_zoom=0):
-    return list(filter(lambda x: x[0] >= min_zoom, tiles))
+def parent_tile(coord: str, l=1) -> str:
+    z, x, y = from_str_coord(coord)
+    return to_str_coord((z - l, math.floor(x / (2**l)), math.floor(y / (2**l))))
 
 
 # Return the tile that is leveldiff up of given tile. Eg. return (1, 0, 0) for (6, 0, 0) with leveldiff = 5
 # The main tile will contain up to 4^leveldiff subtiles with same level
-def tile_coord(coord, leveldiff=6):
-    z, x, y = coord
-    return (
-        z - leveldiff,
-        math.floor(x / math.pow(2, leveldiff)),
-        math.floor(y / math.pow(2, leveldiff)),
+def tile_coord(coord: str, leveldiff=6):
+    z, x, y = from_str_coord(coord)
+    return to_str_coord(
+        (
+            z - leveldiff,
+            math.floor(x / math.pow(2, leveldiff)),
+            math.floor(y / math.pow(2, leveldiff)),
+        )
     )
 
 
 # project subtile coord into xy coord of the main tile grid (n*n grid where n*n = 4^zdiff)
 # https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames
 def project(subtilecoord, tilecoord):
-    z, x, y = tilecoord
-    sz, sx, sy = subtilecoord
+    z, x, y = from_str_coord(tilecoord)
+    sz, sx, sy = from_str_coord(subtilecoord)
     zdiff = sz - z  # zoom level (prececsion) difference
 
     # Calculate the x and y of the coordinate of the subtile located at the most top left corner of the main tile
@@ -226,7 +224,7 @@ def project(subtilecoord, tilecoord):
     return int(bin_index)
 
 
-def apply_qualifier_count_limit(qualifier_map, columns, counts, max_count) -> Tuple[dict, list]:
+def apply_qualifier_count_limit(qualifier_map, columns, counts, max_count) -> tuple[dict, list]:
     # Modify qualifier_map to remove qualifiers with too many categories
     new_qualifier_map = {}
     small_qualifiers = set()
@@ -291,38 +289,41 @@ def write_to_file(body, path, dest):
     if not os.path.exists(dirname):
         pathlib.Path(dirname).mkdir(parents=True, exist_ok=True)
     # write the file
-    with open(bucket_path, "w+") as outfile:
-        outfile.write(str(body))
+    if type(body) is bytes:
+        with open(bucket_path, "wb+") as outfile:
+            outfile.write(body)
+    else:
+        with open(bucket_path, "w+") as outfile:
+            outfile.write(str(body))
 
 
 # save proto tile file
-def save_tile(tile, dest, model_id, run_id, feature, time_res, timestamp, writer):
-    if tile is None:
+def save_tile(tile, dest, model_id, run_id, time_res, writer):
+    tile = json.loads(tile)
+    if tile["content"] is None:
         return None
+    z, x, y = from_str_coord(tile["coord"])
+    content = tile["content"]
 
-    z = tile.coord.z
-    x = tile.coord.x
-    y = tile.coord.y
-
-    path = f"{model_id}/{run_id}/{time_res}/{feature}/tiles/{timestamp}-{z}-{x}-{y}.tile"
-    body = tile.SerializeToString()
-    writer(body, path, dest)
-
+    path = f"{model_id}/{run_id}/{time_res}/{tile['feature']}/tiles/{tile['timestamp']}-{z}-{x}-{y}.tile"
+    writer(base64.b64decode(content), path, dest)
     return tile
 
 
-# only used for testing
-def save_tile_to_csv(tile, dest, model_id, run_id, feature, time_res, timestamp, writer):
-    if tile is None:
+# Saves the tile as string representation of the proto buff. This is used for testing and debugging tile files.
+def save_tile_to_str(tile, dest, model_id, run_id, time_res, writer):
+    tile = json.loads(tile)
+    if tile["content"] is None:
         return None
+    tile_pb = tiles_pb2.Tile()
+    tile_pb.ParseFromString(base64.b64decode(tile["content"]))
 
-    [z, x, y, table, totalBins] = tile
+    z = tile_pb.coord.z
+    x = tile_pb.coord.x
+    y = tile_pb.coord.y
 
-    path = f"{model_id}/{run_id}/{time_res}/{feature}/tiles/{timestamp}-{z}-{x}-{y}-{totalBins}.csv"
-    body = table.to_csv(index=False)
-    writer(body, path, dest)
-
-    return tile
+    path = f"{model_id}/{run_id}/{time_res}/{tile['feature']}/tiles/{tile['timestamp']}-{z}-{x}-{y}.txt"
+    writer(str(tile_pb), path, dest)
 
 
 # write timeseries to json in S3
@@ -426,54 +427,45 @@ def results_to_json(contents, dest, model_id, run_id, writer):
     writer(body, path, dest)
 
 
-# transform given row to tile protobuf
-def to_proto(row):
-    z, x, y = row["tile"]
+def to_proto(df):
+    tile_coord = df["tile"].iloc[0]
+    z, x, y = from_str_coord(tile_coord)
     if z < 0 or x < 0 or y < 0:
         return None
 
+    # Protobuf tile object
     tile = tiles_pb2.Tile()
     tile.coord.z = z
     tile.coord.x = x
     tile.coord.y = y
 
     tile.bins.totalBins = int(
-        math.pow(4, row["subtile"][0][0] - z)
+        math.pow(4, from_str_coord(df["subtile"].iloc[0])[0] - z)
     )  # Total number of bins (subtile) for the tile
 
-    for i in range(len(row["subtile"])):
-        bin_index = project(row["subtile"][i], row["tile"])
-        tile.bins.stats[bin_index].s_sum_t_sum += row["s_sum_t_sum"][i]
-        tile.bins.stats[bin_index].s_sum_t_mean += row["s_sum_t_mean"][i]
-        tile.bins.stats[bin_index].weight += row["s_count"][i]
-    return tile
+    subtiles = df["subtile"].tolist()
+    s_sum_t_sum = df["s_sum_t_sum"].tolist()
+    s_sum_t_mean = df["s_sum_t_mean"].tolist()
+    s_count = df["s_count"].tolist()
 
+    for i in range(len(subtiles)):
+        bin_index = project(subtiles[i], tile_coord)
+        tile.bins.stats[bin_index].s_sum_t_sum += s_sum_t_sum[i]
+        tile.bins.stats[bin_index].s_sum_t_mean += s_sum_t_mean[i]
+        tile.bins.stats[bin_index].weight += s_count[i]
 
-# transform given row to tile csv, only used for testing
-def to_tile_csv(row):
-    z, x, y = row.tile
-    if z < 0 or x < 0 or y < 0:
-        return None
+    tile_content = tile.SerializeToString()
+    # To convert bytes to b64 encoded string value since json string doesn't support bytes
+    b64encoded_content = base64.b64encode(tile_content).decode("utf-8")
 
-    totalBins = int(
-        math.pow(4, row.subtile[0][0] - z)
-    )  # Total number of bins (subtile) for the tile
-
-    stats = {}
-    for i in range(len(row.subtile)):
-        bin_index = project(row.subtile[i], row.tile)
-        if bin_index not in stats:
-            stats[bin_index] = {"s_sum_t_sum": 0, "s_sum_t_mean": 0, "weight": 0}
-        stats[bin_index]["s_sum_t_sum"] += row.s_sum_t_sum[i]
-        stats[bin_index]["s_sum_t_mean"] += row.s_sum_t_mean[i]
-        stats[bin_index]["weight"] += row.s_count[i]
-
-    tableRows = [
-        [key, value["s_sum_t_sum"], value["s_sum_t_mean"], value["weight"]]
-        for key, value in stats.items()
-    ]
-    table = pd.DataFrame(tableRows, columns=["bin_index", "s_sum_t_sum", "s_sum_t_mean", "weight"])
-    return [z, x, y, table, totalBins]
+    return json.dumps(
+        {
+            "feature": f"{df['feature'].iloc[0]}",
+            "timestamp": f"{df['timestamp'].iloc[0]}",
+            "coord": to_str_coord((z, x, y)),
+            "content": b64encoded_content,
+        }
+    )
 
 
 # convert given datetime object to monthly epoch timestamp
@@ -698,7 +690,7 @@ def compute_timeseries_by_region(
                     qualifier_col,
                     writer,
                 ),
-                meta=(None, "object"),
+                meta=(None, "string[pyarrow]"),
             )
         )
         timeseries_df.compute()
@@ -738,7 +730,7 @@ def compute_subtile_stats(
         tile_at_actual_level = subtile_df.apply(
             lambda x: parent_tile(x.subtile, level_idx),
             axis=1,
-            meta=(None, "object"),
+            meta=(None, "string[pyarrow]"),
         )
         df = subtile_df.assign(subtile=tile_at_actual_level)
 
@@ -772,6 +764,6 @@ def compute_subtile_stats(
     # Save the stats for each timestamp
     result_df = result_df.groupby(["feature", "timestamp"]).apply(
         lambda x: save_subtile_stats(x, dest, model_id, run_id, time_res, writer),
-        meta=(None, "object"),
+        meta=(None, "string[pyarrow]"),
     )
     result_df.compute()
