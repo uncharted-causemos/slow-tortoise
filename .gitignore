@@ -3,6 +3,8 @@
 .DS_Store
 .ipynb_checkpoints
 dist
+.mypy_cache
+.pytest_cache
 dask-worker-space
 mydask.png
 __pycache__
