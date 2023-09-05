@@ -1,5 +1,5 @@
 # build on top of dask
-FROM docker-hub.uncharted.software/daskdev/dask:2023.8.1-py3.11
+FROM docker-hub.uncharted.software/daskdev/dask:2023.9.0-py3.11
 
 # Install build tools required to build some of python packages 
 RUN apt-get update -y && apt-get install gcc g++ -y
@@ -16,15 +16,6 @@ WORKDIR /wm_data_pipeline
 COPY src/setup.py .
 COPY src/version.py .
 
-# # force an install of our package requirements so that they get properly
-# # cached
-# RUN python3 setup.py egg_info && pip3 install `grep -v '^\[' *.egg-info/requires.txt`
-
-# # copy over the flow source
-# ADD src/flows ./flows
-
-# install the package so that it is properly integrated with the python environment -
-# dependencies should be cached from the previous setup call
 RUN pip install -e .
 
 # copy over the flow source
