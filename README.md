@@ -60,13 +60,6 @@ To validate Prefect execution outside of the deployment environment, a prefect s
 - When working with larger data consider removing parts of the flow that aren't necessary for your work. For example, remove tiling, or the entire annual part of the pipeline. 
 ---
 
-## Developing using Jupyter Notebooks
-Some find it preferable to work on the data pipeline by using Jupyter Notebooks. The functions in [flows/common.py](./flows/common.py) can be used directly, however the code in [flows/data_pipeline.py](./flows/dat_pipeline.py) requires Prefect which cannot be used inside Notebooks.  
-For best results, add the dependencies for jupyter and start `jupyter lab`.  
-See some of the existing notebooks used to develop previous features in the [notebooks](./notebooks/) directory
-
----
-
 ## Deployment
 
 To deploy the datacube pipeline to the production Prefect environment run [deploy/build_and_update.sh](./deploy/build_and_update.sh)
