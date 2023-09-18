@@ -25,6 +25,7 @@ setup(
         "dev": [
             "python-dotenv==1.0.0",
             "s3fs==2022.5.0", # a tool to mount aws bucket to local fs
+            "elasticsearch==7.17.7"
         ]
     }
 )
