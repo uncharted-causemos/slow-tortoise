@@ -47,14 +47,14 @@ def run_temporal_aggregation(df, time_res, weight_column):
 
     # Monthly temporal aggregation (compute for both sum and mean)
     t = dd.to_datetime(df["timestamp"], unit="ms", errors="coerce").apply(
-        lambda x: to_normalized_time(x, time_res), meta=(None, "int64[pyarrow]")
+        lambda x: to_normalized_time(x, time_res), meta=(None, "int64")
     )
     temporal_df = df.assign(timestamp=t)
     # Note: It's not clear why dask is doing this but df.assign(timestamp=t) changes the timestamp column type from int64 to float64 with series t in int64 in some cases
     # (e.g. with "https://jataware-world-modelers.s3.amazonaws.com/transition/datasets/f90318f2-0ac1-4384-ad3b-98f52fff1543/f90318f2-0ac1-4384-ad3b-98f52fff1543.parquet.gzip").
     # TODO: Double check if the issue still exists. Since we've migrated to pyarrow types, the issue may no longer exist anymore
     # We need to change the column type back to int64.
-    temporal_df["timestamp"] = temporal_df["timestamp"].astype("int64[pyarrow]")
+    temporal_df["timestamp"] = temporal_df["timestamp"].astype("int64")
 
     aggs = {"value": ["sum", "mean"]}
     rename_map = {

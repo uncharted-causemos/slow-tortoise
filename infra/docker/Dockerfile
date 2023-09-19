@@ -1,5 +1,5 @@
 # build on top of dask
-FROM docker-hub.uncharted.software/daskdev/dask:2023.9.0-py3.11
+FROM docker-hub.uncharted.software/daskdev/dask:2023.9.2-py3.11
 
 # Install build tools required to build some of python packages 
 RUN apt-get update -y && apt-get install gcc g++ -y

@@ -2,5 +2,7 @@
 source ./prod.env
 echo "Building docker..."
 
-../../infra/docker/docker_build.sh
-../../infra/docker/docker_push.sh
+pushd ../../infra/docker
+./docker_build.sh
+./docker_push.sh
+popd
