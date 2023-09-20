@@ -12,6 +12,14 @@ source ./prod.env
 #   AWS_SECRET_ACCESS_KEY 
 
 PROJECT="Tests"
-prefect register --project="$PROJECT" --label $WM_RUN_CONFIG_TYPE --path ../../flows/test/flow_test.py
-prefect register --project="$PROJECT" --label $WM_RUN_CONFIG_TYPE --path ../../flows/test/dask_flow_test.py
-prefect register --project="$PROJECT" --label $WM_RUN_CONFIG_TYPE --path ../../flows/data_pipeline.py
+# Create a docker container with the data pipeline image and run prefect register command with the flow codes inside the container.
+cid=$(docker run -itd -e PREFECT__SERVER__HOST -e WM_DATA_PIPELINE_IMAGE -e WM_FLOW_STORAGE_S3_BUCKET_NAME -e WM_RUN_CONFIG_TYPE $WM_DATA_PIPELINE_IMAGE /bin/sh)
+# copy aws credetial to the container
+docker cp ~/.aws $cid:/root/.aws
+
+docker exec $cid prefect register --project="$PROJECT" --label $WM_RUN_CONFIG_TYPE --path ./flows/data_pipeline.py
+docker exec $cid prefect register --project="$PROJECT" --label $WM_RUN_CONFIG_TYPE --path ./flows/test/flow_test.py
+docker exec $cid prefect register --project="$PROJECT" --label $WM_RUN_CONFIG_TYPE --path ./flows/test/dask_flow_test.py
+
+# Remove the temporary container
+docker stop $cid && docker rm $cid

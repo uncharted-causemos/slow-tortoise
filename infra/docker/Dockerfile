@@ -20,3 +20,6 @@ RUN pip install -e .
 
 # copy over the flow source
 ADD src/flows ./flows
+
+# Set prefcet backend configuration to server
+RUN prefect backend server
