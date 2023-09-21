@@ -183,10 +183,7 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
 
         # Note: dask read_parquet doesn't work for gzip files. So here is the work around using pandas read_parquet
         # Read each parquet file in separately, and ensure that all columns match before joining together
-        delayed_dfs = [
-            delayed(pd.read_parquet)(path, engine="pyarrow")
-            for path in numeric_files
-        ]
+        delayed_dfs = [delayed(pd.read_parquet)(path, engine="pyarrow") for path in numeric_files]
         dfs: List[pd.DataFrame] = [dd.from_delayed(d) for d in delayed_dfs]
 
         if len(dfs) == 0:
@@ -348,8 +345,8 @@ def validate_and_fix(df, weight_column, fill_timestamp) -> Tuple[dd.DataFrame, s
     # In the remaining columns, fill all null values with "None"
     # TODO: When adding support for different qualifier roles, we will need to fill numeric roles with something else
     remaining_columns = list(set(df.columns.to_list()) - exclude_columns - null_cols)
-    # Note: 'df[remaining_columns] = df[remaining_columns].fillna(value="None", axis=1)' seems to have performance issue after upgrading to pandas > 2  and pyarrow >= 13. 
-    # Instead of filling null value for all columns at the same time, iterating through one column at a time seems to solve the issue. 
+    # Note: 'df[remaining_columns] = df[remaining_columns].fillna(value="None", axis=1)' seems to have performance issue after upgrading to pandas > 2  and pyarrow >= 13.
+    # Instead of filling null value for all columns at the same time, iterating through one column at a time seems to solve the issue.
     for col in remaining_columns:
         df[col] = df[col].fillna(value="None").astype("string[pyarrow]")
 
