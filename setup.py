@@ -16,7 +16,7 @@ setup(
     install_requires=[
         "prefect==1.4.1",
         "dask[complete]==2023.9.2", # Make sure this version is same as the dask base image version in src/infra/docker/Dockerfile
-        "pandas==2.0.3",
+        "pandas==2.1.1",
         "pyarrow==13.0.0",
         "boto3==1.21.21",
         "protobuf==4.21.4",

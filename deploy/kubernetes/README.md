@@ -11,8 +11,17 @@ To deploy new data pipeline code in the AWS production environment, follow these
 
 - Update the Dask scheduler and workers running in the AWS Kubernetes cluster with the newer Docker image.
 - If you use the `latest` Docker tag for the pods, recreate the pods for the Dask cluster:
+
+  First load the kube configuration file for the target environment
+  ```
+  export KUBECONFIG=~/.kube/causemos-staging.config
+  ```
+  or
   ```
   export KUBECONFIG=~/.kube/causemos-prod.config
+  ```
+  Delete the pods for the dask cluster
+  ```
   kubectl get po -n causemos | grep dask
   kubectl delete po POD -n causemos
   ```
@@ -25,3 +34,4 @@ To deploy new data pipeline code in the AWS production environment, follow these
 
 - To register new flow code, run the `register_flows.sh` script.
 - For test flows, run `register_test_flows.sh`.
+- Run the script with `-p` option flag for the production deployment e.g. `register_flows.sh -p` 
