@@ -299,6 +299,8 @@ def write_to_file(body, path, dest):
 
 # save proto tile file
 def save_tile(tile, dest, model_id, run_id, time_res, writer):
+    if tile == "":
+        return None
     tile = json.loads(tile)
     if tile["content"] is None:
         return None
@@ -307,11 +309,12 @@ def save_tile(tile, dest, model_id, run_id, time_res, writer):
 
     path = f"{model_id}/{run_id}/{time_res}/{tile['feature']}/tiles/{tile['timestamp']}-{z}-{x}-{y}.tile"
     writer(base64.b64decode(content), path, dest)
-    return tile
 
 
 # Saves the tile as string representation of the proto buff. This is used for testing and debugging tile files.
 def save_tile_to_str(tile, dest, model_id, run_id, time_res, writer):
+    if tile == "":
+        return None
     tile = json.loads(tile)
     if tile["content"] is None:
         return None
@@ -431,7 +434,7 @@ def to_proto(df):
     tile_coord = df["tile"].iloc[0]
     z, x, y = from_str_coord(tile_coord)
     if z < 0 or x < 0 or y < 0:
-        return None
+        return ""
 
     # Protobuf tile object
     tile = tiles_pb2.Tile()
@@ -690,7 +693,7 @@ def compute_timeseries_by_region(
                     qualifier_col,
                     writer,
                 ),
-                meta=(None, "string[pyarrow]"),
+                meta=(None, "object"),
             )
         )
         timeseries_df.compute()
@@ -730,7 +733,7 @@ def compute_subtile_stats(
         tile_at_actual_level = subtile_df.apply(
             lambda x: parent_tile(x.subtile, level_idx),
             axis=1,
-            meta=(None, "string[pyarrow]"),
+            meta=(None, "string"),
         )
         df = subtile_df.assign(subtile=tile_at_actual_level)
 
@@ -764,6 +767,6 @@ def compute_subtile_stats(
     # Save the stats for each timestamp
     result_df = result_df.groupby(["feature", "timestamp"]).apply(
         lambda x: save_subtile_stats(x, dest, model_id, run_id, time_res, writer),
-        meta=(None, "string[pyarrow]"),
+        meta=(None, "object"),
     )
     result_df.compute()

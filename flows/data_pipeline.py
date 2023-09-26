@@ -153,13 +153,14 @@ RECORD_RESULTS_TASK = "record_results"
 
 @task(log_stdout=True)
 def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
+
     df = None
     # if source is from s3 bucket
     # used for testing
     if "s3://" in data_paths[0]:
         df = dd.read_parquet(
             data_paths,
-            engine="pyarrow",
+            engine="fastparquet",
             storage_options={
                 "anon": False,
                 "use_ssl": False,
@@ -183,7 +184,7 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
 
         # Note: dask read_parquet doesn't work for gzip files. So here is the work around using pandas read_parquet
         # Read each parquet file in separately, and ensure that all columns match before joining together
-        delayed_dfs = [delayed(pd.read_parquet)(path, engine="pyarrow") for path in numeric_files]
+        delayed_dfs = [delayed(pd.read_parquet)(path, engine="fastparquet") for path in numeric_files]
         dfs: List[pd.DataFrame] = [dd.from_delayed(d) for d in delayed_dfs]
 
         if len(dfs) == 0:
@@ -201,10 +202,10 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
                 cols_to_add = list(all_extra_cols - extra_cols[i])
                 for col in cols_to_add:
                     dfs[i][col] = ""
-                    dfs[i] = dfs[i].astype({col: "string[pyarrow]"})
+                    dfs[i] = dfs[i].astype({col: "string"})
 
                 # Force the new columns as well as 'feature' to type "str"
-                type_dict = {col: "string[pyarrow]" for col in cols_to_add + ["feature"]}
+                type_dict = {col: "string" for col in cols_to_add + ["feature"]}
                 dfs[i] = dfs[i].astype(type_dict)
 
                 # Create a mapping of REGION_LEVELS to their actual types
@@ -220,7 +221,7 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
 
             for i in range(len(dfs)):
                 for col in cols_to_retype:
-                    dfs[i][col] = dfs[i][col].fillna(value="None").astype("string[pyarrow]")
+                    dfs[i][col] = dfs[i][col].fillna(value="None").astype("string")
 
             df = dd.concat(dfs, ignore_unknown_divisions=True).repartition(
                 npartitions=DEFAULT_PARTITIONS
@@ -348,7 +349,7 @@ def validate_and_fix(df, weight_column, fill_timestamp) -> Tuple[dd.DataFrame, s
     # Note: 'df[remaining_columns] = df[remaining_columns].fillna(value="None", axis=1)' seems to have performance issue after upgrading to pandas > 2  and pyarrow >= 13.
     # Instead of filling null value for all columns at the same time, iterating through one column at a time seems to solve the issue.
     for col in remaining_columns:
-        df[col] = df[col].fillna(value="None").astype("string[pyarrow]")
+        df[col] = df[col].fillna(value="None").astype("string")
 
     # Remove characters that Minio can't handle
     for col in REGION_LEVELS:
@@ -470,7 +471,7 @@ def compute_regional_stats(df, dest, time_res, model_id, run_id, weight_column, 
                 REGION_LEVELS[region_level],
                 WRITE_TYPES[DEST_TYPE],
             ),
-            meta=(None, "string[pyarrow]"),
+            meta=(None, "object"),
         )
         regional_df.compute()
 
@@ -581,7 +582,7 @@ def compute_regional_aggregation(
                         qualifier_col,
                         WRITE_TYPES[DEST_TYPE],
                     ),
-                    meta=(None, "string[pyarrow]"),
+                    meta=(None, "object"),
                 )
             )
             regional_df.compute()
@@ -601,7 +602,7 @@ def subtile_aggregation(df, weight_column, skip=False):
     stile = df.apply(
         lambda x: to_str_coord(deg2num(x.lat, x.lng, MAX_SUBTILE_PRECISION)),
         axis=1,
-        meta=(None, "string[pyarrow]"),
+        meta=(None, "string"),
     )
 
     temporal_df = df.assign(subtile=stile)
@@ -633,22 +634,22 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
         cdf["subtile"] = df.apply(
             lambda x: parent_tile(x.subtile, level_idx),
             axis=1,
-            meta=(None, "string[pyarrow]"),
+            meta=(None, "string"),
         )
 
         tile_series = cdf.apply(
-            lambda x: tile_coord(x["subtile"], LEVEL_DIFF), axis=1, meta=(None, "string[pyarrow]")
+            lambda x: tile_coord(x["subtile"], LEVEL_DIFF), axis=1, meta=(None, "string")
         )
         cdf = cdf.assign(tile=tile_series)
 
         temp_df = cdf.groupby(["feature", "timestamp", "tile"]).apply(
             lambda x: to_proto(x),
-            meta=(None, "string[pyarrow]"),
+            meta=(None, "string"),
         )
         npart = int(min(math.ceil(len(temp_df.index) / 2), 500))
         temp_df = temp_df.repartition(npartitions=npart).apply(
             lambda x: save_tile_fn(x, dest, model_id, run_id, time_res, WRITE_TYPES[DEST_TYPE]),
-            meta=(None, "string[pyarrow]"),
+            meta=(None, "object"),
         )
 
         temp_df.compute()
@@ -790,7 +791,7 @@ def record_region_lists(df, dest, model_id, run_id) -> Tuple[list, list]:
         .groupby(["feature"])
         .apply(
             lambda x: cols_to_lists(x, id_cols),
-            meta=(None, "string[pyarrow]"),
+            meta=(None, "string"),
         )
     )
 
@@ -844,7 +845,7 @@ def record_qualifier_lists(df, dest, model_id, run_id, qualifiers, thresholds):
     counts = (
         save_df[["feature"] + qualifier_columns]
         .groupby(["feature"])
-        .apply(lambda x: save_qualifier_lists(x), meta=(None, "string[pyarrow]"))
+        .apply(lambda x: save_qualifier_lists(x), meta=(None, "object"))
     )
     pdf_counts = counts.compute()
     json_str = pdf_counts.to_json(orient="index")
@@ -1348,12 +1349,29 @@ if __name__ == "__main__" and LOCAL_RUN:
         #     )
         # )
 
-        # For testing tile data
+        # # For testing tile data
+        # flow.run(
+        #     parameters=dict(
+        #         model_id="geo-test-data",
+        #         run_id="test-run-1",
+        #         data_paths=[f"file://{Path(os.getcwd()).parent}/tests/data/geo-test-data.parquet"],
+        #         selected_output_tasks=[
+        #             "compute_global_timeseries",
+        #             "compute_regional_stats",
+        #             "compute_regional_timeseries",
+        #             "compute_regional_aggregation",
+        #             "compute_tiles",
+        #         ],
+        #     )
+        # )
         flow.run(
             parameters=dict(
-                model_id="geo-test-data",
-                run_id="test-run-1",
-                data_paths=[f"file://{Path(os.getcwd()).parent}/tests/data/geo-test-data.parquet"],
+                model_id="794312cf-636c-498a-9ff3-e59c5489ba43",
+                run_id="indicators",
+                data_paths=["https://jataware-world-modelers.s3.amazonaws.com/datasets/794312cf-636c-498a-9ff3-e59c5489ba43/794312cf-636c-498a-9ff3-e59c5489ba43.parquet.gzip"],
+                qualifier_map={
+                    "Health Facility Access": ["date"]
+                },
                 selected_output_tasks=[
                     "compute_global_timeseries",
                     "compute_regional_stats",

@@ -15,9 +15,12 @@ setup(
     license="Apache-2.0",
     install_requires=[
         "prefect==1.4.1",
-        "dask[complete]==2023.9.2", # Make sure this version is same as the dask base image version in src/infra/docker/Dockerfile
+        "dask==2023.9.2", # Make sure this version is same as the dask base image version in src/infra/docker/Dockerfile
+        "dask[dataframe]==2023.9.2",
+        "dask[distributed]==2023.9.2",
         "pandas==2.1.1",
-        "pyarrow==13.0.0",
+        "fastparquet==2023.8.0",
+        "bokeh==3.2.2",
         "boto3==1.21.21",
         "protobuf==4.21.4",
     ],
