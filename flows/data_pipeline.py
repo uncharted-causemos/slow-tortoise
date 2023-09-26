@@ -151,7 +151,6 @@ RECORD_RESULTS_TASK = "record_results"
 
 @task(log_stdout=True)
 def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
-
     df = None
     # if source is from s3 bucket
     # used for testing
@@ -182,7 +181,9 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
 
         # Note: dask read_parquet doesn't work for gzip files. So here is the work around using pandas read_parquet
         # Read each parquet file in separately, and ensure that all columns match before joining together
-        delayed_dfs = [delayed(pd.read_parquet)(path, engine="fastparquet") for path in numeric_files]
+        delayed_dfs = [
+            delayed(pd.read_parquet)(path, engine="fastparquet") for path in numeric_files
+        ]
         dfs: List[pd.DataFrame] = [dd.from_delayed(d) for d in delayed_dfs]
 
         if len(dfs) == 0:
@@ -638,11 +639,7 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
         )
         cdf = cdf.assign(tile=tile_series)
 
-        temp_df = (
-            cdf.groupby(["feature", "timestamp", "tile"])
-            .agg(list)
-            .reset_index()
-        )
+        temp_df = cdf.groupby(["feature", "timestamp", "tile"]).agg(list).reset_index()
         npart = int(min(math.ceil(len(temp_df.index) / 2), 500))
         temp_df = temp_df.repartition(npartitions=npart).apply(
             lambda x: save_tile(
@@ -654,7 +651,7 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
                 time_res,
                 x.timestamp,
                 WRITE_TYPES[DEST_TYPE],
-                DEBUG_TILE, 
+                DEBUG_TILE,
             ),
             axis=1,
             meta=(None, "object"),

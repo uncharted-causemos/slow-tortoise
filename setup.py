@@ -28,6 +28,9 @@ setup(
         "dev": [
             "python-dotenv==1.0.0",
             "s3fs==2022.5.0", # a tool to mount aws bucket to local fs
+            "black==23.9.1",
+            "mypy==1.5.1",
+            "pytest==7.4.2"
         ]
     }
 )

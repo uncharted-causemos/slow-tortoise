@@ -308,7 +308,7 @@ def save_tile(tile, dest, model_id, run_id, feature, time_res, timestamp, writer
         body = str(tile)
     else:
         fpath += ".tile"
-        body = tile.SerializeToString() 
+        body = tile.SerializeToString()
 
     writer(body, fpath, dest)
 
