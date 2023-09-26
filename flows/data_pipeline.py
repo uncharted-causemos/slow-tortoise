@@ -1361,7 +1361,7 @@ if __name__ == "__main__" and LOCAL_RUN:
         flow.run(
             parameters=dict(
                 model_id="geo-test-data",
-                run_id="test-run-2",
+                run_id="test-run-1",
                 data_paths=[f"file://{Path(os.getcwd()).parent}/tests/data/geo-test-data.parquet"],
                 selected_output_tasks=[
                     "compute_global_timeseries",
@@ -1372,20 +1372,3 @@ if __name__ == "__main__" and LOCAL_RUN:
                 ],
             )
         )
-        # flow.run(
-        #     parameters=dict(
-        #         model_id="794312cf-636c-498a-9ff3-e59c5489ba43",
-        #         run_id="indicators",
-        #         data_paths=["https://jataware-world-modelers.s3.amazonaws.com/datasets/794312cf-636c-498a-9ff3-e59c5489ba43/794312cf-636c-498a-9ff3-e59c5489ba43.parquet.gzip"],
-        #         qualifier_map={
-        #             "Health Facility Access": ["date"]
-        #         },
-        #         selected_output_tasks=[
-        #             "compute_global_timeseries",
-        #             "compute_regional_stats",
-        #             "compute_regional_timeseries",
-        #             "compute_regional_aggregation",
-        #             "compute_tiles",
-        #         ],
-        #     )
-        # )
