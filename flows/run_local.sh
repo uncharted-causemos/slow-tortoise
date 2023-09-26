@@ -10,7 +10,4 @@ export WM_S3_DEFAULT_INDICATOR_BUCKET=test-indicators
 export WM_S3_DEFAULT_MODEL_BUCKET=test-models
 export WM_DATA_PIPELINE_IMAGE=docker.uncharted.software/worldmodeler/wm-data-pipeline:latest
 
-export WM_DASK_SCHEDULER="tcp://localhost:8786" # spawn local cluster eg. tcp://localhost:8786. Local dask cluster can be set up by running `dask scheduler` in a terminal and `dask worker tcp://127.0.0.1:8786` in a second terminal
-export WM_DEST_TYPE=s3 # set to 's3' to write to WM_S3_DEST_URL
-
 python3 data_pipeline.py

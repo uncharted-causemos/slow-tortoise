@@ -163,18 +163,10 @@ def run_spatial_aggregation(df, groupby, spatial_aggs, weight_column):
     return (df, agg_columns)
 
 
-def from_str_coord(coord: str) -> tuple[int, int, int]:
-    return cast(tuple[int, int, int], tuple(int(el) for el in coord.split("/")))
-
-
-def to_str_coord(coord: tuple[int, int, int]) -> str:
-    return f"{coord[0]}/{coord[1]}/{coord[2]}"  # z/x/y
-
-
 # More details on tile calculations https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames
 # Convert lat, long to tile coord
 # https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames#Python
-def deg2num(lat_deg: float, lon_deg: float, zoom: int):
+def deg2num(lat_deg: float, lon_deg: float, zoom: int) -> tuple[int, int, int]:
     lat_rad = math.radians(lat_deg)
     n = 2.0**zoom
     xtile = int((lon_deg + 180.0) / 360.0 * n)
@@ -182,29 +174,31 @@ def deg2num(lat_deg: float, lon_deg: float, zoom: int):
     return (zoom, xtile, ytile)
 
 
-def parent_tile(coord: str, l=1) -> str:
-    z, x, y = from_str_coord(coord)
-    return to_str_coord((z - l, math.floor(x / (2**l)), math.floor(y / (2**l))))
+def parent_tile(coord: tuple[int, int, int], l=1) -> tuple[int, int, int]:
+    z, x, y = coord
+    return (
+        z - l,
+        math.floor(x / (2**l)),
+        math.floor(y / (2**l)),
+    )
 
 
 # Return the tile that is leveldiff up of given tile. Eg. return (1, 0, 0) for (6, 0, 0) with leveldiff = 5
 # The main tile will contain up to 4^leveldiff subtiles with same level
-def tile_coord(coord: str, leveldiff=6):
-    z, x, y = from_str_coord(coord)
-    return to_str_coord(
-        (
-            z - leveldiff,
-            math.floor(x / math.pow(2, leveldiff)),
-            math.floor(y / math.pow(2, leveldiff)),
-        )
+def tile_coord(coord: tuple[int, int, int], leveldiff=6) -> tuple[int, int, int]:
+    z, x, y = coord
+    return (
+        z - leveldiff,
+        math.floor(x / math.pow(2, leveldiff)),
+        math.floor(y / math.pow(2, leveldiff)),
     )
 
 
 # project subtile coord into xy coord of the main tile grid (n*n grid where n*n = 4^zdiff)
 # https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames
-def project(subtilecoord, tilecoord):
-    z, x, y = from_str_coord(tilecoord)
-    sz, sx, sy = from_str_coord(subtilecoord)
+def project(subtilecoord: tuple[int, int, int], tilecoord: tuple[int, int, int]):
+    z, x, y = tilecoord
+    sz, sx, sy = subtilecoord
     zdiff = sz - z  # zoom level (prececsion) difference
 
     # Calculate the x and y of the coordinate of the subtile located at the most top left corner of the main tile
@@ -297,36 +291,26 @@ def write_to_file(body, path, dest):
             outfile.write(str(body))
 
 
-# save proto tile file
-def save_tile(tile, dest, model_id, run_id, time_res, writer):
-    if tile == "":
+# Save tile file
+def save_tile(tile, dest, model_id, run_id, feature, time_res, timestamp, writer, debug=False):
+    if tile == None:
         return None
-    tile = json.loads(tile)
-    if tile["content"] is None:
-        return None
-    z, x, y = from_str_coord(tile["coord"])
-    content = tile["content"]
 
-    path = f"{model_id}/{run_id}/{time_res}/{tile['feature']}/tiles/{tile['timestamp']}-{z}-{x}-{y}.tile"
-    writer(base64.b64decode(content), path, dest)
+    z = tile.coord.z
+    x = tile.coord.x
+    y = tile.coord.y
 
+    fpath = f"{model_id}/{run_id}/{time_res}/{feature}/tiles/{timestamp}-{z}-{x}-{y}"
+    body = ""
 
-# Saves the tile as string representation of the proto buff. This is used for testing and debugging tile files.
-def save_tile_to_str(tile, dest, model_id, run_id, time_res, writer):
-    if tile == "":
-        return None
-    tile = json.loads(tile)
-    if tile["content"] is None:
-        return None
-    tile_pb = tiles_pb2.Tile()
-    tile_pb.ParseFromString(base64.b64decode(tile["content"]))
+    if debug == True:
+        fpath += ".txt"
+        body = str(tile)
+    else:
+        fpath += ".tile"
+        body = tile.SerializeToString() 
 
-    z = tile_pb.coord.z
-    x = tile_pb.coord.x
-    y = tile_pb.coord.y
-
-    path = f"{model_id}/{run_id}/{time_res}/{tile['feature']}/tiles/{tile['timestamp']}-{z}-{x}-{y}.txt"
-    writer(str(tile_pb), path, dest)
+    writer(body, fpath, dest)
 
 
 # write timeseries to json in S3
@@ -430,45 +414,27 @@ def results_to_json(contents, dest, model_id, run_id, writer):
     writer(body, path, dest)
 
 
-def to_proto(df):
-    tile_coord = df["tile"].iloc[0]
-    z, x, y = from_str_coord(tile_coord)
+# transform given row to tile protobuf
+def to_proto(row):
+    z, x, y = row["tile"]
     if z < 0 or x < 0 or y < 0:
-        return ""
+        return None
 
-    # Protobuf tile object
     tile = tiles_pb2.Tile()
     tile.coord.z = z
     tile.coord.x = x
     tile.coord.y = y
 
     tile.bins.totalBins = int(
-        math.pow(4, from_str_coord(df["subtile"].iloc[0])[0] - z)
+        math.pow(4, row["subtile"][0][0] - z)
     )  # Total number of bins (subtile) for the tile
 
-    subtiles = df["subtile"].tolist()
-    s_sum_t_sum = df["s_sum_t_sum"].tolist()
-    s_sum_t_mean = df["s_sum_t_mean"].tolist()
-    s_count = df["s_count"].tolist()
-
-    for i in range(len(subtiles)):
-        bin_index = project(subtiles[i], tile_coord)
-        tile.bins.stats[bin_index].s_sum_t_sum += s_sum_t_sum[i]
-        tile.bins.stats[bin_index].s_sum_t_mean += s_sum_t_mean[i]
-        tile.bins.stats[bin_index].weight += s_count[i]
-
-    tile_content = tile.SerializeToString()
-    # To convert bytes to b64 encoded string value since json string doesn't support bytes
-    b64encoded_content = base64.b64encode(tile_content).decode("utf-8")
-
-    return json.dumps(
-        {
-            "feature": f"{df['feature'].iloc[0]}",
-            "timestamp": f"{df['timestamp'].iloc[0]}",
-            "coord": to_str_coord((z, x, y)),
-            "content": b64encoded_content,
-        }
-    )
+    for i in range(len(row["subtile"])):
+        bin_index = project(row["subtile"][i], row["tile"])
+        tile.bins.stats[bin_index].s_sum_t_sum += row["s_sum_t_sum"][i]
+        tile.bins.stats[bin_index].s_sum_t_mean += row["s_sum_t_mean"][i]
+        tile.bins.stats[bin_index].weight += row["s_count"][i]
+    return tile
 
 
 # convert given datetime object to monthly epoch timestamp
@@ -733,7 +699,7 @@ def compute_subtile_stats(
         tile_at_actual_level = subtile_df.apply(
             lambda x: parent_tile(x.subtile, level_idx),
             axis=1,
-            meta=(None, "string"),
+            meta=(None, "object"),
         )
         df = subtile_df.assign(subtile=tile_at_actual_level)
 

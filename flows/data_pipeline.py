@@ -19,12 +19,10 @@ from prefect.run_configs import DockerRun, KubernetesRun, LocalRun
 from flows.common import (
     run_temporal_aggregation,
     run_spatial_aggregation,
-    to_str_coord,
     deg2num,
     parent_tile,
     tile_coord,
     save_tile,
-    save_tile_to_str,
     save_timeseries_as_csv,
     save_regional_stats,
     save_regional_aggregation,
@@ -600,9 +598,9 @@ def subtile_aggregation(df, weight_column, skip=False):
 
     # Spatial aggregation to the hightest supported precision(subtile z) level
     stile = df.apply(
-        lambda x: to_str_coord(deg2num(x.lat, x.lng, MAX_SUBTILE_PRECISION)),
+        lambda x: deg2num(x.lat, x.lng, MAX_SUBTILE_PRECISION),
         axis=1,
-        meta=(None, "string"),
+        meta=(None, "object"),
     )
 
     temporal_df = df.assign(subtile=stile)
@@ -618,8 +616,6 @@ def subtile_aggregation(df, weight_column, skip=False):
 def compute_tiling(df, dest, time_res, model_id, run_id):
     print(f"\ncompute tiling dataframe length={len(df.index)}, npartitions={df.npartitions}\n")
 
-    save_tile_fn = save_tile_to_str if DEBUG_TILE else save_tile
-
     # Starting with level MAX_SUBTILE_PRECISION, work our way up until the subgrid offset
     for level_idx in range(MAX_SUBTILE_PRECISION + 1):
         actual_level = MAX_SUBTILE_PRECISION - level_idx
@@ -634,21 +630,33 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
         cdf["subtile"] = df.apply(
             lambda x: parent_tile(x.subtile, level_idx),
             axis=1,
-            meta=(None, "string"),
+            meta=(None, "object"),
         )
 
         tile_series = cdf.apply(
-            lambda x: tile_coord(x["subtile"], LEVEL_DIFF), axis=1, meta=(None, "string")
+            lambda x: tile_coord(x["subtile"], LEVEL_DIFF), axis=1, meta=(None, "object")
         )
         cdf = cdf.assign(tile=tile_series)
 
-        temp_df = cdf.groupby(["feature", "timestamp", "tile"]).apply(
-            lambda x: to_proto(x),
-            meta=(None, "string"),
+        temp_df = (
+            cdf.groupby(["feature", "timestamp", "tile"])
+            .agg(list)
+            .reset_index()
         )
         npart = int(min(math.ceil(len(temp_df.index) / 2), 500))
         temp_df = temp_df.repartition(npartitions=npart).apply(
-            lambda x: save_tile_fn(x, dest, model_id, run_id, time_res, WRITE_TYPES[DEST_TYPE]),
+            lambda x: save_tile(
+                to_proto(x),
+                dest,
+                model_id,
+                run_id,
+                x.feature,
+                time_res,
+                x.timestamp,
+                WRITE_TYPES[DEST_TYPE],
+                DEBUG_TILE, 
+            ),
+            axis=1,
             meta=(None, "object"),
         )
 
@@ -1349,29 +1357,12 @@ if __name__ == "__main__" and LOCAL_RUN:
         #     )
         # )
 
-        # # For testing tile data
-        # flow.run(
-        #     parameters=dict(
-        #         model_id="geo-test-data",
-        #         run_id="test-run-1",
-        #         data_paths=[f"file://{Path(os.getcwd()).parent}/tests/data/geo-test-data.parquet"],
-        #         selected_output_tasks=[
-        #             "compute_global_timeseries",
-        #             "compute_regional_stats",
-        #             "compute_regional_timeseries",
-        #             "compute_regional_aggregation",
-        #             "compute_tiles",
-        #         ],
-        #     )
-        # )
+        # For testing tile data
         flow.run(
             parameters=dict(
-                model_id="794312cf-636c-498a-9ff3-e59c5489ba43",
-                run_id="indicators",
-                data_paths=["https://jataware-world-modelers.s3.amazonaws.com/datasets/794312cf-636c-498a-9ff3-e59c5489ba43/794312cf-636c-498a-9ff3-e59c5489ba43.parquet.gzip"],
-                qualifier_map={
-                    "Health Facility Access": ["date"]
-                },
+                model_id="geo-test-data",
+                run_id="test-run-2",
+                data_paths=[f"file://{Path(os.getcwd()).parent}/tests/data/geo-test-data.parquet"],
                 selected_output_tasks=[
                     "compute_global_timeseries",
                     "compute_regional_stats",
@@ -1381,3 +1372,20 @@ if __name__ == "__main__" and LOCAL_RUN:
                 ],
             )
         )
+        # flow.run(
+        #     parameters=dict(
+        #         model_id="794312cf-636c-498a-9ff3-e59c5489ba43",
+        #         run_id="indicators",
+        #         data_paths=["https://jataware-world-modelers.s3.amazonaws.com/datasets/794312cf-636c-498a-9ff3-e59c5489ba43/794312cf-636c-498a-9ff3-e59c5489ba43.parquet.gzip"],
+        #         qualifier_map={
+        #             "Health Facility Access": ["date"]
+        #         },
+        #         selected_output_tasks=[
+        #             "compute_global_timeseries",
+        #             "compute_regional_stats",
+        #             "compute_regional_timeseries",
+        #             "compute_regional_aggregation",
+        #             "compute_tiles",
+        #         ],
+        #     )
+        # )
