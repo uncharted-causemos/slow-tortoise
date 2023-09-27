@@ -10,7 +10,7 @@ set -e
 #     HostName 10.65.18.82
 #     User centos
 
-source ./prod.env
+source ./dev.env
 
 SCRIPT_DIR="$(dirname "$0")"
 pushd $SCRIPT_DIR

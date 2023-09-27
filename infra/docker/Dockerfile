@@ -1,5 +1,9 @@
 # build on top of dask
-FROM docker-hub.uncharted.software/daskdev/dask:2023.9.0-py3.11
+FROM docker-hub.uncharted.software/daskdev/dask:2023.9.2-py3.11
+
+# Remove pyarrow optional dependency that comes with the base image to make sure that dask is not using the pyarrow engine by default
+# pyarrow data types with dask seems not matured enough and has issues in many cases. 
+RUN pip uninstall -y pyarrow
 
 # Install build tools required to build some of python packages 
 RUN apt-get update -y && apt-get install gcc g++ -y
@@ -17,6 +21,9 @@ COPY src/setup.py .
 COPY src/version.py .
 
 RUN pip install -e .
+
+# Set prefcet backend configuration to server
+RUN prefect backend server
 
 # copy over the flow source
 ADD src/flows ./flows

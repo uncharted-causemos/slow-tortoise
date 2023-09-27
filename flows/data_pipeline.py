@@ -19,12 +19,10 @@ from prefect.run_configs import DockerRun, KubernetesRun, LocalRun
 from flows.common import (
     run_temporal_aggregation,
     run_spatial_aggregation,
-    to_str_coord,
     deg2num,
     parent_tile,
     tile_coord,
     save_tile,
-    save_tile_to_str,
     save_timeseries_as_csv,
     save_regional_stats,
     save_regional_aggregation,
@@ -159,8 +157,7 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
     if "s3://" in data_paths[0]:
         df = dd.read_parquet(
             data_paths,
-            engine="pyarrow",
-            dtype_backend="pyarrow",
+            engine="fastparquet",
             storage_options={
                 "anon": False,
                 "use_ssl": False,
@@ -185,8 +182,7 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
         # Note: dask read_parquet doesn't work for gzip files. So here is the work around using pandas read_parquet
         # Read each parquet file in separately, and ensure that all columns match before joining together
         delayed_dfs = [
-            delayed(pd.read_parquet)(path, engine="pyarrow", dtype_backend="pyarrow")
-            for path in numeric_files
+            delayed(pd.read_parquet)(path, engine="fastparquet") for path in numeric_files
         ]
         dfs: List[pd.DataFrame] = [dd.from_delayed(d) for d in delayed_dfs]
 
@@ -205,10 +201,10 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
                 cols_to_add = list(all_extra_cols - extra_cols[i])
                 for col in cols_to_add:
                     dfs[i][col] = ""
-                    dfs[i] = dfs[i].astype({col: "string[pyarrow]"})
+                    dfs[i] = dfs[i].astype({col: "string"})
 
                 # Force the new columns as well as 'feature' to type "str"
-                type_dict = {col: "string[pyarrow]" for col in cols_to_add + ["feature"]}
+                type_dict = {col: "string" for col in cols_to_add + ["feature"]}
                 dfs[i] = dfs[i].astype(type_dict)
 
                 # Create a mapping of REGION_LEVELS to their actual types
@@ -223,9 +219,8 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
                     cols_to_retype.append(col)
 
             for i in range(len(dfs)):
-                dfs[i][cols_to_retype] = (
-                    dfs[i][cols_to_retype].fillna(value="None", axis=1).astype("string[pyarrow]")
-                )
+                for col in cols_to_retype:
+                    dfs[i][col] = dfs[i][col].fillna(value="None").astype("string")
 
             df = dd.concat(dfs, ignore_unknown_divisions=True).repartition(
                 npartitions=DEFAULT_PARTITIONS
@@ -246,7 +241,7 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
     else:
         df["lat"] = dd.to_numeric(df["lat"], errors="coerce")
         df["lng"] = dd.to_numeric(df["lng"], errors="coerce")
-        df = df.astype({"lat": "float64[pyarrow]", "lng": "float64[pyarrow]"})
+        df = df.astype({"lat": "float64", "lng": "float64"})
 
     num_rows = len(df.index)
     print(f"\nRead {num_rows} rows of data\n")
@@ -254,7 +249,7 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
         raise FAIL("DataFrame has no rows")
 
     # Ensure types
-    df = df.astype({"value": "float64[pyarrow]"})
+    df = df.astype({"value": "float64"})
     return (df, num_rows)
 
 
@@ -338,7 +333,7 @@ def save_raw_data(df, dest, time_res, model_id, run_id, raw_count_threshold):
 def validate_and_fix(df, weight_column, fill_timestamp) -> Tuple[dd.DataFrame, str, int, int, int]:
     print(f"\nValidate and fix dataframe length={len(df.index)}, npartitions={df.npartitions}\n")
 
-    # Drop a column if all values are null
+    # Drop a column if all values are missing
     exclude_columns = set(["timestamp", "lat", "lng", "feature", "value"])
     null_cols = get_null_or_empty_cols(df)
     cols_to_drop = list(null_cols - exclude_columns)
@@ -350,9 +345,10 @@ def validate_and_fix(df, weight_column, fill_timestamp) -> Tuple[dd.DataFrame, s
     # In the remaining columns, fill all null values with "None"
     # TODO: When adding support for different qualifier roles, we will need to fill numeric roles with something else
     remaining_columns = list(set(df.columns.to_list()) - exclude_columns - null_cols)
-    df[remaining_columns] = (
-        df[remaining_columns].fillna(value="None", axis=1).astype("string[pyarrow]")
-    )
+    # Note: 'df[remaining_columns] = df[remaining_columns].fillna(value="None", axis=1)' seems to have performance issue after upgrading to pandas > 2  and pyarrow >= 13.
+    # Instead of filling null value for all columns at the same time, iterating through one column at a time seems to solve the issue.
+    for col in remaining_columns:
+        df[col] = df[col].fillna(value="None").astype("string")
 
     # Remove characters that Minio can't handle
     for col in REGION_LEVELS:
@@ -363,7 +359,7 @@ def validate_and_fix(df, weight_column, fill_timestamp) -> Tuple[dd.DataFrame, s
         weight_column = ""  # rest of the checks in the script will use this
     elif weight_column != "":
         df[weight_column] = dd.to_numeric(df[weight_column], errors="coerce")
-        df = df.fillna(value={weight_column: 0}).astype({weight_column: "float64[pyarrow]"})
+        df = df.fillna(value={weight_column: 0}).astype({weight_column: "float64"})
 
     # Fill missing timestamp values (0 by default)
     num_missing_ts = int(df["timestamp"].isna().sum().compute().item())
@@ -474,7 +470,7 @@ def compute_regional_stats(df, dest, time_res, model_id, run_id, weight_column, 
                 REGION_LEVELS[region_level],
                 WRITE_TYPES[DEST_TYPE],
             ),
-            meta=(None, "string[pyarrow]"),
+            meta=(None, "object"),
         )
         regional_df.compute()
 
@@ -585,7 +581,7 @@ def compute_regional_aggregation(
                         qualifier_col,
                         WRITE_TYPES[DEST_TYPE],
                     ),
-                    meta=(None, "string[pyarrow]"),
+                    meta=(None, "object"),
                 )
             )
             regional_df.compute()
@@ -603,9 +599,9 @@ def subtile_aggregation(df, weight_column, skip=False):
 
     # Spatial aggregation to the hightest supported precision(subtile z) level
     stile = df.apply(
-        lambda x: to_str_coord(deg2num(x.lat, x.lng, MAX_SUBTILE_PRECISION)),
+        lambda x: deg2num(x.lat, x.lng, MAX_SUBTILE_PRECISION),
         axis=1,
-        meta=(None, "string[pyarrow]"),
+        meta=(None, "object"),
     )
 
     temporal_df = df.assign(subtile=stile)
@@ -621,8 +617,6 @@ def subtile_aggregation(df, weight_column, skip=False):
 def compute_tiling(df, dest, time_res, model_id, run_id):
     print(f"\ncompute tiling dataframe length={len(df.index)}, npartitions={df.npartitions}\n")
 
-    save_tile_fn = save_tile_to_str if DEBUG_TILE else save_tile
-
     # Starting with level MAX_SUBTILE_PRECISION, work our way up until the subgrid offset
     for level_idx in range(MAX_SUBTILE_PRECISION + 1):
         actual_level = MAX_SUBTILE_PRECISION - level_idx
@@ -637,22 +631,30 @@ def compute_tiling(df, dest, time_res, model_id, run_id):
         cdf["subtile"] = df.apply(
             lambda x: parent_tile(x.subtile, level_idx),
             axis=1,
-            meta=(None, "string[pyarrow]"),
+            meta=(None, "object"),
         )
 
         tile_series = cdf.apply(
-            lambda x: tile_coord(x["subtile"], LEVEL_DIFF), axis=1, meta=(None, "string[pyarrow]")
+            lambda x: tile_coord(x["subtile"], LEVEL_DIFF), axis=1, meta=(None, "object")
         )
         cdf = cdf.assign(tile=tile_series)
 
-        temp_df = cdf.groupby(["feature", "timestamp", "tile"]).apply(
-            lambda x: to_proto(x),
-            meta=(None, "string[pyarrow]"),
-        )
+        temp_df = cdf.groupby(["feature", "timestamp", "tile"]).agg(list).reset_index()
         npart = int(min(math.ceil(len(temp_df.index) / 2), 500))
         temp_df = temp_df.repartition(npartitions=npart).apply(
-            lambda x: save_tile_fn(x, dest, model_id, run_id, time_res, WRITE_TYPES[DEST_TYPE]),
-            meta=(None, "string[pyarrow]"),
+            lambda x: save_tile(
+                to_proto(x),
+                dest,
+                model_id,
+                run_id,
+                x.feature,
+                time_res,
+                x.timestamp,
+                WRITE_TYPES[DEST_TYPE],
+                DEBUG_TILE,
+            ),
+            axis=1,
+            meta=(None, "object"),
         )
 
         temp_df.compute()
@@ -758,10 +760,11 @@ def record_results(
 def record_region_lists(df, dest, model_id, run_id) -> Tuple[list, list]:
     print(f"\nrecord region list dataframe length={len(df.index)}, npartitions={df.npartitions}\n")
 
-    def cols_to_lists(df, id_cols, feature):
+    def cols_to_lists(df, id_cols):
+        feature = df["feature"].values[0]
         lists = {region: [] for region in REGION_LEVELS}
         for index, id_col in enumerate(id_cols):
-            lists[REGION_LEVELS[index]] = df[id_col].unique().tolist()
+            lists[REGION_LEVELS[index]] = df[id_col].unique().dropna().tolist()
         info_to_json(
             lists,
             dest,
@@ -788,17 +791,17 @@ def record_region_lists(df, dest, model_id, run_id) -> Tuple[list, list]:
     for index, id_col in enumerate(id_cols):
         save_df[id_col] = join_region_columns(save_df, region_cols, index)
 
-    features = (
+    features_series = (
         save_df[["feature"] + id_cols]
         .groupby(["feature"])
         .apply(
-            lambda x: cols_to_lists(x, id_cols, x["feature"].values[0]),
-            meta=(None, "string[pyarrow]"),
+            lambda x: cols_to_lists(x, id_cols),
+            meta=(None, "string"),
         )
     )
 
     # As a side effect, return the regions available, and the list of features
-    feature_list = features.compute().unique().tolist()
+    feature_list = features_series.unique().dropna().compute().tolist()
     return region_cols, feature_list
 
 
@@ -815,7 +818,7 @@ def record_qualifier_lists(df, dest, model_id, run_id, qualifiers, thresholds):
             "counts": {},
         }
         for col in qualifier_columns:
-            values = df[col].unique().tolist()
+            values = df[col].unique().dropna().tolist()
             qualifier_counts["counts"][col] = len(values)
 
             # Write one list of qualifier values per file
@@ -847,7 +850,7 @@ def record_qualifier_lists(df, dest, model_id, run_id, qualifiers, thresholds):
     counts = (
         save_df[["feature"] + qualifier_columns]
         .groupby(["feature"])
-        .apply(lambda x: save_qualifier_lists(x), meta=(None, "string[pyarrow]"))
+        .apply(lambda x: save_qualifier_lists(x), meta=(None, "object"))
     )
     pdf_counts = counts.compute()
     json_str = pdf_counts.to_json(orient="index")
