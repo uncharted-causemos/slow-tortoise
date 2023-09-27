@@ -12,7 +12,6 @@ source ./dev.env
 #   AWS_SECRET_ACCESS_KEY 
 #
 
-PROJECT="Production"
 # Create a docker container with the data pipeline image and run prefect register command with the flow codes inside the container.
 cid=$(docker run -itd -e PREFECT__SERVER__HOST -e WM_DATA_PIPELINE_IMAGE -e WM_FLOW_STORAGE_S3_BUCKET_NAME -e WM_RUN_CONFIG_TYPE $WM_DATA_PIPELINE_IMAGE /bin/sh)
 
