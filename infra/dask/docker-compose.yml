@@ -2,7 +2,7 @@ version: "3.7"
 
 services:
   scheduler:
-    image: docker.uncharted.software/worldmodeler/wm-data-pipeline:latest
+    image: docker.uncharted.software/worldmodeler/wm-data-pipeline:dev
     logging:
       driver: "json-file"
       options:
@@ -18,7 +18,7 @@ services:
     command: ["dask-scheduler"]
 
   worker:
-    image: docker.uncharted.software/worldmodeler/wm-data-pipeline:latest
+    image: docker.uncharted.software/worldmodeler/wm-data-pipeline:dev
     deploy:
       replicas: 3
     logging:
