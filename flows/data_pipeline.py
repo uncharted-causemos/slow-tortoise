@@ -68,7 +68,7 @@ DEBUG_TILE = os.getenv("WM_DEBUG_TILE", "False").lower() in TRUE_TOKENS
 
 # AWS s3 storage information
 WM_FLOW_STORAGE_S3_BUCKET_NAME = os.getenv(
-    "WM_FLOW_STORAGE_S3_BUCKET_NAME", "causemos-prod-prefect-flows-dev"
+    "WM_FLOW_STORAGE_S3_BUCKET_NAME", "causemos-dev-prefect-flows"
 )
 # default base-image, used by the agent to run the flow script inside the image.
 WM_DATA_PIPELINE_IMAGE = os.getenv(
@@ -87,10 +87,10 @@ AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 # Custom s3 destination. If WM_S3_DEST_URL is not empty, the pipeline will use following information to connect s3 to write output to,
 # otherwise it will use default aws s3 with above AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
 # If you want to write the pipeline output to custom location such as custom minio storage, provide following information
-WM_S3_DEST_URL = os.getenv("WM_S3_DEST_URL", "http://10.65.18.73:9000" if LOCAL_RUN else None)
-WM_S3_DEST_REGION = os.getenv("WM_S3_DEST_REGION", "us-east-1")
+WM_S3_DEST_URL = os.getenv("WM_S3_DEST_URL", None)
 WM_S3_DEST_KEY = os.getenv("WM_S3_DEST_KEY")
 WM_S3_DEST_SECRET = os.getenv("WM_S3_DEST_SECRET")
+WM_S3_DEST_REGION = "us-east-1"
 # ================================================================
 
 # Following env vars provide the defaults assigned to the prefect flow parameters.  The parameters
@@ -896,7 +896,14 @@ with Flow(FLOW_NAME) as flow:
     flow.storage = S3(
         bucket=WM_FLOW_STORAGE_S3_BUCKET_NAME,
         stored_as_script=True,
+        client_options= None if not WM_S3_DEST_URL else {
+            "endpoint_url": WM_S3_DEST_URL,
+            "region_name": WM_S3_DEST_REGION,
+            "aws_access_key_id": WM_S3_DEST_KEY,
+            "aws_secret_access_key": WM_S3_DEST_SECRET,
+        }
     )
+
     # Set flow run configuration. Each RunConfig type has a corresponding Prefect Agent.
     # Corresponding WM_RUN_CONFIG_TYPE environment variable must be provided by the agent with same type.
     # For example, with docker agent, set RUN_CONFIG_TYPE to 'docker' and with kubernetes agent, set RUN_CONFIG_TYPE to 'kubernetes'
@@ -907,7 +914,7 @@ with Flow(FLOW_NAME) as flow:
     elif WM_RUN_CONFIG_TYPE == "kubernetes":
         flow.run_config = KubernetesRun(image=WM_DATA_PIPELINE_IMAGE)
 
-    # setup the flow executor - if no adress is set rely on a local dask instance
+    # setup the flow executor - if no address is set rely on a local dask instance
     if not WM_DASK_SCHEDULER:
         flow.executor = LocalDaskExecutor()
     else:

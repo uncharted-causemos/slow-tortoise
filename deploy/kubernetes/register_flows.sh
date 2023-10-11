@@ -2,9 +2,12 @@
 if [ "$1" == "-p" ]; then
   source ./prod.env
   echo "Registering flows for proudction environmnet..."
-else
+elif [ "$1" == "-s" ]; then
   source ./staging.env
   echo "Registering flows for staging environmnet..."
+else
+  source ./local.env
+  echo "Registering flows for local environmnet..."
 fi
 
 # Environment variables needed when registering prefect flow. These variable are used to configure flow.storage and flow.run_config
@@ -20,10 +23,11 @@ fi
 #
 
 # Create a docker container with the data pipeline image and run prefect register command with the flow codes inside the container.
-cid=$(docker run -itd -e PREFECT__SERVER__HOST -e PREFECT__SERVER__PORT -e WM_DATA_PIPELINE_IMAGE -e WM_FLOW_STORAGE_S3_BUCKET_NAME -e WM_RUN_CONFIG_TYPE $WM_DATA_PIPELINE_IMAGE /bin/sh)
+cid=$(docker run -itd -e PREFECT__SERVER__HOST -e PREFECT__SERVER__PORT -e WM_DATA_PIPELINE_IMAGE -e WM_FLOW_STORAGE_S3_BUCKET_NAME -e WM_RUN_CONFIG_TYPE -e WM_S3_DEST_URL -e WM_S3_DEST_KEY -e WM_S3_DEST_SECRET $WM_DATA_PIPELINE_IMAGE /bin/sh)
 # copy aws credetial to the container
 docker cp ~/.aws $cid:/root/.aws
 
+docker exec $cid prefect create project --skip-if-exists $PROJECT
 docker exec $cid prefect register --project="$PROJECT" --label $WM_RUN_CONFIG_TYPE --path ./flows/data_pipeline.py
 
 # Remove the container
