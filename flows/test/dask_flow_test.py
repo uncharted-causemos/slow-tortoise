@@ -58,7 +58,7 @@ with Flow("dask_flow") as flow:
     flow.storage = S3(
         bucket=WM_FLOW_STORAGE_S3_BUCKET_NAME,
         stored_as_script=True,
-        client_options=None # type: ignore
+        client_options=None  # type: ignore
         if not WM_S3_DEST_URL
         else {
             "endpoint_url": WM_S3_DEST_URL,
