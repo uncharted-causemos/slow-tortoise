@@ -897,7 +897,7 @@ with Flow(FLOW_NAME) as flow:
         bucket=WM_FLOW_STORAGE_S3_BUCKET_NAME,
         stored_as_script=True,
         client_options=None
-        if not WM_S3_DEST_URL
+        if not WM_S3_DEST_URL # type: ignore
         else {
             "endpoint_url": WM_S3_DEST_URL,
             "region_name": WM_S3_DEST_REGION,
