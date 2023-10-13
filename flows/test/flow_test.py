@@ -37,12 +37,14 @@ with Flow("basic_flow") as flow:
     flow.storage = S3(
         bucket=WM_FLOW_STORAGE_S3_BUCKET_NAME,
         stored_as_script=True,
-        client_options= None if not WM_S3_DEST_URL else {
+        client_options=None
+        if not WM_S3_DEST_URL
+        else {
             "endpoint_url": WM_S3_DEST_URL,
             "region_name": WM_S3_DEST_REGION,
             "aws_access_key_id": WM_S3_DEST_KEY,
             "aws_secret_access_key": WM_S3_DEST_SECRET,
-        }
+        },
     )
 
     # Set flow run configuration. Each RunConfig type has a corresponding Prefect Agent.
