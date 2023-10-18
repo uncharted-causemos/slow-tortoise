@@ -15,7 +15,7 @@ source ./dev.env
 #   WM_S3_DEST_SECRET - Secret for the custom aws s3 url 
 
 # Create a docker container with the data pipeline image and run prefect register command with the flow codes inside the container.
-cid=$(docker run -itd -e PREFECT__SERVER__HOST -e WM_DATA_PIPELINE_IMAGE -e WM_FLOW_STORAGE_S3_BUCKET_NAME -e WM_RUN_CONFIG_TYPE -e WM_S3_DEST_URL -e WM_S3_DEST_KEY -e WM_S3_DEST_SECRET$WM_DATA_PIPELINE_IMAGE /bin/sh)
+cid=$(docker run -itd -e PREFECT__SERVER__HOST -e WM_DATA_PIPELINE_IMAGE -e WM_FLOW_STORAGE_S3_BUCKET_NAME -e WM_RUN_CONFIG_TYPE -e WM_S3_DEST_URL -e WM_S3_DEST_KEY -e WM_S3_DEST_SECRET $WM_DATA_PIPELINE_IMAGE /bin/sh)
 
 docker cp ~/.aws $cid:/root/.aws # copy aws credetial to the container
 docker exec $cid prefect create project --skip-if-exists $PROJECT
