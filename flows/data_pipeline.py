@@ -80,7 +80,7 @@ WM_RUN_CONFIG_TYPE = os.getenv("WM_RUN_CONFIG_TYPE", "docker")  # docker, local,
 ## ===== These environment variables are run time variables set by the agent =======
 # address of the dask scheduler to connect to - set this to empty to spawn a local
 # dask cluster
-WM_DASK_SCHEDULER = os.getenv("WM_DASK_SCHEDULER", "10.65.18.58:8786")
+WM_DASK_SCHEDULER = os.getenv("WM_DASK_SCHEDULER")
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 
