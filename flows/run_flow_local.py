@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 from prefect.utilities.debug import raise_on_exception
-from data_pipeline import flow
+from flows.data_pipeline import flow
 
 # Parameters for test datasets
 parameter_sets = [

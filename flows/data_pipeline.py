@@ -241,7 +241,7 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
 
 def get_null_or_empty_cols(df):
     # replace blank values (white space) with NaN
-    ndf = df.replace(r'^\s+$', np.nan, regex=True)
+    ndf = df.replace(r"^\s+$", np.nan, regex=True)
     return set(ndf.columns[ndf.isna().all()])
 
 
@@ -326,9 +326,8 @@ def validate_and_fix(df, weight_column, fill_timestamp) -> Tuple[dd.DataFrame, s
     df = df.drop(columns=cols_to_drop)
     print(f"Dropping following columns due to missing data: {cols_to_drop}")
 
-
     # Ensure lat and lng columns are numeric
-    if 'lat' in df.columns and 'lng' in df.columns:
+    if "lat" in df.columns and "lng" in df.columns:
         df["lat"] = dd.to_numeric(df["lat"], errors="coerce")
         df["lng"] = dd.to_numeric(df["lng"], errors="coerce")
         df = df.astype({"lat": "float64", "lng": "float64"})
@@ -338,7 +337,9 @@ def validate_and_fix(df, weight_column, fill_timestamp) -> Tuple[dd.DataFrame, s
 
     # In the remaining columns, fill all null values with "None"
     # TODO: When adding support for different qualifier roles, we will need to fill numeric roles with something else
-    remaining_columns = list(set(df.columns.to_list()) - exclude_columns - null_cols - set(LAT_LONG_COLUMNS))
+    remaining_columns = list(
+        set(df.columns.to_list()) - exclude_columns - null_cols - set(LAT_LONG_COLUMNS)
+    )
     # Note: 'df[remaining_columns] = df[remaining_columns].fillna(value="None", axis=1)' seems to have performance issue after upgrading to pandas > 2  and pyarrow >= 13.
     # Instead of filling null value for all columns at the same time, iterating through one column at a time seems to solve the issue.
     for col in remaining_columns:
