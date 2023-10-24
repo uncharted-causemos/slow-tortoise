@@ -27,9 +27,9 @@ WM_RUN_CONFIG_TYPE = os.getenv("WM_RUN_CONFIG_TYPE", "")  # docker, local, kuber
 # otherwise it will use default aws s3 with above AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
 # If you want to write the pipeline output to custom location such as custom minio storage, provide following information
 WM_S3_DEST_URL = os.getenv("WM_S3_DEST_URL", None)
-WM_S3_DEST_REGION = os.getenv("WM_S3_DEST_REGION", "us-east-1")
 WM_S3_DEST_KEY = os.getenv("WM_S3_DEST_KEY")
 WM_S3_DEST_SECRET = os.getenv("WM_S3_DEST_SECRET")
+WM_S3_DEST_REGION = "us-east-1"
 
 with Flow("basic_flow") as flow:
     # The flow code will be stored in and retrieved from following s3 bucket
