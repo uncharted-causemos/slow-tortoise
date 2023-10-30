@@ -1,8 +1,10 @@
 #!/bin/bash
 if [ "$1" == "-p" ]; then
   source ./prod.env
-else
+elif [ "$1" == "-s" ]; then
   source ./staging.env
+else
+  source ./local.env
 fi
 echo "Building docker image $WM_DATA_PIPELINE_IMAGE..."
 
