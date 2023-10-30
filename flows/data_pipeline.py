@@ -1,6 +1,5 @@
 from dask import delayed
 from typing import Tuple, List
-from pathlib import Path
 from enum import Enum
 import dask.dataframe as dd
 import pandas as pd
@@ -55,8 +54,6 @@ WRITE_TYPES = {
 
 TRUE_TOKENS = ("true", "1", "t")
 
-# run the flow locally without the prefect agent and server
-LOCAL_RUN = os.getenv("WM_LOCAL", "False").lower() in TRUE_TOKENS
 # write to the local file system - mostly to support testing on local run
 DEST_TYPE = os.getenv("WM_DEST_TYPE", "s3").lower()
 # write tile file as csv instead of binary for debugging
@@ -95,7 +92,7 @@ WM_S3_DEST_REGION = "us-east-1"
 
 # Following env vars provide the defaults assigned to the prefect flow parameters.  The parameters
 # are normally set when a run is scheduled in the deployment environment, but when we do a local
-# run (WM_LOCAL set to true) the parameters will not be specified, and the default values are applied.
+# run the parameters will not be specified, and the default values are applied.
 # Updating these env vars will therefore allow us to set local dev values.
 #
 # TODO: Safer to set these to reasonable dev values (or leave them empty) so that nothing is accidentally overwritten?
@@ -232,17 +229,6 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
     print("Top N-rows")
     print(df.head())
 
-    # Remove lat/lng columns if they are null
-    ll_df = df[LAT_LONG_COLUMNS]
-    null_cols = get_null_or_empty_cols(ll_df)
-    if len(set(LAT_LONG_COLUMNS) & null_cols) > 0:
-        print("No lat/long data. Dropping columns.")
-        df = df.drop(columns=LAT_LONG_COLUMNS)
-    else:
-        df["lat"] = dd.to_numeric(df["lat"], errors="coerce")
-        df["lng"] = dd.to_numeric(df["lng"], errors="coerce")
-        df = df.astype({"lat": "float64", "lng": "float64"})
-
     num_rows = len(df.index)
     print(f"\nRead {num_rows} rows of data\n")
     if num_rows == 0:
@@ -254,9 +240,9 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
 
 
 def get_null_or_empty_cols(df):
-    null_cols = set(df.columns[df.isnull().all()])
-    empty_cols = set(df.columns[df.eq("").all()])
-    return null_cols | empty_cols
+    # replace blank values (white space) with NaN
+    ndf = df.replace(r"^\s+$", np.nan, regex=True)
+    return set(ndf.columns[ndf.isna().all()])
 
 
 @task(log_stdout=True)
@@ -334,17 +320,26 @@ def validate_and_fix(df, weight_column, fill_timestamp) -> Tuple[dd.DataFrame, s
     print(f"\nValidate and fix dataframe length={len(df.index)}, npartitions={df.npartitions}\n")
 
     # Drop a column if all values are missing
-    exclude_columns = set(["timestamp", "lat", "lng", "feature", "value"])
+    exclude_columns = set(["timestamp", "feature", "value"])
     null_cols = get_null_or_empty_cols(df)
     cols_to_drop = list(null_cols - exclude_columns)
     df = df.drop(columns=cols_to_drop)
+    print(f"Dropping following columns due to missing data: {cols_to_drop}")
+
+    # Ensure lat and lng columns are numeric
+    if "lat" in df.columns and "lng" in df.columns:
+        df["lat"] = dd.to_numeric(df["lat"], errors="coerce")
+        df["lng"] = dd.to_numeric(df["lng"], errors="coerce")
+        df = df.astype({"lat": "float64", "lng": "float64"})
 
     # Remove infinities because they cause problems in some aggregation types (e.g. mean)
     df = df.replace({"value": [np.inf, -np.inf]}, np.nan)
 
     # In the remaining columns, fill all null values with "None"
     # TODO: When adding support for different qualifier roles, we will need to fill numeric roles with something else
-    remaining_columns = list(set(df.columns.to_list()) - exclude_columns - null_cols)
+    remaining_columns = list(
+        set(df.columns.to_list()) - exclude_columns - null_cols - set(LAT_LONG_COLUMNS)
+    )
     # Note: 'df[remaining_columns] = df[remaining_columns].fillna(value="None", axis=1)' seems to have performance issue after upgrading to pandas > 2  and pyarrow >= 13.
     # Instead of filling null value for all columns at the same time, iterating through one column at a time seems to solve the issue.
     for col in remaining_columns:
@@ -974,18 +969,15 @@ with Flow(FLOW_NAME) as flow:
         }
 
     (raw_df, num_rows) = read_data(source, data_paths)
-
-    # ==== Set parameters that determine which tasks should run based on the type of data we're ingesting ====
-    (dest, compute_monthly, compute_annual, compute_summary, skip_task) = configure_pipeline(
-        raw_df, dest, indicator_bucket, model_bucket, is_indicator, selected_output_tasks
-    )
-
-    # ==== Save raw data =====
-    rows_per_feature = save_raw_data(raw_df, dest, "raw", model_id, run_id, raw_count_threshold)
-
     (df, weight_column, num_missing_ts, num_invalid_ts, num_missing_val) = validate_and_fix(
         raw_df, weight_column, fill_timestamp
     )
+    # ==== Set parameters that determine which tasks should run based on the type of data we're ingesting ====
+    (dest, compute_monthly, compute_annual, compute_summary, skip_task) = configure_pipeline(
+        df, dest, indicator_bucket, model_bucket, is_indicator, selected_output_tasks
+    )
+    # ==== Save raw data =====
+    rows_per_feature = save_raw_data(raw_df, dest, "raw", model_id, run_id, raw_count_threshold)
 
     qualifier_columns = get_qualifier_columns(df, weight_column)
 
@@ -1178,203 +1170,3 @@ with Flow(FLOW_NAME) as flow:
     # TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful.
     # Then same data can be used for producing tiles and also used for doing regional aggregation and other computation in other tasks.
     # In that way we can have one jupyter notbook or python module for each tasks
-
-# If this is a local run, just execute the flow in process.  Setting WM_DASK_SCHEDULER="" will result in a local cluster
-# being run as well.
-if __name__ == "__main__" and LOCAL_RUN:
-    from prefect.utilities.debug import raise_on_exception
-
-    with raise_on_exception():
-        # flow.run(
-        #     parameters=dict(  # Maxhop
-        #         model_id="maxhop-v0.2",
-        #         run_id="4675d89d-904c-466f-a588-354c047ecf72",
-        #         data_paths=[
-        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results/4675d89d-904c-466f-a588-354c047ecf72/4675d89d-904c-466f-a588-354c047ecf72_maxhop-v0.2.parquet.gzip"
-        #         ],
-        #     )
-        # )
-        # flow.run( # Test qualifiers
-        #     parameters=dict(
-        #         is_indicator=True,
-        #         qualifier_map={
-        #             "fatalities": [
-        #                 "event_type",
-        #                 "sub_event_type",
-        #                 "source_scale",
-        #                 "country_non_primary",
-        #                 "admin1_non_primary",
-        #             ]
-        #         },
-        #         model_id="_qualifier-test",
-        #         run_id="indicator",
-        #         data_paths=["s3://test/_qualifier-test.bin"],
-        #     )
-        # )
-        # flow.run( # Test combining multiple parquet files with different columns
-        #     parameters={
-        #         "data_paths": [
-        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/9d7db850-0abe-486f-8979-b1e9ad2ef6ad/9d7db850-0abe-486f-8979-b1e9ad2ef6ad_7b1ceeb4-95a3-4bfd-b7cd-e2a89391742f.1.parquet.gzip",
-        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/9d7db850-0abe-486f-8979-b1e9ad2ef6ad/9d7db850-0abe-486f-8979-b1e9ad2ef6ad_7b1ceeb4-95a3-4bfd-b7cd-e2a89391742f.2.parquet.gzip"
-        #             ],
-        #         "is_indicator": False,
-        #         "model_id": "7b1ceeb4-95a3-4bfd-b7cd-e2a89391742f",
-        #         "qualifier_map": {
-        #             "yield_loss_risk": ["longitude", "latitude", "time"],
-        #             "harvested_area_at_risk": ["NameCrop", "NameIrrigation", "NameCategory"]
-        #         },
-        #         "qualifier_thresholds": {
-        #             "max_count": 10000,
-        #             "regional_timeseries_count": 100,
-        #             "regional_timeseries_max_level": 1
-        #         },
-        #         "run_id": "9d7db850-0abe-486f-8979-b1e9ad2ef6ad"
-        #     }
-        # )
-        # flow.run(  # Test combining multiple parquet files with different columns
-        #     parameters={
-        #         "data_paths": [
-        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/f2818712-09f7-49c6-b920-ea21c764d1c7/f2818712-09f7-49c6-b920-ea21c764d1c7_84fd427f-3a7d-473f-aa25-0c0a150ca216.3.parquet.gzip",
-        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/f2818712-09f7-49c6-b920-ea21c764d1c7/f2818712-09f7-49c6-b920-ea21c764d1c7_84fd427f-3a7d-473f-aa25-0c0a150ca216.2.parquet.gzip",
-        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/f2818712-09f7-49c6-b920-ea21c764d1c7/f2818712-09f7-49c6-b920-ea21c764d1c7_84fd427f-3a7d-473f-aa25-0c0a150ca216.1.parquet.gzip",
-        #         ],
-        #         "is_indicator": False,
-        #         "model_id": "84fd427f-3a7d-473f-aa25-0c0a150ca216",
-        #         "qualifier_map": {
-        #             "export [kcal]": [],
-        #             "import [kcal]": [],
-        #             "supply [kcal]": [],
-        #             "Production [mt]": ["Year"],
-        #             "Consumption [mt]": ["Year"],
-        #             "Ending_stock [mt]": ["Year"],
-        #             "production [kcal]": [],
-        #             "World market_price [US$/mt]": ["Year"],
-        #             "export per capita [kcal pc]": [],
-        #             "import per capita [kcal pc]": [],
-        #             "supply per capita [kcal pc]": [],
-        #             "production change per capita [kcal pc]": [],
-        #         },
-        #         "qualifier_thresholds": {
-        #             "max_count": 10000,
-        #             "regional_timeseries_count": 100,
-        #             "regional_timeseries_max_level": 1,
-        #         },
-        #         "run_id": "f2818712-09f7-49c6-b920-ea21c764d1c7",
-        #     }
-        # )
-        # flow.run(
-        #     parameters=dict(  # Invalid timestamps
-        #         model_id="087c3e5a-cd3d-4ebc-bc5e-e13a4654005c",
-        #         run_id="9e1100d5-06e8-48b6-baea-56b3b820f82d",
-        #         data_paths=[
-        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/9e1100d5-06e8-48b6-baea-56b3b820f82d/9e1100d5-06e8-48b6-baea-56b3b820f82d_087c3e5a-cd3d-4ebc-bc5e-e13a4654005c.1.parquet.gzip"
-        #         ],
-        #     )
-        # )
-        # flow.run( # LPJmL
-        #     parameters=dict(
-        #         is_indicator=True,
-        #         qualifier_map={},
-        #         model_id="_hierarchy-test",
-        #         run_id="indicator",
-        #         data_paths=["s3://test/_hierarchy-test.bin"],
-        #     )
-        # )
-        # flow.run(  # For testing weight column
-        #     parameters=dict(  # Weights small
-        #         qualifier_map={"sam_rate": ["qual_1"], "gam_rate": ["qual_1"]},
-        #         weight_column="weights",
-        #         model_id="_weight-test-small",
-        #         run_id="test-run-1",
-        #         data_paths=["s3://test/weight-col.bin"],
-        #     )
-        # )
-        # flow.run(
-        #     parameters=dict(  # Weights
-        #         is_indicator=True,
-        #         qualifier_map={
-        #             "Surveyed Area": ["Locust Presence", "Control Pesticide Name"],
-        #             "Control Area Treated": ["Control Pesticide Name"],
-        #             "Estimated Control Kill (Mortality Rate)": ["Control Pesticide Name"],
-        #         },
-        #         weight_column="Locust Breeding",
-        #         model_id="_weight-test-1",
-        #         run_id="indicator",
-        #         data_paths=[
-        #             "https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/39f7959d-a63e-4db4-a54d-24c66184cf82/39f7959d-a63e-4db4-a54d-24c66184cf82.parquet.gzip"
-        #         ],
-        #     )
-        # )
-        # flow.run(
-        #     parameters=dict(  # Real weights
-        #         selected_output_tasks=["compute_global_timeseries", "compute_regional_stats", "compute_regional_timeseries", "compute_regional_aggregation"],
-        #         is_indicator=False,
-        #         qualifier_map={
-        #             "HWAM_AVE": ["year", "mgn", "season"],
-        #             "production": ["year", "mgn", "season"],
-        #             "crop_failure_area": ["year", "mgn", "season"],
-        #             "TOTAL_NITROGEN_APPLIED": ["year", "mgn", "season"]
-        #         },
-        #         weight_column="HAREA_TOT",
-        #         model_id="2af38a88-aa34-4f4a-94f6-a3e1e6630833",
-        #         run_id="test-run-1",
-        #         data_paths=[
-        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/eba6ca6b-8c7f-44d1-b008-4349491cabf5/eba6ca6b-8c7f-44d1-b008-4349491cabf5_2af38a88-aa34-4f4a-94f6-a3e1e6630833.1.parquet.gzip"
-        #         ],
-        #     )
-        # )
-
-        # DC Test 30K records
-        # flow.run(
-        #     parameters=dict(
-        #         is_indicator=True,
-        #         model_id="3a013cd3-6064-4888-9cc6-0e9d637c690e",
-        #         run_id="indicator",
-        #         data_paths=[
-        #             "https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/3a013cd3-6064-4888-9cc6-0e9d637c690e/3a013cd3-6064-4888-9cc6-0e9d637c690e.parquet.gzip",
-        #             "https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/3a013cd3-6064-4888-9cc6-0e9d637c690e/3a013cd3-6064-4888-9cc6-0e9d637c690e_1.parquet.gzip",
-        #             "https://jataware-world-modelers.s3.amazonaws.com/dev/indicators/3a013cd3-6064-4888-9cc6-0e9d637c690e/3a013cd3-6064-4888-9cc6-0e9d637c690e_2.parquet.gzip",
-        #         ],
-        #         fill_timestamp=0,
-        #         qualifier_map={
-        #             "data_id": ["event_date"],
-        #             "fatalities": ["event_date", "event_type", "sub_event_type", "actor1"],
-        #         },
-        #     )
-        # )
-
-        # flow.run(
-        #     parameters=dict(
-        #         is_indicator=False,
-        #         model_id="2281e058-d521-4180-8216-54832700cedd",
-        #         run_id="22045d57-aa6a-4df6-a11d-793225878dab",
-        #         data_paths=[
-        #             "https://jataware-world-modelers.s3.amazonaws.com/dmc_results_dev/22045d57-aa6a-4df6-a11d-793225878dab/22045d57-aa6a-4df6-a11d-793225878dab_2281e058-d521-4180-8216-54832700cedd.1.parquet.gzip"
-        #         ],
-        #         fill_timestamp=0,
-        #         qualifier_map={
-        #             "max": ["Date", "camp"],
-        #             "min": ["Date", "camp"],
-        #             "data": ["Date", "camp"],
-        #             "mean": ["Date", "camp"],
-        #             "error": ["Date", "camp"],
-        #             "median": ["Date", "camp"],
-        #         },
-        #     )
-        # )
-
-        # For testing tile data
-        flow.run(
-            parameters=dict(
-                model_id="geo-test-data",
-                run_id="test-run-1",
-                data_paths=[f"file://{Path(os.getcwd()).parent}/tests/data/geo-test-data.parquet"],
-                selected_output_tasks=[
-                    "compute_global_timeseries",
-                    "compute_regional_stats",
-                    "compute_regional_timeseries",
-                    "compute_regional_aggregation",
-                    "compute_tiles",
-                ],
-            )
-        )

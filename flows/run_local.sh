@@ -10,4 +10,4 @@ export WM_S3_DEFAULT_INDICATOR_BUCKET=test-indicators
 export WM_S3_DEFAULT_MODEL_BUCKET=test-models
 export WM_DATA_PIPELINE_IMAGE=docker.uncharted.software/worldmodeler/wm-data-pipeline:latest
 
-python3 data_pipeline.py
+python3 run_flow_local.py $1
