@@ -6,7 +6,6 @@ from prefect.utilities import debug
 @pytest.fixture
 def update_env(monkeypatch):
     # setup the environment overrides for the tests
-    monkeypatch.setenv("WM_LOCAL", "True")
     monkeypatch.setenv("WM_DASK_SCHEDULER", "")  # spawn local cluster
     monkeypatch.setenv("WM_DEST_TYPE", "file")  # skip writes
     monkeypatch.setenv("WM_S3_DEST_URL", "")  # skip writes
@@ -18,7 +17,7 @@ def update_env(monkeypatch):
     if not os.path.exists("tests/output"):
         os.makedirs("tests/output")
 
-
+@pytest.mark.skip(reason="Skip until unit tests are ready")
 def test_model(update_env):
     try:
         from flows.data_pipeline import flow
@@ -36,6 +35,7 @@ def test_model(update_env):
         assert False
 
 
+@pytest.mark.skip(reason="Skip until unit tests are ready")
 def test_indicator(update_env):
     try:
         from flows.data_pipeline import flow

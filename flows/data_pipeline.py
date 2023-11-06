@@ -149,6 +149,8 @@ RECORD_RESULTS_TASK = "record_results"
 @task(log_stdout=True)
 def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
     df = None
+    if len(data_paths) == 0:
+        raise FAIL("No parquet files provided")
     # if source is from s3 bucket
     # used for testing
     if "s3://" in data_paths[0]:
@@ -169,11 +171,8 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
     else:
         # In some parquet files the value column will be type string. Filter out those parquet files and ignore for now
         numeric_files = []
-        string_files = []
         for path in data_paths:
-            if re.match(".*_str(.[0-9]+)?.parquet.gzip$", path):
-                string_files.append(path)
-            else:
+            if not re.match(".*_str(.[0-9]+)?.parquet.gzip$", path):
                 numeric_files.append(path)
 
         # Note: dask read_parquet doesn't work for gzip files. So here is the work around using pandas read_parquet
@@ -231,11 +230,9 @@ def read_data(source, data_paths) -> Tuple[dd.DataFrame, int]:
 
     num_rows = len(df.index)
     print(f"\nRead {num_rows} rows of data\n")
+
     if num_rows == 0:
         raise FAIL("DataFrame has no rows")
-
-    # Ensure types
-    df = df.astype({"value": "float64"})
     return (df, num_rows)
 
 
@@ -326,14 +323,16 @@ def validate_and_fix(df, weight_column, fill_timestamp) -> Tuple[dd.DataFrame, s
     df = df.drop(columns=cols_to_drop)
     print(f"Dropping following columns due to missing data: {cols_to_drop}")
 
+    # Ensure types for value column
+    df = df.astype({"value": "float64"})
+
     # Ensure lat and lng columns are numeric
     if "lat" in df.columns and "lng" in df.columns:
         df["lat"] = dd.to_numeric(df["lat"], errors="coerce")
         df["lng"] = dd.to_numeric(df["lng"], errors="coerce")
         df = df.astype({"lat": "float64", "lng": "float64"})
 
-    # Remove infinities because they cause problems in some aggregation types (e.g. mean)
-    df = df.replace({"value": [np.inf, -np.inf]}, np.nan)
+    # -- Handle missing values --
 
     # In the remaining columns, fill all null values with "None"
     # TODO: When adding support for different qualifier roles, we will need to fill numeric roles with something else
@@ -345,26 +344,32 @@ def validate_and_fix(df, weight_column, fill_timestamp) -> Tuple[dd.DataFrame, s
     for col in remaining_columns:
         df[col] = df[col].fillna(value="None").astype("string")
 
-    # Remove characters that Minio can't handle
-    for col in REGION_LEVELS:
-        if col not in cols_to_drop:
-            df[col] = df[col].str.replace("//", "")
-
-    if weight_column not in df.columns.to_list():
-        weight_column = ""  # rest of the checks in the script will use this
-    elif weight_column != "":
-        df[weight_column] = dd.to_numeric(df[weight_column], errors="coerce")
-        df = df.fillna(value={weight_column: 0}).astype({weight_column: "float64"})
-
     # Fill missing timestamp values (0 by default)
     num_missing_ts = int(df["timestamp"].isna().sum().compute().item())
     df["timestamp"] = df["timestamp"].fillna(value=fill_timestamp)
+
+    # Record number of missing values
+    num_missing_val = int(df["value"].isna().sum().compute().item())
+
+    if weight_column in df.columns.to_list():
+        df[weight_column] = dd.to_numeric(df[weight_column], errors="coerce").fillna(value=0).astype("float64")
+    else:
+        weight_column = ""
+
+    # -- Handle invalid values --
+
+    # Remove infinities because they cause problems in some aggregation types (e.g. mean)
+    df = df.replace({"value": [np.inf, -np.inf]}, np.nan)
+    # Remove characters that Minio can't handle
+    for col in REGION_LEVELS:
+        if col in remaining_columns and col not in cols_to_drop:
+            df[col] = df[col].str.replace("//", "")
+
 
     # Remove extreme timestamps
     num_invalid_ts = int((df["timestamp"] >= MAX_TIMESTAMP).sum().compute().item())
     df = df[df["timestamp"] < MAX_TIMESTAMP]
 
-    num_missing_val = int(df["value"].isna().sum().compute().item())
     return (df, weight_column, num_missing_ts, num_invalid_ts, num_missing_val)
 
 
