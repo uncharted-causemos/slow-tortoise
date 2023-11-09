@@ -17,6 +17,7 @@ def update_env(monkeypatch):
     if not os.path.exists("tests/output"):
         os.makedirs("tests/output")
 
+
 @pytest.mark.skip(reason="Skip until unit tests are ready")
 def test_model(update_env):
     try:

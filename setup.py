@@ -21,7 +21,7 @@ setup(
         "pandas==2.1.1",
         "fastparquet==2023.8.0",
         "bokeh==3.2.2",
-        "boto3==1.21.21",
+        "boto3==1.28.82",
         "protobuf==4.21.4",
         "s3fs==2022.5.0"
     ],
