@@ -415,7 +415,7 @@ def compute_global_timeseries(
         (timeseries_df, timeseries_agg_columns) = run_spatial_aggregation(
             df, ["feature", "timestamp"] + qualifier_col, ["sum", "mean"], weight_column
         )
-        timeseries_df = timeseries_df.groupby(["feature"]).apply(
+        num_rows_per_feature = timeseries_df.groupby(["feature"]).apply(
             lambda x: save_timeseries_as_csv(
                 x,
                 qualifier_col,
@@ -430,9 +430,9 @@ def compute_global_timeseries(
             meta=(None, "int"),
         )
 
-        timeseries_pdf = timeseries_df.compute()
+        num_rows_per_feature = num_rows_per_feature.compute()
         if len(qualifier_col) == 0:
-            timeseries_size = timeseries_pdf.to_json(orient="index")
+            timeseries_size = num_rows_per_feature.to_json(orient="index")
 
     return timeseries_size
 

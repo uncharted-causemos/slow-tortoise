@@ -105,17 +105,3 @@ def test_validate_and_fix_handle_invalid_vals():
 
     # handle characters that minio can't handle
     assert r["admin1"].tolist() == ["val12", "val2"]
-
-
-    # assert r["admin1"].tolist() == ["val1", "None", "val2"] # Fill None with 'None'
-
-# def test_validate_and_fix_invalid_timestamp():
-#     data = {
-#         "timestamp": [1, 2, MAX_TIMESTAMP + 1],
-#         "feature": ["A", "B", "C"],
-#         "value": [1.1, 2.2, 3.3],
-#     }
-#     df = dd.from_pandas(pd.DataFrame(data))
-#     _, _, _, num_invalid_ts, _ = validate_and_fix(df, "weight", 0)
-
-#     assert num_invalid_ts == 1  # One invalid timestamp
