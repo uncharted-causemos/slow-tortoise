@@ -30,6 +30,7 @@ setup(
             "black==23.9.1",
             "mypy==1.5.1",
             "pytest==7.4.2",
+            "pytest-cov==4.1.0",
             "pytest-watch==4.2.0",
             "pytest-testmon==2.1.0",
             "moto[s3]==4.2.8",

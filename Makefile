@@ -19,11 +19,11 @@ format:
 
 # Run all tests
 test:
-	pytest tests
+	pytest --cov=flows tests
 
 # Run unit tests only
 test-unit:
-	pytest tests/unit
+	pytest --cov=flows tests/unit
 
 # Run unit tests in watch mode for development
 test-watch:
