@@ -2,9 +2,8 @@ import boto3
 from moto import mock_s3
 
 import pytest
-import os.path
 from prefect.utilities import debug
-from utils import S3_DEST
+from .utils import read_obj
 
 from flows.data_pipeline import flow
 
@@ -17,56 +16,58 @@ from flows.data_pipeline import flow
 @pytest.fixture
 def update_env(monkeypatch):
     # setup the environment overrides for the tests
-    monkeypatch.setenv("WM_DASK_SCHEDULER", "")  # spawn local cluster
+    monkeypatch.setenv("WM_DASK_SCHEDULER", None)
     monkeypatch.setenv("WM_DEST_TYPE", "s3")
-    monkeypatch.setenv(
-        "WM_S3_DEFAULT_INDICATOR_BUCKET", "test-indicators"
-    )  # bucket name is used for file dir
-    monkeypatch.setenv("WM_S3_DEFAULT_MODEL_BUCKET", "test-models")
 
 
-@pytest.mark.skip(reason="Skip until unit tests are ready")
 @mock_s3
 def test_model(update_env):
+    bucket = "models-test"
     # connect to mock s3 storage
     s3 = boto3.resource("s3")
-    s3.create_bucket(Bucket="test-indicators")
+    s3.create_bucket(Bucket=bucket)
 
-    try:
-        from flows.data_pipeline import flow
+    flow.run(
+        parameters=dict(
+            model_id="geo-test-data",
+            run_id="test-run",
+            data_paths=["file://tests/data/geo-test-data.parquet"],
+            model_bucket=bucket,
+        )
+    )
 
-        with debug.raise_on_exception():
-            flow.run(
-                parameters=dict(
-                    model_id="geo-test-data",
-                    run_id="test-run",
-                    data_paths=["file://tests/data/geo-test-data.parquet"],
-                )
-            )
-        assert True
-    except:
-        assert False
+    assert isinstance(
+        read_obj(
+            s3,
+            "geo-test-data/test-run/month/feature1/regional/country/timeseries/default/Ethiopia.csv",
+            bucket=bucket,
+        ),
+        str,
+    )
 
 
-@pytest.mark.skip(reason="Skip until unit tests are ready")
 @mock_s3
 def test_indicator(update_env):
+    bucket = "indicators-test"
     # connect to mock s3 storage
     s3 = boto3.resource("s3")
-    s3.create_bucket(Bucket="test-models")
+    s3.create_bucket(Bucket=bucket)
 
-    try:
-        from flows.data_pipeline import flow
+    flow.run(
+        parameters=dict(
+            is_indicator=True,
+            model_id="ACLED",
+            run_id="indicator",
+            data_paths=["file://tests/data/acled-test.bin"],
+            indicator_bucket=bucket,
+        )
+    )
 
-        with debug.raise_on_exception():
-            flow.run(
-                parameters=dict(
-                    is_indicator=True,
-                    model_id="ACLED",
-                    run_id="indicator",
-                    data_paths=["file://tests/data/acled-test.bin"],
-                )
-            )
-        assert True
-    except:
-        assert False
+    assert isinstance(
+        read_obj(
+            s3,
+            "ACLED/indicator/year/fatalities/regional/admin1/timeseries/default/Ethiopia__Gambela Region.csv",
+            bucket=bucket,
+        ),
+        str,
+    )

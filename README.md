@@ -4,18 +4,15 @@
 ### Python Version
 The pipeline is tested and deployed with **Python 3.11**. While small differences to the patch version should work there are some dependencies with known issues on versions other than 3.11.*. 
 
-### Environment
-From a suitable virtual environment (venv, conda, etc.), dependencies for local development can be installed by running
-
-- Setup the virtual environment using `venv` (Recommended)
-  ```
-  python3.11 -m venv .venv
-  source .venv/bin/activate
-  ```
-
+### Installation and Enabling The Virtual Environment
 - Install dependencies
   ```
-  pip install -e .[dev]
+  make install
+  ```
+
+- Enable the virtual environment 
+  ```
+  source .venv/bin/activate
   ```
 ---
 

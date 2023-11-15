@@ -352,7 +352,9 @@ def validate_and_fix(df, weight_column, fill_timestamp) -> Tuple[dd.DataFrame, s
     num_missing_val = int(df["value"].isna().sum().compute().item())
 
     if weight_column in df.columns.to_list():
-        df[weight_column] = dd.to_numeric(df[weight_column], errors="coerce").fillna(value=0).astype("float64")
+        df[weight_column] = (
+            dd.to_numeric(df[weight_column], errors="coerce").fillna(value=0).astype("float64")
+        )
     else:
         weight_column = ""
 
@@ -364,7 +366,6 @@ def validate_and_fix(df, weight_column, fill_timestamp) -> Tuple[dd.DataFrame, s
     for col in REGION_LEVELS:
         if col in remaining_columns and col not in cols_to_drop:
             df[col] = df[col].str.replace("//", "")
-
 
     # Remove extreme timestamps
     num_invalid_ts = int((df["timestamp"] >= MAX_TIMESTAMP).sum().compute().item())
@@ -1137,7 +1138,7 @@ with Flow(FLOW_NAME) as flow:
     # ==== Record the results in Minio =====
     # This runs only when the pipeline is ran with all tasks, ie. when selected_output_tasks is None or has all tasks
     # (When the pipeline is triggered by data registration from Dojo, selected_output_tasks is None)
-    record_results(
+    record_results_task = record_results(
         dest,
         model_id,
         run_id,
@@ -1168,9 +1169,5 @@ with Flow(FLOW_NAME) as flow:
         compute_annual,
         compute_summary,
         skip_task,
-        upstream_tasks=[summary_values],
+        upstream_tasks=[summary_values, record_results_task],
     )
-
-    # TODO: Saving intermediate result as a file (for each feature) and storing in our minio might be useful.
-    # Then same data can be used for producing tiles and also used for doing regional aggregation and other computation in other tasks.
-    # In that way we can have one jupyter notbook or python module for each tasks

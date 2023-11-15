@@ -265,8 +265,6 @@ def write_to_s3(body, path, dest):
                 aws_access_key_id=dest["key"],
                 aws_secret_access_key=dest["secret"],
             )
-    print(path)
-    print(body)
     s3.put_object(Body=body, Bucket=dest["bucket"], Key=path)
 
 

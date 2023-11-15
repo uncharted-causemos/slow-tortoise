@@ -21,9 +21,8 @@ setup(
         "pandas==2.1.1",
         "fastparquet==2023.8.0",
         "bokeh==3.2.2",
-        "boto3==1.28.85",
-        "protobuf==4.25.0",
-        "s3fs==2022.5.0"
+        "boto3==1.29.0",
+        "protobuf==4.25.0"
     ],
     extras_require={
         "dev": [
@@ -32,7 +31,8 @@ setup(
             "mypy==1.5.1",
             "pytest==7.4.2",
             "pytest-watch==4.2.0",
-            "moto[ec2,s3,all]==4.2.7", # for mocking s3
+            "pytest-testmon==2.1.0",
+            "moto[s3]==4.2.8",
             "elasticsearch==7.17.7"
         ]
     }

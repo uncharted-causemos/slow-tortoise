@@ -80,10 +80,25 @@ def assert_proto_equal(left_proto: object, right_proto: object):
 
 
 # assert json equal ignoring the order of the top level keys
-def assert_json_equal(left: str, right: str):
+def assert_json_equal(left: str, right: str, sort_list=False):
     try:
-        assert json.loads(left) == json.loads(right)
+        l_d = json.loads(left)
+        r_d = json.loads(right)
+        if sort_list:
+            l_d = sort_lists_in_dict(l_d)
+            r_d = sort_lists_in_dict(r_d)
+        assert l_d == r_d
     except AssertionError as e:
         # Extend the error message and re throw
         msg = f"\n\nleft:\n{left}\nright:\n{right}\n"
         raise AssertionError(f"{e}{msg}")
+
+def sort_lists_in_dict(input_dict):
+    for key, value in input_dict.items():
+        if isinstance(value, dict):
+            # Recursively sort nested dictionaries
+            input_dict[key] = sort_lists_in_dict(value)
+        elif isinstance(value, list):
+            # Sort the list if the value is a list
+            input_dict[key] = sorted(value)
+    return input_dict
