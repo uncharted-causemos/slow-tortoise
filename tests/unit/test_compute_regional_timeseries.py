@@ -1,6 +1,8 @@
 import boto3
+from botocore.exceptions import ClientError
 from moto import mock_s3
 
+import pytest
 import pandas as pd
 import dask.dataframe as dd
 from prefect.engine.signals import SKIP
@@ -18,11 +20,6 @@ from flows.data_pipeline import compute_regional_timeseries, DEFAULT_PARTITIONS
 def test_compute_global_timeseries_skip():
     df = dd.from_pandas(pd.DataFrame({}), npartitions=DEFAULT_PARTITIONS)
 
-    qualifier_thresholds = {
-        "max_count": 10000,
-        "regional_timeseries_count": 100,
-        "regional_timeseries_max_level": 1,
-    }
     result = execute_prefect_task(compute_regional_timeseries)(
         df, {}, "month", "mid1", "rid1", {}, [], 0, {}, "", True
     )
@@ -250,4 +247,108 @@ def test_compute_regional_timeseries_with_qualifiers():
     )
 
 
-# TODO: Test qualifier cols and map
+@mock_s3
+def test_compute_regional_timeseries_with_qualifiers_threshold():
+    # connect to mock s3 storage
+    s3 = boto3.resource("s3")
+    s3.create_bucket(Bucket=S3_DEST["bucket"])
+
+    columns = ["timestamp", "country", "admin1", "qual1", "qual2", "feature", "t_sum", "t_mean"]
+    data = [
+        # t1
+        [0, "A", "AA", "qa", "q1", "F1", 4.0, 2.0],
+        [0, "A", "AB", "qa", "q1", "F1", 10.0, 5.0],
+        [0, "A", "AA", "qa", "q2", "F1", 4.0, 2.0],
+        [0, "A", "AB", "qa", "q2", "F1", 10.0, 5.0],
+        # t2
+        [1, "A", "AA", "qa", "q1", "F1", 8.0, 2.0],
+        [1, "A", "AB", "qa", "q1", "F1", 20.0, 10.0],
+        [1, "A", "AA", "qa", "q2", "F1", 16.0, 4.0],
+        [1, "A", "AB", "qa", "q2", "F1", 30.0, 15.0],
+        [1, "A", "AB", "qa", "q1", "F2", 30.0, 15.0],
+        [1, "A", "AB", "qb", "q1", "F2", 30.0, 15.0],
+    ]
+    qualifier_thresholds = {
+        "max_count": 10,
+        "regional_timeseries_count": 1,  # ignore qualifier with its count > 1
+        "regional_timeseries_max_level": 0,  # only country level for qualifier data
+    }
+    qual_cols = [["qual1"], ["qual2"]]
+    qual_map = {"F1": ["qual1", "qual2"], "F2": ["qual1", "qual2"]}
+    qual_counts = {"F1": {"qual1": 1, "qual2": 2}, "F2": {"qual1": 2, "qual2": 1}}
+    df = dd.from_pandas(pd.DataFrame(data, columns=columns), npartitions=DEFAULT_PARTITIONS)
+
+    execute_prefect_task(compute_regional_timeseries)(
+        df,
+        S3_DEST,
+        "month",
+        "model-id-1",
+        "run-id-1",
+        qual_map,
+        qual_cols,
+        qual_counts,
+        qualifier_thresholds,
+        "",
+    )
+
+    # should still produce regional aggregation without qualifier
+    assert_csv_frame_equal(
+        """timestamp,s_sum_t_sum,s_mean_t_sum,s_sum_t_mean,s_mean_t_mean,s_count
+        0,28.0,7.0,14.0,3.5,4
+        1,74.0,18.5,31.0,7.75,4
+        """,
+        read_obj(s3, "model-id-1/run-id-1/month/F1/regional/country/timeseries/default/A.csv"),
+    )
+    assert_csv_frame_equal(
+        """timestamp,s_sum_t_sum,s_mean_t_sum,s_sum_t_mean,s_mean_t_mean,s_count
+        0,20.0,10.0,10.0,5.0,2
+        1,50.0,25.0,25.0,12.5,2
+        """,
+        read_obj(s3, "model-id-1/run-id-1/month/F1/regional/admin1/timeseries/default/A__AB.csv"),
+    )
+
+    assert_csv_frame_equal(
+        """timestamp,s_sum_t_sum,s_mean_t_sum,s_sum_t_mean,s_mean_t_mean,s_count
+        0,28.0,7.0,14.0,3.5,4
+        1,74.0,18.5,31.0,7.75,4
+        """,
+        read_obj(
+            s3, "model-id-1/run-id-1/month/F1/regional/country/timeseries/qualifiers/qual1/qa/A.csv"
+        ),
+    )
+    assert_csv_frame_equal(
+        """timestamp,s_sum_t_sum,s_mean_t_sum,s_sum_t_mean,s_mean_t_mean,s_count
+        1,60.0,30.0,30.0,15.0,2
+        """,
+        read_obj(
+            s3, "model-id-1/run-id-1/month/F2/regional/country/timeseries/qualifiers/qual2/q1/A.csv"
+        ),
+    )
+
+    with pytest.raises(ClientError, match="NoSuchKey"):
+        read_obj(
+            s3, "model-id-1/run-id-1/month/F1/regional/country/timeseries/qualifiers/qual2/q2/A.csv"
+        )
+
+    with pytest.raises(ClientError, match="NoSuchKey"):
+        read_obj(
+            s3, "model-id-1/run-id-1/month/F2/regional/country/timeseries/qualifiers/qual/qa1/A.csv"
+        )
+
+    with pytest.raises(ClientError, match="NoSuchKey"):
+        read_obj(
+            s3,
+            "model-id-1/run-id-1/month/F1/regional/admin1/timeseries/qualifiers/qual1/qa/A__AA.csv",
+        )
+
+    with pytest.raises(ClientError, match="NoSuchKey"):
+        read_obj(
+            s3,
+            "model-id-1/run-id-1/month/F1/regional/admin1/timeseries/qualifiers/qual2/q2/A__AA.csv",
+        )
+
+    with pytest.raises(ClientError, match="NoSuchKey"):
+        read_obj(
+            s3,
+            "model-id-1/run-id-1/month/F2/regional/admin1/timeseries/qualifiers/qual1/qa/A__AB.csv",
+        )

@@ -1,6 +1,8 @@
 import boto3
 from moto import mock_s3
+from botocore.exceptions import ClientError
 
+import pytest
 import pandas as pd
 import dask.dataframe as dd
 from prefect.engine.signals import SKIP
@@ -219,4 +221,48 @@ def test_compute_regional_aggregation_with_qualifiers():
     )
 
 
-# # TODO: Test qualifier cols and map
+@mock_s3
+def test_compute_regional_aggregation_with_qualifiers_map():
+    # connect to mock s3 storage
+    s3 = boto3.resource("s3")
+    s3.create_bucket(Bucket=S3_DEST["bucket"])
+
+    columns = ["timestamp", "country", "qual1", "qual2", "qual3", "feature", "t_sum", "t_mean"]
+    data = [
+        [1, "A", "qa", "q1", "qq", "F1", 8.0, 2.0],
+        [1, "A", "qa", "q1", "qq", "F1", 20.0, 10.0],
+        [1, "A", "qa", "q2", "qq", "F1", 16.0, 4.0],
+        [1, "A", "qa", "q2", "qq", "F1", 30.0, 15.0],
+        [1, "A", "qa", "q2", "qq", "F1", 30.0, 15.0],
+    ]
+    qual_cols = [["qual1"], ["qual2"]]
+    qual_map = {"F1": ["qual1"]}
+    df = dd.from_pandas(pd.DataFrame(data, columns=columns), npartitions=DEFAULT_PARTITIONS)
+
+    execute_prefect_task(compute_regional_aggregation)(
+        df,
+        S3_DEST,
+        "year",
+        "model-id-q",
+        "run-id-q",
+        qual_map,
+        qual_cols,
+        "",
+    )
+
+    assert_csv_frame_equal(
+        """id,s_sum_t_sum,s_mean_t_sum,s_sum_t_mean,s_mean_t_mean,s_count
+        A,104.0,20.8,46.0,9.2,5
+        """,
+        read_obj(s3, "model-id-q/run-id-q/year/F1/regional/country/aggs/1/default/default.csv"),
+    )
+    assert_csv_frame_equal(
+        """id,qualifier,s_sum_t_sum,s_mean_t_sum,s_sum_t_mean,s_mean_t_mean,s_count
+        A,qa,104.0,20.8,46.0,9.2,5
+        """,
+        read_obj(s3, "model-id-q/run-id-q/year/F1/regional/country/aggs/1/qualifiers/qual1.csv"),
+    )
+    with pytest.raises(ClientError, match="NoSuchKey"):
+        read_obj(s3, "model-id-q/run-id-q/year/F1/regional/country/aggs/1/qualifiers/qual2.csv")
+    with pytest.raises(ClientError, match="NoSuchKey"):
+        read_obj(s3, "model-id-q/run-id-q/year/F1/regional/country/aggs/1/qualifiers/qual3.csv")
