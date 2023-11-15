@@ -9,13 +9,13 @@ from prefect.engine.signals import SKIP
 from ..utils import (
     execute_prefect_task,
     assert_csv_frame_equal,
-    assert_json_equal,
     read_obj,
     S3_DEST,
 )
 from flows.data_pipeline import compute_global_timeseries, DEFAULT_PARTITIONS
 
 
+@mock_s3
 def test_compute_global_timeseries_skip():
     df = dd.from_pandas(pd.DataFrame({}), npartitions=DEFAULT_PARTITIONS)
 
@@ -105,25 +105,25 @@ def test_compute_global_timeseries_with_qualifiers():
 
     assert_csv_frame_equal(
         """timestamp,qa,qb
-                           0,2,1
-                           1,1,1
-                           """,
+        0,2,1
+        1,1,1
+        """,
         read_obj(s3, "model-id-2/run-id-2/year/feature1/timeseries/qualifiers/qual1/s_count.csv"),
     )
     assert_csv_frame_equal(
         """timestamp,qa,qb
-                           0,16.0,30.0
-                           1,3.0,0.8
-                           """,
+        0,16.0,30.0
+        1,3.0,0.8
+        """,
         read_obj(
             s3, "model-id-2/run-id-2/year/feature1/timeseries/qualifiers/qual1/s_mean_t_mean.csv"
         ),
     )
     assert_csv_frame_equal(
         """timestamp,qa,qb
-                           0,32.0,30.0
-                           1,3.0,0.8
-                           """,
+        0,32.0,30.0
+        1,3.0,0.8
+        """,
         read_obj(
             s3, "model-id-2/run-id-2/year/feature1/timeseries/qualifiers/qual1/s_sum_t_mean.csv"
         ),
@@ -131,9 +131,9 @@ def test_compute_global_timeseries_with_qualifiers():
 
     assert_csv_frame_equal(
         """timestamp,q1,q2
-                           0,4.0,60.0
-                           1,43.0,
-                           """,
+        0,4.0,60.0
+        1,43.0,
+        """,
         read_obj(
             s3, "model-id-2/run-id-2/year/feature1/timeseries/qualifiers/qual2/s_mean_t_sum.csv"
         ),
@@ -141,8 +141,8 @@ def test_compute_global_timeseries_with_qualifiers():
 
     assert_csv_frame_equal(
         """timestamp,qa
-                           1,186.0
-                           """,
+        1,186.0
+        """,
         read_obj(
             s3, "model-id-2/run-id-2/year/feature2/timeseries/qualifiers/qual1/s_sum_t_sum.csv"
         ),

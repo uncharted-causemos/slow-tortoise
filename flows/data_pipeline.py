@@ -764,7 +764,7 @@ def record_region_lists(df, dest, model_id, run_id) -> Tuple[list, list]:
         feature = df["feature"].values[0]
         lists = {region: [] for region in REGION_LEVELS}
         for index, id_col in enumerate(id_cols):
-            lists[REGION_LEVELS[index]] = df[id_col].unique().dropna().tolist()
+            lists[REGION_LEVELS[index]] = df[id_col].dropna().unique().tolist()
         info_to_json(
             lists,
             dest,
@@ -790,7 +790,6 @@ def record_region_lists(df, dest, model_id, run_id) -> Tuple[list, list]:
     id_cols = [f"__region_id_{level}" for level in range(len(region_cols))]
     for index, id_col in enumerate(id_cols):
         save_df[id_col] = join_region_columns(save_df, region_cols, index)
-
     features_series = (
         save_df[["feature"] + id_cols]
         .groupby(["feature"])
@@ -818,7 +817,7 @@ def record_qualifier_lists(df, dest, model_id, run_id, qualifiers, thresholds):
             "counts": {},
         }
         for col in qualifier_columns:
-            values = df[col].unique().dropna().tolist()
+            values = df[col].dropna().unique().tolist()
             qualifier_counts["counts"][col] = len(values)
 
             # Write one list of qualifier values per file

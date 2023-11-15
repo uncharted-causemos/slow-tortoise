@@ -83,3 +83,35 @@ def test_temporal_aggregation_yearly():
     )
 
     assert_frame_equal(result, expected)
+
+
+def test_temporal_aggregation_all():
+    columns = ["timestamp", "country", "lat", "lng", "feature", "value", "qual1"]
+    data = [
+        [ts("2022-01-01"), "A", 1.1, 1.0, "Feature1", 1.0, "a"],
+        [ts("2022-01-15"), "A", 1.1, 1.0, "Feature1", 3.0, "a"],
+        [ts("2022-02-02"), "A", 1.1, 1.0, "Feature1", 2.3, "a"],
+        [ts("2022-01-01"), "B", 2.1, 2.0, "Feature1", 4.0, "a"],
+        [ts("2022-01-15"), "B", 2.1, 2.0, "Feature1", 6.0, "a"],
+        [ts("2022-02-02"), "B", 2.1, 2.0, "Feature1", 2.0, "a"],
+        [ts("2022-01-01"), "A", 1.1, 1.0, "Feature1", 1.1, "b"],
+        [ts("2022-01-15"), "A", 1.1, 1.0, "Feature1", 1.0, "b"],
+        [ts("2022-02-02"), "A", 1.1, 1.0, "Feature1", 1.2, "b"],
+        [ts("2022-01-01"), "B", 2.1, 2.0, "Feature1", 3.0, "b"],
+        [ts("2022-01-15"), "B", 2.1, 2.0, "Feature1", 3.0, "b"],
+        [ts("2022-02-02"), "B", 2.1, 2.0, "Feature1", 4.2, "b"],
+    ]
+    df = dd.from_pandas(pd.DataFrame(data, columns=columns), npartitions=DEFAULT_PARTITIONS)
+
+    result = execute_prefect_task(temporal_aggregation)(df, "all", True, "").compute()
+
+    expected = pd.DataFrame(
+        [
+            [0, "A", 1.1, 1.0, "Feature1", "a", 6.3, 2.1],
+            [0, "B", 2.1, 2.0, "Feature1", "a", 12.0, 4.0],
+            [0, "A", 1.1, 1.0, "Feature1", "b", 3.3, 1.1],
+            [0, "B", 2.1, 2.0, "Feature1", "b", 10.2, 3.4],
+        ],
+        columns=["timestamp", "country", "lat", "lng", "feature", "qual1", "t_sum", "t_mean"],
+    )
+    assert_frame_equal(result, expected)

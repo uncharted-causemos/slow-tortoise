@@ -37,17 +37,53 @@ def read_obj(s3: object, path: str, bucket=S3_DEST["bucket"]) -> str:
     return s3.Object(bucket, path).get()["Body"].read().decode("utf-8")
 
 
+# Read protobuf from s3 and parse
+def read_proto(s3: object, path: str, proto_obj: object, bucket=S3_DEST["bucket"]) -> str:
+    obj = s3.Object(bucket, path).get()["Body"].read()
+    proto_obj.ParseFromString(obj)
+    return proto_obj
+
+
 # Compare equality of the two csv strings by converting them to pandas dataframe and comparing
-def assert_csv_frame_equal(left_csv: str, right_csv: str):
+def assert_csv_frame_equal(left_csv: str, right_csv: str, sort=True, sort_by=None, strip_line=True):
+    if strip_line:
+        left_csv = "\n".join([str.strip() for str in left_csv.splitlines()])
+        right_csv = "\n".join([str.strip() for str in right_csv.splitlines()])
     # Convert String into StringIO
-    left = StringIO(left_csv.strip())
-    right = StringIO(right_csv.strip())
+    left = StringIO(left_csv)
+    right = StringIO(right_csv)
     df_l = pd.read_csv(left, sep=",")
     df_r = pd.read_csv(right, sep=",")
+
+    if sort and not sort_by:
+        sort_by = [df_l.columns[0], df_l.columns[1]]
+
+    df_l = df_l.sort_values(by=sort_by, ignore_index=True)
+    df_r = df_r.sort_values(by=sort_by, ignore_index=True)
     # assert equality
-    assert_frame_equal(df_l, df_r)
+    try:
+        assert_frame_equal(df_l, df_r)
+    except AssertionError as e:
+        # Extend the error message and re throw
+        msg = f"\n\nleft_csv:\n{left_csv}\nright_csv:\n{right_csv}\n"
+        raise AssertionError(f"{e}{msg}")
+
+
+# Compare equality of the two proto buf objects
+def assert_proto_equal(left_proto: object, right_proto: object):
+    try:
+        assert left_proto == right_proto
+    except AssertionError as e:
+        # Extend the error message and re throw
+        msg = f"\n\nleft_proto:\n{left_proto}\nright_proto:\n{right_proto}\n"
+        raise AssertionError(f"{e}{msg}")
 
 
 # assert json equal ignoring the order of the top level keys
 def assert_json_equal(left: str, right: str):
-    assert json.loads(left) == json.loads(right)
+    try:
+        assert json.loads(left) == json.loads(right)
+    except AssertionError as e:
+        # Extend the error message and re throw
+        msg = f"\n\nleft:\n{left}\nright:\n{right}\n"
+        raise AssertionError(f"{e}{msg}")
