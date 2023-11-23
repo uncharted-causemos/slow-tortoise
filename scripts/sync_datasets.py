@@ -24,8 +24,7 @@ if __name__ == "__main__":
         epilog="""Examples:
             ./sync_datasets.py ./env/aws.env ./env/local.env -c
             ./sync_datasets.py ./env/aws.env ./env/local.env -m
-            ./sync_datasets.py ./env/aws.env ./env/local.env -d
-            ./sync_datasets.py ./env/aws.env ./env/local.env -m -d
+            ./sync_datasets.py ./env/aws.env ./env/local.env -m -d -l 100
             """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -55,6 +54,13 @@ if __name__ == "__main__":
         action="store_true",
         help="Submit data pipeline jobs for indicator datasets in the destination environment.",
     )
+    parser.add_argument(
+        "-l",
+        "--limit",
+        dest="limit",
+        default=10,
+        help="Maximum number of datasets or model runs to be processed. Defaults to 10.",
+    )
 
     args = parser.parse_args()
 
@@ -65,7 +71,7 @@ if __name__ == "__main__":
     IS_TARGET_LOCAL_ENV = target_config.get("ENV", "").lower() == "local"
 
     # If the target is local environment, only run "compute_global_timeseries" task for the pipeline
-    selected_datapipeline_tasks = ["compute_global_timeseries"] if IS_TARGET_LOCAL_ENV else None
+    selected_datapipeline_tasks = ["compute_global_timeseries"] if IS_TARGET_LOCAL_ENV else []
 
     dojo_config = {
         "url": source_config.get("DOJO_URL"),
@@ -139,7 +145,7 @@ if __name__ == "__main__":
     if args.model_runs and len(model_run_diffs) > 0:
         print("\nSubmitting data pipeline runs for model runs...")
         target_es_client = create_es_client(target_es_config)
-        for rid in model_run_diffs:
+        for rid in model_run_diffs[: int(args.limit)]:
             print(f"Submitting model run {rid} for processing...")
             try:
                 # Copy over model run metadata from source to target ES
@@ -167,7 +173,7 @@ if __name__ == "__main__":
     # Submit data pipeline runs for indicator datasets
     if args.datasets and len(indicator_diffs) > 0:
         print("\nSubmitting data pipeline runs for indicator datasets...")
-        for did in indicator_diffs:
+        for did in indicator_diffs[: int(args.limit)]:
             print(f"Submitting dataset {did} for processing...")
             try:
                 metadata = get_indicator_metadata_from_dojo(did, config=dojo_config)
