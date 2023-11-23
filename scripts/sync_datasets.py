@@ -8,24 +8,52 @@ from common import (
     get_model_ids_diff,
     get_model_run_ids_diff,
     get_indicator_dataset_ids_diff,
+    get_model_run_from_es,
+    process_model_run,
+    create_es_client,
+    get_indicator_metadata_from_dojo,
+    process_indicator,
     ES_INDEX_DOMAIN_PROJECT,
     ES_INDEX_DATACUBE,
+    ES_INDEX_MODEL_RUN,
 )
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Sync datasets, model runs and model metadata from the source environment to the destination environment",
+        description="Sync datasets, model runs, and model metadata between environments.",
         epilog="""Examples:
+            ./sync_datasets.py ./env/aws.env ./env/local.env -c
+            ./sync_datasets.py ./env/aws.env ./env/local.env -m
+            ./sync_datasets.py ./env/aws.env ./env/local.env -d
+            ./sync_datasets.py ./env/aws.env ./env/local.env -m -d
             """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "SOURCE_ENV_FILE",
-        help="Source env file containing ES_URL, ES_USER, and ES_PWD env variables",
+        help="Source environment file (ES_URL and DOJO_URL variables).",
     )
     parser.add_argument(
         "DESTINATION_ENV_FILE",
-        help="Destination env file containing ES_URL, ES_USER, and ES_PWD env variables",
+        help="Destination environment file (ES_URL and CAUSEMOS_URL variables).",
+    )
+    parser.add_argument(
+        "-c",
+        "--check",
+        action="store_true",
+        help="Print missing resources in the destination environment without copying data.",
+    )
+    parser.add_argument(
+        "-m",
+        "--model-runs",
+        action="store_true",
+        help="Submit data pipeline jobs for model runs in the destination environment.",
+    )
+    parser.add_argument(
+        "-d",
+        "--datasets",
+        action="store_true",
+        help="Submit data pipeline jobs for indicator datasets in the destination environment.",
     )
 
     args = parser.parse_args()
@@ -34,6 +62,21 @@ if __name__ == "__main__":
     source_config = dotenv_values(dotenv_path=args.SOURCE_ENV_FILE)
     target_config = dotenv_values(dotenv_path=args.DESTINATION_ENV_FILE)
 
+    IS_TARGET_LOCAL_ENV = target_config.get("ENV", "").lower() == "local"
+
+    # If the target is local environment, only run "compute_global_timeseries" task for the pipeline
+    selected_datapipeline_tasks = ["compute_global_timeseries"] if IS_TARGET_LOCAL_ENV else None
+
+    dojo_config = {
+        "url": source_config.get("DOJO_URL"),
+        "user": source_config.get("DOJO_USER", ""),
+        "pwd": source_config.get("DOJO_PWD", ""),
+    }
+    target_causemos_config = {
+        "url": target_config.get("CAUSEMOS_URL"),
+        "user": target_config.get("CAUSEMOS_USER", ""),
+        "pwd": target_config.get("CAUSEMOS_PWD", ""),
+    }
     source_es_config = {
         "url": source_config.get("ES_URL"),
         "user": source_config.get("ES_USER", ""),
@@ -74,7 +117,11 @@ if __name__ == "__main__":
     print(f"\nIndicator datasets: {len(indicator_diffs)}")
     [print(v) for v in indicator_diffs]
 
-    # Copy domain project and model metadata
+    # If check option is provided, exit without syncing data. Just prints out the differences
+    if args.check:
+        exit()
+
+    # Copy over model domain projects and model metadata
     if len(model_domain_project_diffs) > 0 or len(model_diffs):
         print("Syncing model metadata...")
         copy_documents(
@@ -88,13 +135,46 @@ if __name__ == "__main__":
             model_diffs,
         )
 
-    # Submit data pipeline runs for model runs and indicator datasets
-    if len(model_run_diffs) > 0:
+    # Submit data pipeline runs for model runs
+    if args.model_runs and len(model_run_diffs) > 0:
         print("\nSubmitting data pipeline runs for model runs...")
+        target_es_client = create_es_client(target_es_config)
         for rid in model_run_diffs:
-            print(rid)
+            print(f"Submitting model run {rid} for processing...")
+            try:
+                # Copy over model run metadata from source to target ES
+                metadata = get_model_run_from_es(rid, config=source_es_config)
 
-    if len(indicator_diffs) > 0:
+                # remove previous flow run metadata properties if already exists
+                metadata.pop("flow_id", None)
+                metadata.pop("runtimes", None)
+                metadata["status"] = "SUBMITTED"
+
+                res = target_es_client.index(
+                    index=ES_INDEX_MODEL_RUN, id=metadata["id"], document=metadata, refresh=True
+                )
+                if res.get("result") in ["created", "updated"]:
+                    process_model_run(
+                        metadata,
+                        selected_output_tasks=selected_datapipeline_tasks,
+                        causemos_api_config=target_causemos_config,
+                    )
+                else:
+                    raise Exception(f"Failed to index a document, {rid}")
+            except Exception as e:
+                print(f"Error: {e}")
+
+    # Submit data pipeline runs for indicator datasets
+    if args.datasets and len(indicator_diffs) > 0:
         print("\nSubmitting data pipeline runs for indicator datasets...")
         for did in indicator_diffs:
-            print(did)
+            print(f"Submitting dataset {did} for processing...")
+            try:
+                metadata = get_indicator_metadata_from_dojo(did, config=dojo_config)
+                process_indicator(
+                    metadata,
+                    selected_output_tasks=selected_datapipeline_tasks,
+                    causemos_api_config=target_causemos_config,
+                )
+            except Exception as e:
+                print(f"Error: {e}")

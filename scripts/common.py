@@ -7,19 +7,39 @@ from typing import TypedDict, NotRequired
 from elasticsearch import Elasticsearch
 from elasticsearch.helpers import scan
 
-DOJO_URL = os.getenv("DOJO_URL", "https://dojo-test.com")
-DOJO_USER = os.getenv("DOJO_USER", "")
-DOJO_PWD = os.getenv("DOJO_PWD", "")
-
 ES_INDEX_DATACUBE = "data-datacube"
 ES_INDEX_MODEL_RUN = "data-model-run"
 ES_INDEX_DOMAIN_PROJECT = "domain-project"
 
 
 class CausemosApiConfig(TypedDict):
+    """
+    Represents the configuration for the Causemos API.
+
+    Attributes:
+    - url (str): The URL of the Causemos API.
+    - user (str): The username for authentication.
+    - pwd (str): The password for authentication.
+    """
+
     url: str
-    user: NotRequired[str]
-    pwd: NotRequired[str]
+    user: str
+    pwd: str
+
+
+class DojoApiConfig(TypedDict):
+    """
+    Represents the configuration for the Dojo API.
+
+    Attributes:
+    - url (str): The URL of the Dojo API.
+    - user (str): The username for authentication.
+    - pwd (str): The password for authentication.
+    """
+
+    url: str
+    user: str
+    pwd: str
 
 
 class ESConnectionConfig(TypedDict):
@@ -28,13 +48,13 @@ class ESConnectionConfig(TypedDict):
 
     Attributes:
     - url (str): The URL of the Elasticsearch cluster.
-    - user (Optional[str]): The username for authentication (optional).
-    - pwd (Optional[str]): The password for authentication (optional).
+    - user (str): The username for authentication.
+    - pwd (str): The password for authentication.
     """
 
     url: str
-    user: NotRequired[str]
-    pwd: NotRequired[str]
+    user: str
+    pwd: str
 
 
 class ESConnectionConfigWithIndex(ESConnectionConfig):
@@ -43,22 +63,22 @@ class ESConnectionConfigWithIndex(ESConnectionConfig):
 
     Attributes:
     - url (str): The URL of the Elasticsearch cluster.
-    - user (Optional[str]): The username for authentication (optional).
-    - pwd (Optional[str]): The password for authentication (optional).
-    - index (Optional[str]): The Elasticsearch index to operate on (optional).
+    - user (str): The username for authentication.
+    - pwd (str): The password for authentication.
+    - index (str): The Elasticsearch index to operate on.
     """
 
-    index: NotRequired[str]
+    index: str
 
 
-DEFAULT_LOCAL_ES_CONFIG: ESConnectionConfig = {
-    "url": "http://localhost:9200",
+DEFAULT_LOCAL_CAUSEMOS_API_CONFIG: CausemosApiConfig = {
+    "url": "http://localhost:3000",
     "user": "",
     "pwd": "",
 }
 
-DEFAULT_LOCAL_CAUSEMOS_API_CONFIG: CausemosApiConfig = {
-    "url": "http://localhost:3000",
+DEFAULT_LOCAL_ES_CONFIG: ESConnectionConfig = {
+    "url": "http://localhost:9200",
     "user": "",
     "pwd": "",
 }
@@ -69,6 +89,13 @@ def process_model_run(
     selected_output_tasks=[],
     causemos_api_config=DEFAULT_LOCAL_CAUSEMOS_API_CONFIG,
 ):
+    """
+    Submit a data pipeline processing job for a given model run.
+
+    Note:
+    - The model run document with the same run ID as `run_metadata` should already exist in the target Causemos system (in Elasticsearch).
+    - This operation does not create a new model run document but updates the existing one with the provided metadata.
+    """
     # remove flow run metadata properties if already exists
     run_metadata.pop("flow_id", None)
     run_metadata.pop("runtimes", None)
@@ -125,6 +152,38 @@ def process_indicator(
         raise
 
 
+def get_model_run_from_dojo(run_id, config: DojoApiConfig):
+    try:
+        res = requests.get(
+            f"{config['url']}/runs/{run_id}", auth=HTTPBasicAuth(config["user"], config["pwd"])
+        )
+        res.raise_for_status()
+        indicator_metadata = res.json()
+    except Exception as exc:
+        print(f">> DOJO: Error fetching model run metadata for {run_id}")
+        raise
+    return indicator_metadata
+
+
+def get_indicator_metadata_from_dojo(indicator_id, config: DojoApiConfig):
+    try:
+        res = requests.get(
+            f"{config['url']}/indicators/{indicator_id}",
+            auth=HTTPBasicAuth(config["user"], config["pwd"]),
+        )
+        res.raise_for_status()
+        indicator_metadata = res.json()
+    except Exception as exc:
+        print(f">> DOJO: Error fetching indicator metadata for {indicator_id}")
+        raise
+    return indicator_metadata
+
+
+def create_es_client(config=DEFAULT_LOCAL_ES_CONFIG):
+    client = Elasticsearch([config["url"]], http_auth=(config["user"], config["pwd"]))
+    return client
+
+
 def get_model_run_from_es(run_id, config=DEFAULT_LOCAL_ES_CONFIG):
     client = Elasticsearch([config["url"]], http_auth=(config["user"], config["pwd"]))
     document = client.get(index=ES_INDEX_MODEL_RUN, id=run_id)
@@ -172,30 +231,6 @@ def get_model_domain_project_ids_from_es(config=DEFAULT_LOCAL_ES_CONFIG):
     for hit in scan(client, index=ES_INDEX_DOMAIN_PROJECT, query=query):
         ids.append(hit["_source"]["id"])
     return ids
-
-
-def get_model_run_from_dojo(run_id, dojo_url=DOJO_URL):
-    try:
-        res = requests.get(f"{dojo_url}/runs/{run_id}", auth=HTTPBasicAuth(DOJO_USER, DOJO_PWD))
-        res.raise_for_status()
-        indicator_metadata = res.json()
-    except Exception as exc:
-        print(f">> DOJO: Error fetching model run metadata for {run_id}")
-        raise
-    return indicator_metadata
-
-
-def get_indicator_metadata_from_dojo(indicator_id, dojo_url=DOJO_URL):
-    try:
-        res = requests.get(
-            f"{dojo_url}/indicators/{indicator_id}", auth=HTTPBasicAuth(DOJO_USER, DOJO_PWD)
-        )
-        res.raise_for_status()
-        indicator_metadata = res.json()
-    except Exception as exc:
-        print(f">> DOJO: Error fetching indicator metadata for {indicator_id}")
-        raise
-    return indicator_metadata
 
 
 def delete_indicator_from_es(indicator_data_id, config=DEFAULT_LOCAL_ES_CONFIG):
