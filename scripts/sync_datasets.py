@@ -58,8 +58,8 @@ if __name__ == "__main__":
         "-l",
         "--limit",
         dest="limit",
-        default=10,
-        help="Maximum number of datasets or model runs to be processed. Defaults to 10.",
+        default=5,
+        help="Maximum number of datasets or model runs to be processed. Defaults to 5.",
     )
 
     args = parser.parse_args()
@@ -70,8 +70,15 @@ if __name__ == "__main__":
 
     IS_TARGET_LOCAL_ENV = target_config.get("ENV", "").lower() == "local"
 
-    # If the target is local environment, only run "compute_global_timeseries" task for the pipeline
-    selected_datapipeline_tasks = ["compute_global_timeseries"] if IS_TARGET_LOCAL_ENV else []
+    selected_datapipeline_tasks = []
+    if IS_TARGET_LOCAL_ENV:
+        # If the target is local environment, skip 'compute_tiling' task
+        selected_datapipeline_tasks = [
+            "compute_global_timeseries",
+            "compute_regional_stats",
+            "compute_regional_timeseries",
+            "compute_regional_aggregation",
+        ]
 
     dojo_config = {
         "url": source_config.get("DOJO_URL"),
