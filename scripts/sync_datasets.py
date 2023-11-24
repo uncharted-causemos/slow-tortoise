@@ -24,7 +24,7 @@ if __name__ == "__main__":
         epilog="""Examples:
             ./sync_datasets.py ./env/aws.env ./env/local.env -c
             ./sync_datasets.py ./env/aws.env ./env/local.env -m
-            ./sync_datasets.py ./env/aws.env ./env/local.env -m -d -l 100
+            ./sync_datasets.py ./env/aws.env ./env/local.env -md -l 100
             """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
