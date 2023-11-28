@@ -23,4 +23,3 @@ def test_apply_qualifier_thresholds():
 
     assert {"f1": ["qual2"], "f2": [], "f3": ["qual1"]} == new_q_map
     assert [["qual1"], ["qual2"]] == sorted(new_q_cols, key=lambda x: x[0])
-

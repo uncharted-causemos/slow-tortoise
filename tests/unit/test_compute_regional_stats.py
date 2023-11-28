@@ -155,7 +155,7 @@ def test_compute_regional_stats_multiple_extrema():
     )
 
     # should have max number of items per aggregation type equal to 20
-    max_num_items = 20 # we expect to have the limit on the # of each items for each aggregation type to prevent the list growing indefinitely 
+    max_num_items = 20  # we expect to have the limit on the # of each items for each aggregation type to prevent the list growing indefinitely
     r = json.loads(
         read_obj(s3, "model-id-2/run-id-2/year/F2/regional/country/stats/default/extrema.json")
     )

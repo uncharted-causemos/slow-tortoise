@@ -36,7 +36,9 @@ def test_record_qualifier_lists():
 
     assert {"A": {"qual1": 2, "qual2": 1}, "B": {"qual1": 1, "qual2": 1}} == qualifier_counts
 
-    assert_json_equal('["d", "e"]', read_obj(s3, "mid-1/rid-1/raw/A/info/qualifiers/qual1.json"), True)
+    assert_json_equal(
+        '["d", "e"]', read_obj(s3, "mid-1/rid-1/raw/A/info/qualifiers/qual1.json"), True
+    )
     assert_json_equal('["f"]', read_obj(s3, "mid-1/rid-1/raw/B/info/qualifiers/qual1.json"))
     assert_json_equal('["q2a"]', read_obj(s3, "mid-1/rid-1/raw/A/info/qualifiers/qual2.json"))
     assert_json_equal('["q2b"]', read_obj(s3, "mid-1/rid-1/raw/B/info/qualifiers/qual2.json"))

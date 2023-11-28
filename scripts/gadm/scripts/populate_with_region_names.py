@@ -10,8 +10,9 @@ import os
 from scripts.gadm.scripts.common_gadm import MAX_GADM_INDEX, get_csv_filename
 
 ES_URL = os.getenv("ES_URL", "10.65.18.34")
-ES_USER = os.getenv("ES_USER", "") # required
-ES_PWD = os.getenv("ES_PWD", "") # required
+ES_USER = os.getenv("ES_USER", "")  # required
+ES_PWD = os.getenv("ES_PWD", "")  # required
+
 
 def populate_es_with_gadm():
     elastic = Elasticsearch(ES_URL, http_auth=(ES_USER, ES_PWD))
@@ -19,16 +20,18 @@ def populate_es_with_gadm():
     files = [get_csv_filename(i) for i in range(MAX_GADM_INDEX)]
     # column_data and code_columns must be ordered from broadest region to most specific region (largest to smallest)
     column_data = [
-        { "input": "name_0", "output": "country" },
-        { "input": "name_1", "output": "admin1" },
-        { "input": "name_2", "output": "admin2" },
-        { "input": "name_3", "output": "admin3" }
+        {"input": "name_0", "output": "country"},
+        {"input": "name_1", "output": "admin1"},
+        {"input": "name_2", "output": "admin2"},
+        {"input": "name_3", "output": "admin3"},
     ]
-    code_columns = [ "gadm36_0", "gadm36_1", "gadm36_2", "gadm36_3" ]
+    code_columns = ["gadm36_0", "gadm36_1", "gadm36_2", "gadm36_3"]
 
     for file in files:
         with open(file) as f:
-            list_of_rows = [{k: v for k, v in row.items()} for row in csv.DictReader(f, skipinitialspace=True)]
+            list_of_rows = [
+                {k: v for k, v in row.items()} for row in csv.DictReader(f, skipinitialspace=True)
+            ]
             filtered_rows = []
             for row in list_of_rows:
                 new_row = {}
@@ -44,7 +47,7 @@ def populate_es_with_gadm():
                     if code_column in row:
                         new_row["code"] = row[code_column]
                 new_row["_id"] = new_row["code"]
-                new_row["full_path"] = full_path[:-2] # cut off the last __
+                new_row["full_path"] = full_path[:-2]  # cut off the last __
                 filtered_rows.append(new_row)
             try:
                 # make the bulk call, and get a response

@@ -93,6 +93,7 @@ def assert_json_equal(left: str, right: str, sort_list=False):
         msg = f"\n\nleft:\n{left}\nright:\n{right}\n"
         raise AssertionError(f"{e}{msg}")
 
+
 def sort_lists_in_json_obj(json_obj):
     if isinstance(json_obj, list):
         return sorted(json_obj)
