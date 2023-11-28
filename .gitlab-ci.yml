@@ -23,14 +23,12 @@ stages:
 lint:
   extends: .test_common
   script:
-    - black --check flows
-    - mypy --non-interactive --install-types flows
-    - mypy flows
+    - make lint
 
 test:
   extends: .test_common
   script:
-    - pytest tests
+    - make test
 
 # Jobs don't share it's local env variables. So Setup up variables you want to share and save it to a file.
 # The file can be passed to other jobs as an artifacts
