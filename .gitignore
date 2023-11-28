@@ -16,3 +16,6 @@ test-models
 test-indicators
 .env
 .venv*
+
+.testmondata*
+.coverage

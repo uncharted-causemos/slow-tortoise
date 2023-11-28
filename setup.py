@@ -21,16 +21,19 @@ setup(
         "pandas==2.1.1",
         "fastparquet==2023.8.0",
         "bokeh==3.2.2",
-        "boto3==1.21.21",
-        "protobuf==4.21.4",
+        "boto3==1.29.0",
+        "protobuf==4.25.0"
     ],
     extras_require={
         "dev": [
             "python-dotenv==1.0.0",
-            "s3fs==2022.5.0", # a tool to mount aws bucket to local fs
             "black==23.9.1",
             "mypy==1.5.1",
             "pytest==7.4.2",
+            "pytest-cov==4.1.0",
+            "pytest-watch==4.2.0",
+            "pytest-testmon==2.1.0",
+            "moto[s3]==4.2.8",
             "elasticsearch==7.17.7"
         ]
     }
