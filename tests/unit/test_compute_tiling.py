@@ -17,7 +17,7 @@ from flows.data_pipeline import compute_tiling, DEFAULT_PARTITIONS
 
 
 # Helper to create a tile proto buf object
-def create_tile(z: int, x: int, y: int, totalBins: int, stats: object):
+def create_tile(z: int, x: int, y: int, totalBins: int, stats: dict):
     tile = tiles_pb2.Tile()
     tile.coord.x = x
     tile.coord.y = y

@@ -33,12 +33,12 @@ def ts(date_string):
 
 
 # Read s3 object as string
-def read_obj(s3: object, path: str, bucket=S3_DEST["bucket"]) -> str:
+def read_obj(s3, path: str, bucket=S3_DEST["bucket"]) -> str:
     return s3.Object(bucket, path).get()["Body"].read().decode("utf-8")
 
 
 # Read protobuf from s3 and parse
-def read_proto(s3: object, path: str, proto_obj: object, bucket=S3_DEST["bucket"]) -> str:
+def read_proto(s3, path: str, proto_obj, bucket=S3_DEST["bucket"]) -> str:
     obj = s3.Object(bucket, path).get()["Body"].read()
     proto_obj.ParseFromString(obj)
     return proto_obj

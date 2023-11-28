@@ -2,7 +2,6 @@ import boto3
 from moto import mock_s3
 
 import pytest
-from prefect.utilities import debug
 from .utils import read_obj
 
 from flows.data_pipeline import flow

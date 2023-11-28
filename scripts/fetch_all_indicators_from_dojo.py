@@ -1,8 +1,10 @@
-import requests
-import json
-from requests.auth import HTTPBasicAuth
-import sys
 import os
+import sys
+import json
+import requests
+from typing import Any
+from requests.auth import HTTPBasicAuth
+
 
 DOJO_API_URL = os.getenv("DOJO_API_URL", "https://causemos-analyst-api.dojo-modeling.com/api/dojo")
 DOJO_USER = os.getenv("DOJO_USER", "")  # required
@@ -12,7 +14,7 @@ DOJO_PWD = os.getenv("DOJO_PWD", "")  # required
 # Usage: DOJO_USER=... DOJO_PWD=... python fetch_all_indicators_from_dojo.py > all-indicators-08-12.json
 #    Or: DOJO_USER=... DOJO_PWD=... python fetch_all_indicators_from_dojo.py -i > all-indicator-ids.txt
 
-all_results = []
+all_results: list[Any] = []
 scroll_id = None
 hits = 1
 

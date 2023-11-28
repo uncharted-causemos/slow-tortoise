@@ -3,6 +3,7 @@
 import argparse
 from dotenv import dotenv_values
 from common import copy_documents, ESConnectionConfigWithIndex
+from typing import cast
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -32,15 +33,15 @@ if __name__ == "__main__":
     target_config = dotenv_values(dotenv_path=args.DESTINATION_ENV_FILE)
 
     source_es_config: ESConnectionConfigWithIndex = {
-        "url": source_config.get("ES_URL"),
-        "user": source_config.get("ES_USER", ""),
-        "pwd": source_config.get("ES_PWD", ""),
+        "url": cast(str, source_config.get("ES_URL")),
+        "user": cast(str, source_config.get("ES_USER", "")),
+        "pwd": cast(str, source_config.get("ES_PWD", "")),
         "index": args.SOURCE_INDEX,
     }
     target_es_config: ESConnectionConfigWithIndex = {
-        "url": target_config.get("ES_URL"),
-        "user": target_config.get("ES_USER", ""),
-        "pwd": target_config.get("ES_PWD", ""),
+        "url": cast(str, target_config.get("ES_URL")),
+        "user": cast(str, target_config.get("ES_USER", "")),
+        "pwd": cast(str, target_config.get("ES_PWD", "")),
         "index": args.DESTINATION_INDEX,
     }
 
