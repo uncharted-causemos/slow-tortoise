@@ -139,7 +139,6 @@ def process_indicator(
         query = f"?selected_output_tasks={','.join(selected_output_tasks)}"
     # Send request to cuasemos for processing
     try:
-        print(auth)
         r = requests.post(
             f"{causemos_api_config['url']}/api/maas/indicators/post-process{query}",
             auth=auth,
@@ -185,14 +184,14 @@ def create_es_client(config=DEFAULT_LOCAL_ES_CONFIG):
 
 
 def get_model_run_from_es(run_id, config=DEFAULT_LOCAL_ES_CONFIG):
-    client = Elasticsearch([config["url"]], http_auth=(config["user"], config["pwd"]))
+    client = create_es_client(config)
     document = client.get(index=ES_INDEX_MODEL_RUN, id=run_id)
     data = document["_source"]
     return data
 
 
 def get_data_ids_from_es(status="READY", type="indicator", config=DEFAULT_LOCAL_ES_CONFIG):
-    client = Elasticsearch([config["url"]], http_auth=(config["user"], config["pwd"]))
+    client = create_es_client(config)
     query = {
         "query": {"bool": {"filter": [{"term": {"status": status}}, {"term": {"type": type}}]}},
         "_source": ["data_id"],
@@ -206,7 +205,7 @@ def get_data_ids_from_es(status="READY", type="indicator", config=DEFAULT_LOCAL_
 def get_model_run_ids_from_es(
     status="READY", config=DEFAULT_LOCAL_ES_CONFIG, prefix_model_id=False
 ):
-    client = Elasticsearch([config["url"]], http_auth=(config["user"], config["pwd"]))
+    client = create_es_client(config)
     query = {
         "query": {"bool": {"filter": [{"term": {"status": status}}]}},
         "_source": ["id", "model_id"],
@@ -221,7 +220,7 @@ def get_model_run_ids_from_es(
 
 
 def get_model_domain_project_ids_from_es(config=DEFAULT_LOCAL_ES_CONFIG):
-    client = Elasticsearch([config["url"]], http_auth=(config["user"], config["pwd"]))
+    client = create_es_client(config)
     type = "model"
     query = {
         "query": {"bool": {"filter": [{"term": {"type": type}}]}},
@@ -296,10 +295,8 @@ def copy_documents(
     """
     Copy documents from one Elasticsearch index to another.
     """
-    source_client = Elasticsearch([source["url"]], http_auth=(source["user"], source["pwd"]))
-    destination_client = Elasticsearch(
-        [destination["url"]], http_auth=(destination["user"], destination["pwd"])
-    )
+    source_client = create_es_client(source)
+    destination_client = create_es_client(destination)
     for doc_id in doc_ids:
         try:
             # Fetch the document from the source index
