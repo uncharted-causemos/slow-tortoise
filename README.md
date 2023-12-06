@@ -57,7 +57,7 @@ For development, flows can be run locally with no requirement for access to a Pr
 
 If a cluster is required for performance reasons, but there is no need for full execution in the Prefect infrastructure, the `WM_DASK_SCHEDULER` environment variable can be set to point to an available Dask cluster. This can be the instance on the docker swarm, or a local docker instance launched by running `docker-compose up` in the `dask` directory. **Note:** When an external Dask cluster is used, writing files to the local file system won't work. You also need to provide `WM_DEST_TYPE=s3` and `WM_S3_DEST_URL` to set the external S3 storage for the destination where the output results will be written.
 
-To validate Prefect execution in a full Kubernetes deployment environment, spin up the full Causemos local Kubernetes stack defined in [wm-playbooks/kubernetes](https://gitlab.uncharted.software/WM/wm-playbooks/-/tree/main/kubernetes?ref_type=heads), deploy the pipeline changes locally as needed following the steps in [READEME.md](./deploy/kubernetes/build_and_push.sh), and execute the pipeline by requesting a Prefect job manually or submitting a job using [prefect_reprocess.sh](./scripts/prefect_reprocess.sh) script.
+To validate Prefect execution in a full Kubernetes deployment environment, spin up the full Causemos local Kubernetes stack defined in [wm-playbooks/kubernetes](https://gitlab.uncharted.software/WM/wm-playbooks/-/tree/main/kubernetes?ref_type=heads), deploy the pipeline changes locally as needed following the steps in [README.md](./deploy/kubernetes/build_and_push.sh), and execute the pipeline by requesting a Prefect job manually or submitting a job using [prefect_reprocess.sh](./scripts/prefect_reprocess.sh) script.
 
 ---
 
