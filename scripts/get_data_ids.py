@@ -38,7 +38,7 @@ es_config = {
 data_ids = (
     common.get_model_run_ids_from_es(args.status, config=es_config)
     if args.m
-    else common.get_indicator_dataset_ids_from_es(args.status, config=es_config)
+    else common.get_data_ids_from_es(args.status, config=es_config)
 )
 
 # Print out the ids
