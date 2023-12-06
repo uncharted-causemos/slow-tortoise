@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+from typing import cast
 from dotenv import dotenv_values
 from common import (
     copy_documents,
@@ -13,6 +14,9 @@ from common import (
     create_es_client,
     get_indicator_metadata_from_dojo,
     process_indicator,
+    ESConnectionConfig,
+    DojoApiConfig,
+    CausemosApiConfig,
     ES_INDEX_DOMAIN_PROJECT,
     ES_INDEX_DATACUBE,
     ES_INDEX_MODEL_RUN,
@@ -68,7 +72,7 @@ if __name__ == "__main__":
     source_config = dotenv_values(dotenv_path=args.SOURCE_ENV_FILE)
     target_config = dotenv_values(dotenv_path=args.DESTINATION_ENV_FILE)
 
-    IS_TARGET_LOCAL_ENV = target_config.get("ENV", "").lower() == "local"
+    IS_TARGET_LOCAL_ENV = cast(str, target_config.get("ENV", "")).lower() == "local"
 
     selected_datapipeline_tasks = []
     if IS_TARGET_LOCAL_ENV:
@@ -80,25 +84,25 @@ if __name__ == "__main__":
             "compute_regional_aggregation",
         ]
 
-    dojo_config = {
-        "url": source_config.get("DOJO_URL"),
-        "user": source_config.get("DOJO_USER", ""),
-        "pwd": source_config.get("DOJO_PWD", ""),
+    dojo_config: DojoApiConfig = {
+        "url": cast(str, source_config.get("DOJO_URL")),
+        "user": cast(str, source_config.get("DOJO_USER", "")),
+        "pwd": cast(str, source_config.get("DOJO_PWD", "")),
     }
-    target_causemos_config = {
-        "url": target_config.get("CAUSEMOS_URL"),
-        "user": target_config.get("CAUSEMOS_USER", ""),
-        "pwd": target_config.get("CAUSEMOS_PWD", ""),
+    target_causemos_config: CausemosApiConfig = {
+        "url": cast(str, target_config.get("CAUSEMOS_URL")),
+        "user": cast(str, target_config.get("CAUSEMOS_USER", "")),
+        "pwd": cast(str, target_config.get("CAUSEMOS_PWD", "")),
     }
-    source_es_config = {
-        "url": source_config.get("ES_URL"),
-        "user": source_config.get("ES_USER", ""),
-        "pwd": source_config.get("ES_PWD", ""),
+    source_es_config: ESConnectionConfig = {
+        "url": cast(str, source_config.get("ES_URL")),
+        "user": cast(str, source_config.get("ES_USER", "")),
+        "pwd": cast(str, source_config.get("ES_PWD", "")),
     }
-    target_es_config = {
-        "url": target_config.get("ES_URL"),
-        "user": target_config.get("ES_USER", ""),
-        "pwd": target_config.get("ES_PWD", ""),
+    target_es_config: ESConnectionConfig = {
+        "url": cast(str, target_config.get("ES_URL")),
+        "user": cast(str, target_config.get("ES_USER", "")),
+        "pwd": cast(str, target_config.get("ES_PWD", "")),
     }
 
     model_domain_project_diffs = get_model_domain_project_ids_diff(

@@ -4,8 +4,8 @@ import requests
 from requests.auth import HTTPBasicAuth
 
 ES_URL = os.getenv("ES_URL", "http://10.65.18.34:9200")
-ES_USER = os.getenv("ES_USER", "") # required
-ES_PWD = os.getenv("ES_PWD", "") # required
+ES_USER = os.getenv("ES_USER", "")  # required
+ES_PWD = os.getenv("ES_PWD", "")  # required
 
 #                                                   WARNING
 #                                                   vvvvvvv
@@ -18,7 +18,10 @@ ES_PWD = os.getenv("ES_PWD", "") # required
 # Usage: ES_USER=... ES_PWD=... python dedupe-indicators.py
 
 try:
-    resp = requests.get("{ES_URL}/data-datacube/_search?q=type:indicator&size=10000", auth=HTTPBasicAuth(ES_USER, ES_PWD))
+    resp = requests.get(
+        "{ES_URL}/data-datacube/_search?q=type:indicator&size=10000",
+        auth=HTTPBasicAuth(ES_USER, ES_PWD),
+    )
     resp.raise_for_status()
     ret = resp.json()
     indicators = ret["hits"]["hits"]

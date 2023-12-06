@@ -40,13 +40,13 @@ You can apply formatting rules to the current document with `Format Document` (O
 
 The Gitlab CI pipeline uses `mypy`.
 After installing, you will need to download type definitions using `mypy --install-types`.  
-In VS Code, you can configure it with the `Python: Select Linter` action.
+In VS Code, you can install the `mypy` extension and add `"mypy.runUsingActiveInterpreter": true` to the settings.
 
 ---
 
 ## Development
 
-This will locally run the `flow.run` configurations at the bottom of [data_pipeline.py](./flows/data_pipeline.py). The results are written to minio-dev. See the folder structure [here](./doc/minio-folder-structure.md).
+This will locally run one of the `flow.run` configurations in [run_flow_local.py](./flows/run_flow_local.py). By defaults, the results are written to local file system. See the folder structure [here](./doc/minio-folder-structure.md).
 
 ```
 cd flows
@@ -55,9 +55,11 @@ cd flows
 
 For development, flows can be run locally with no requirement for access to a Prefect server or agent, and no Dask cluster instance (an in-process temporary cluster is started by the prefect Dask executor). The [run_local.sh](./flows/run_local.sh) script provides an example of the environment configuration and execution command to required to run in such a context. A small amount of boilerplate needs to be added a flow to support this, as can be seen in [dask_flow_test.py](./flows/dask_flow_test.py)
 
-If a cluster is required for performance reasons, but there is no need for full execution in the Prefect infrastructure, the `WM_DASK_SCHEDULER` environment variable can be set to point to an available Dask cluster. This can be the instance on the docker swarm, or a local docker instance launched by running `docker-compose up` in the `dask` directory.
+If a cluster is required for performance reasons, but there is no need for full execution in the Prefect infrastructure, the `WM_DASK_SCHEDULER` environment variable can be set to point to an available Dask cluster. This can be the instance on the docker swarm, or a local docker instance launched by running `docker-compose up` in the `dask` directory. **Note:** When an external Dask cluster is used, writing files to the local file system won't work. You also need to provide `WM_DEST_TYPE=s3` and `WM_S3_DEST_URL` to set the external S3 storage for the destination where the output results will be written.
 
-To validate Prefect execution outside of the deployment environment, a prefect server can be started by running [infra/prefect/start_server.sh](./infra/prefect/start_server.sh), and a docker agent can be started by running [infra/prefect/start_agent_local.sh](./infra/prefect/start_agent_local.sh). Flows can then be registered as described in the [prefect setup](./infra/prefect/setup.md). The scripts assume that a Dask cluster will be running locally in this context.
+To validate Prefect execution in a full Kubernetes deployment environment, spin up the full Causemos local Kubernetes stack defined in [wm-playbooks/kubernetes](https://gitlab.uncharted.software/WM/wm-playbooks/-/tree/main/kubernetes?ref_type=heads), deploy the pipeline changes locally as needed following the steps in [README.md](./deploy/kubernetes/build_and_push.sh), and execute the pipeline by requesting a Prefect job manually or submitting a job using [prefect_reprocess.sh](./scripts/prefect_reprocess.sh) script.
+
+---
 
 ### Notes on Dask development
 

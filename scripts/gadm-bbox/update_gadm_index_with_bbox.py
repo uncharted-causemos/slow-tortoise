@@ -12,11 +12,12 @@ headers = {"Accept": "application/json", "Content-type": "application/json"}
 headers_bulk = {"Accept": "application/json", "Content-type": "application/x-ndjson"}
 
 ES_URL = os.getenv("ES_URL", "http://10.65.18.34:9200")
-ES_USER = os.getenv("ES_USER", "") # required
-ES_PWD = os.getenv("ES_PWD", "") # required
+ES_USER = os.getenv("ES_USER", "")  # required
+ES_PWD = os.getenv("ES_PWD", "")  # required
 ES_INDEX = "gadm-name"
 
-#update the metadata one doc at a time
+
+# update the metadata one doc at a time
 def update_metadata(code, bbox):
     url = ES_URL + "/" + ES_INDEX + "/_update_by_query"
     query = json.dumps(
@@ -31,22 +32,24 @@ def update_metadata(code, bbox):
     res = requests.post(url, auth=HTTPBasicAuth(ES_USER, ES_PWD), data=query, headers=headers)
     print(res.json())
 
+
 def bulk_update(all_items):
     url = ES_URL + "/" + ES_INDEX + "/_bulk"
     body = []
     for item in all_items:
-        action = { "update" : {"_id" : item["code"]} }
-        item = { "doc" : {"bbox" : item["bbox"]} }
+        action = {"update": {"_id": item["code"]}}
+        item = {"doc": {"bbox": item["bbox"]}}
         body.append(json.dumps(action))
         body.append(json.dumps(item))
     payload = ""
     for l in body:
         payload = payload + f"{l} \n"
-    data = payload.encode('utf-8')
+    data = payload.encode("utf-8")
     res = requests.post(url, auth=HTTPBasicAuth(ES_USER, ES_PWD), data=data, headers=headers_bulk)
     print(res.json())
 
-dir_path = str(pathlib.Path(__file__).parent.resolve()) + '/.tmp/'
+
+dir_path = str(pathlib.Path(__file__).parent.resolve()) + "/.tmp/"
 fileList = [f for f in glob.glob("*.json")]
 print("Found files", fileList)
 for file in fileList:
@@ -57,7 +60,7 @@ for file in fileList:
         bulk_update(data["geo"])
         #
         # or update individual docs
-        #for region in data["geo"]:
+        # for region in data["geo"]:
         #    geocode = region["code"]
         #    bbox = region["bbox"]
         #    # update_metadata(geocode, bbox)
@@ -65,35 +68,26 @@ for file in fileList:
 
 test_data = [
     {
-        "code": 'ETH',
+        "code": "ETH",
         "bbox": {
             "type": "envelope",
-            "coordinates": [
-                [33.00153732, 14.8454771],
-                [47.95822906, 3.39882302]
-            ]
-        }
+            "coordinates": [[33.00153732, 14.8454771], [47.95822906, 3.39882302]],
+        },
     },
     {
-        "code": 'ETH.8_1',
+        "code": "ETH.8_1",
         "bbox": {
             "type": "envelope",
-            "coordinates": [
-                [34.13949966, 10.38686943],
-                [42.97984695, 3.50965881]
-            ]
-        }
+            "coordinates": [[34.13949966, 10.38686943], [42.97984695, 3.50965881]],
+        },
     },
     {
-        "code": 'EGY',
+        "code": "EGY",
         "bbox": {
             "type": "envelope",
-            "coordinates": [
-                [24.69809914, 31.66791725],
-                [36.24874878, 21.72538948]
-            ]
-        }
-    }
+            "coordinates": [[24.69809914, 31.66791725], [36.24874878, 21.72538948]],
+        },
+    },
 ]
 
-#bulk_update(test_data)
+# bulk_update(test_data)

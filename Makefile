@@ -11,11 +11,11 @@ clean:
 	rm -rf .venv
 
 lint: 
-	black --check flows tests && \
-  mypy --non-interactive --install-types flows  
+	black --check . && \
+  mypy --non-interactive --install-types .
 
 format:
-	black flows tests
+	black .
 
 # Run all tests
 test:

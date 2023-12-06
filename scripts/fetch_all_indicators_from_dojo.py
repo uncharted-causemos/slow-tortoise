@@ -1,18 +1,20 @@
-import requests
-import json
-from requests.auth import HTTPBasicAuth
-import sys
 import os
+import sys
+import json
+import requests
+from typing import Any
+from requests.auth import HTTPBasicAuth
+
 
 DOJO_API_URL = os.getenv("DOJO_API_URL", "https://causemos-analyst-api.dojo-modeling.com/api/dojo")
-DOJO_USER = os.getenv("DOJO_USER", "") # required
-DOJO_PWD = os.getenv("DOJO_PWD", "") # required
+DOJO_USER = os.getenv("DOJO_USER", "")  # required
+DOJO_PWD = os.getenv("DOJO_PWD", "")  # required
 
 # Fetch all indicator metadata from Dojo and write it to stdout, if -i is provided, only fetch ids
 # Usage: DOJO_USER=... DOJO_PWD=... python fetch_all_indicators_from_dojo.py > all-indicators-08-12.json
 #    Or: DOJO_USER=... DOJO_PWD=... python fetch_all_indicators_from_dojo.py -i > all-indicator-ids.txt
 
-all_results = []
+all_results: list[Any] = []
 scroll_id = None
 hits = 1
 
@@ -43,7 +45,7 @@ while len(all_results) < hits:
 
     print(f">> Loop: hits {hits}, Len {len(all_results)}", file=sys.stderr)
 
-if len(sys.argv) > 1 and sys.argv[1] == '-i':
+if len(sys.argv) > 1 and sys.argv[1] == "-i":
     for r in all_results:
         print(r["id"])
 else:

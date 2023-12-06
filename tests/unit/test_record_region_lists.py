@@ -37,13 +37,13 @@ def test_record_region_lists():
     assert_json_equal(
         '{"country": ["United States", "Canada"], "admin1": ["United States__New York", "Canada__Ontario"], "admin2": ["United States__New York__nyadmi2", "Canada__Ontario__onadmin2"], "admin3": ["United States__New York__nyadmi2__nyadmin3", "Canada__Ontario__onadmin2__onadmin3"]}',
         read_obj(s3, "mid-1/rid-1/raw/A/info/region_lists.json"),
-        True
+        True,
     )
 
     assert_json_equal(
         '{"country": ["Canada"], "admin1": ["Canada__Quebec"], "admin2": ["Canada__Quebec__qadmin2"], "admin3": ["Canada__Quebec__qadmin2__qadmin3"]}',
         read_obj(s3, "mid-1/rid-1/raw/B/info/region_lists.json"),
-        True
+        True,
     )
 
     assert ["country", "admin1", "admin2", "admin3"] == region_cols
