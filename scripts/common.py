@@ -1,15 +1,18 @@
-import os
-import json
+import uuid
 import time
 import requests
 from requests.auth import HTTPBasicAuth
-from typing import TypedDict, NotRequired
+from typing import TypedDict
 from elasticsearch import Elasticsearch
-from elasticsearch.helpers import scan
+from elasticsearch.helpers import scan, bulk
 
 ES_INDEX_DATACUBE = "data-datacube"
 ES_INDEX_MODEL_RUN = "data-model-run"
 ES_INDEX_DOMAIN_PROJECT = "domain-project"
+ES_INDEX_PROJECT = "project"
+ES_INDEX_ANALYSIS = "analysis"
+ES_INDEX_INSIGHT = "insight"
+ES_INDEX_QUESTION = "question"
 
 
 class CausemosApiConfig(TypedDict):
@@ -178,6 +181,9 @@ def get_indicator_metadata_from_dojo(indicator_id, config: DojoApiConfig):
     return indicator_metadata
 
 
+# =================== ES helper functions ================
+
+
 def create_es_client(config=DEFAULT_LOCAL_ES_CONFIG):
     client = Elasticsearch([config["url"]], http_auth=(config["user"], config["pwd"]))
     return client
@@ -317,3 +323,84 @@ def copy_documents(
                 print(f"Failed to copy the document, {doc_id}.")
         except Exception as e:
             print(f"Error: {e}")
+
+
+def transform_reindex(
+    source: ESConnectionConfigWithIndex,
+    destination: ESConnectionConfigWithIndex,
+    query=None,
+    transform=None,
+):
+    """
+    Reindex documents from source index to destination index.
+    """
+    source_client = create_es_client(source)
+    destination_client = create_es_client(destination)
+    docs = scan(source_client, index=source["index"], query=query)
+
+    def _update_doc(hits):
+        for h in hits:
+            h["_index"] = destination["index"]
+            if transform is not None:
+                transformed = transform(h["_source"])
+                h["_source"] = transformed
+                h["_id"] = transformed["id"]
+            yield h
+
+    (success, errors) = bulk(destination_client, _update_doc(docs))
+    return (success, errors)
+
+
+def copy_project(
+    source: ESConnectionConfig,
+    destination: ESConnectionConfig,
+    project_id: str,
+    new_project_name="",
+):
+    """
+    Copy project and all the resources linked to the project from source ES to destination ES
+    """
+    new_project_id = "project-" + str(uuid.uuid4())
+    id_query = {"query": {"term": {"id": project_id}}}
+    project_id_query = {"query": {"term": {"project_id": project_id}}}
+
+    def _duplicate_project(doc):
+        doc["id"] = new_project_id
+        if new_project_name:
+            doc["name"] = new_project_name
+        return doc
+
+    def _assign_new_project_id(doc):
+        # Assign new uuid to ID
+        new_id = str(uuid.uuid4())
+        doc["id"] = new_id
+        doc["project_id"] = new_project_id
+        return doc
+
+    (success, _) = transform_reindex(
+        {**source, "index": ES_INDEX_PROJECT},
+        {**destination, "index": ES_INDEX_PROJECT},
+        query=id_query,
+        transform=_duplicate_project,
+    )
+    if success != 1:
+        raise Exception(f"Failed to find or update the project with project ID, '{project_id}'")
+
+    transform_reindex(
+        {**source, "index": ES_INDEX_ANALYSIS},
+        {**destination, "index": ES_INDEX_ANALYSIS},
+        query=project_id_query,
+        transform=_assign_new_project_id,
+    )
+    transform_reindex(
+        {**source, "index": ES_INDEX_INSIGHT},
+        {**destination, "index": ES_INDEX_INSIGHT},
+        query=project_id_query,
+        transform=_assign_new_project_id,
+    )
+    transform_reindex(
+        {**source, "index": ES_INDEX_QUESTION},
+        {**destination, "index": ES_INDEX_QUESTION},
+        query=project_id_query,
+        transform=_assign_new_project_id,
+    )
