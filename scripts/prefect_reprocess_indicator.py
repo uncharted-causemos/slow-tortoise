@@ -6,20 +6,21 @@ import common
 # Usage: python prefect_reprocess_indicator.py INDICATOR_ID [SELECTED_OUTPUT_TASKS]
 
 DOJO_CONFIG = {
-    "url": os.getenv("ES_URL", "https://dojo-test.com"),
-    "usr": os.getenv("DOJO_USER", ""),
+    "url": os.getenv("DOJO_URL", "https://dojo-test.com"),
+    "user": os.getenv("DOJO_USER", ""),
     "pwd": os.getenv("DOJO_PWD", ""),
 }
 
 CAUSEMOS_CONFIG = {
     "url": os.getenv("CAUSEMOS_URL", "http://localhost:3000"),
-    "usr": os.getenv("CAUSEMOS_USER", ""),
+    "user": os.getenv("CAUSEMOS_USER", ""),
     "pwd": os.getenv("CAUSEMOS_PWD", ""),
 }
 
 
 def reprocess_indicator(indicator_id, selected_output_tasks=[]):
     try:
+        print(DOJO_CONFIG)
         metadata = common.get_indicator_metadata_from_dojo(indicator_id, config=DOJO_CONFIG)
         common.process_indicator(
             metadata,
