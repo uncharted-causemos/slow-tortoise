@@ -5,7 +5,14 @@
 
 
 def get_break_down_state(
-    breakdown_option, run_ids, selected_feature, selected_region_ids, selected_years
+    breakdown_option,
+    run_ids,
+    selected_feature,
+    selected_region_ids,
+    selected_years,
+    active_reference_options,
+    selected_output_variables,
+    selected_qualifier_values,
 ):
     comparisonSettings = {
         "shouldDisplayAbsoluteValues": True,
@@ -13,34 +20,52 @@ def get_break_down_state(
         "shouldUseRelativePercentage": False,
     }
     # If breakdown option is none
-    state = {
+    no_breakdown_state = {
         "outputName": selected_feature,
         "modelRunIds": run_ids,
         "comparisonSettings": comparisonSettings,
     }
 
     if len(run_ids) == 0:
-        return state
+        return no_breakdown_state
 
     if breakdown_option == "region":
-        state = {
+        return {
             "modelRunId": run_ids[0],
             "outputName": selected_feature,
             "regionIds": selected_region_ids,
             "comparisonSettings": comparisonSettings,
         }
     if breakdown_option == "year":
-        state = {
+        return {
             "modelRunId": run_ids[0],
             "outputName": selected_feature,
             "regionId": selected_region_ids[0] if len(selected_region_ids) > 0 else None,
             "years": selected_years,
             "comparisonSettings": comparisonSettings,
-            # "isAllYearsReferenceTimeseriesShown": False,
-            # "isSelectedYearsReferenceTimeseriesShown": False,
+            "isAllYearsReferenceTimeseriesShown": "allYears" in active_reference_options,
+            "isSelectedYearsReferenceTimeseriesShown": "selectYears" in active_reference_options,
+        }
+    if breakdown_option == "variable":
+        return {
+            "modelRunId": run_ids[0],
+            "outputNames": selected_output_variables,
+            "comparisonSettings": comparisonSettings,
         }
 
-    return state
+    #  qualifier
+    if isinstance(breakdown_option, str) and len(breakdown_option) > 0:
+        return {
+            "modelRunId": run_ids[0],
+            "outputName": selected_feature,
+            "regionId": selected_region_ids[0] if len(selected_region_ids) > 0 else None,
+            "qualifier": breakdown_option,
+            "qualifierValues": selected_qualifier_values,
+            "comparisonSettings": comparisonSettings,
+        }
+
+    # Else, no breakdown
+    return no_breakdown_state
 
 
 def transform_fn(document, source_client):
@@ -121,6 +146,9 @@ def transform_fn(document, source_client):
             selected_timestamp = data_state.get("selectedTimestamp", selected_timestamp)
             selected_region_ids = data_state.get("selectedRegionIds", [])
             selected_years = data_state.get("selectedYears", [])
+            active_reference_options = data_state.get("activeReferenceOptions", [])
+            selected_output_variables = data_state.get("selectedOutputVariables", [])
+            selected_qualifier_values = data_state.get("selectedQualifierValues", [])
 
             # Overwrite the state with selected feature state
             selected_feature = data_state["activeFeatures"][selected_output_index]
@@ -145,6 +173,9 @@ def transform_fn(document, source_client):
             selected_feature,
             selected_region_ids,
             selected_years,
+            active_reference_options,
+            selected_output_variables,
+            selected_qualifier_values,
         ),
         "mapDisplayOptions": {
             "selectedMapBaseLayer": selected_map_base_layer,
