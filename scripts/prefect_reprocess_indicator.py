@@ -20,7 +20,6 @@ CAUSEMOS_CONFIG = {
 
 def reprocess_indicator(indicator_id, selected_output_tasks=[]):
     try:
-        print(DOJO_CONFIG)
         metadata = common.get_indicator_metadata_from_dojo(indicator_id, config=DOJO_CONFIG)
         common.process_indicator(
             metadata,
