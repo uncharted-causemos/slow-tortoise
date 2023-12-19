@@ -342,15 +342,15 @@ def transform_reindex(
         for h in hits:
             h["_index"] = destination["index"]
             if transform is not None:
-                transformed = transform(h["_source"], source_client)
+                transformed = transform(
+                    h["_source"], source_client=source_client, destination_client=destination_client
+                )
                 h["_source"] = transformed
                 h["_id"] = transformed["id"]
             yield h
 
-    _update_doc(docs)
-    # (success, errors) = bulk(destination_client, _update_doc(docs))
-    # return (success, errors)
-    return (0, 0)
+    (success, errors) = bulk(destination_client, _update_doc(docs))
+    return (success, errors)
 
 
 def copy_project(

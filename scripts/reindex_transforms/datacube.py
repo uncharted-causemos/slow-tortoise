@@ -2,8 +2,6 @@
 #
 # Migrate data_view for indicator datacube, and the data_state and view_state from the linked insight for model datacube
 # to data_state property of the datacube
-
-
 def get_break_down_state(
     breakdown_option,
     run_ids,
@@ -13,11 +11,12 @@ def get_break_down_state(
     active_reference_options,
     selected_output_variables,
     selected_qualifier_values,
+    baseline_timeseries_id,
 ):
     comparisonSettings = {
-        "shouldDisplayAbsoluteValues": True,
-        "baselineTimeseriesId": "",
-        "shouldUseRelativePercentage": False,
+        "shouldDisplayAbsoluteValues": baseline_timeseries_id == "",
+        "baselineTimeseriesId": baseline_timeseries_id,
+        "shouldUseRelativePercentage": True,
     }
     # If breakdown option is none
     no_breakdown_state = {
@@ -68,13 +67,14 @@ def get_break_down_state(
     return no_breakdown_state
 
 
-def transform_fn(document, source_client):
+def transform_fn(document, **args):
     is_model = document["type"] == "model"
 
     admin_levels = ["country", "admin1", "admin2", "admin3"]
 
     # Set default values
     doc_default_view = document.get("default_view", {})
+    breakdown_option = doc_default_view.get("breakdownOption", None)
     color_scale_type = doc_default_view.get("colorScaleType", "linear discrete")
     color_scheme_name = doc_default_view.get("colorSchemeName", "DEFAULT")
     spatial_aggregation = admin_levels[doc_default_view.get("selectedAdminLevel", 0)]
@@ -88,32 +88,40 @@ def transform_fn(document, source_client):
     temporal_aggregation_method = doc_default_view.get("temporalAggregation", "mean")
 
     data_id = document.get("data_id", "")
-    selected_feature = document.get("default_feature", "")
+    selected_feature_name = document.get("default_feature", "")
 
     selected_model_run_ids = ["indicator"]
     selected_transform = ""
     selected_timestamp = None
 
+    # data_state defaults
+    selected_region_ids = []
+    selected_years = []
+    active_reference_options = []
+    selected_output_variables = []
+    selected_qualifier_values = []
+    baseline_timeseries_id = ""
+
     if is_model:
+        selected_model_run_ids = []
         # If model, fetch insight and load the state from it
-        docs = source_client.search(
+        docs = args["source_client"].search(
+            index="insight",
+            size=1,
+            _source=["view_state", "data_state"],
             query={
-                "size": 1,
-                "query": {
-                    "bool": {
-                        "filter": [
-                            {"term": {"visibility": "public"}},
-                            {"term": {"context_id": data_id}},
-                        ]
-                    }
-                },
-                "_source": ["view_state", "data_state"],
-            }
+                "bool": {
+                    "filter": [
+                        {"term": {"visibility": "public"}},
+                        {"term": {"context_id": data_id}},
+                    ]
+                }
+            },
         )
-        if len(docs) > 0:
-            doc = docs[0]
-            view_state = document.get("view_state", {})
-            breakdown_option = view_state.get("breakdownOption", "")
+        if len(docs["hits"]["hits"]) > 0:
+            doc = docs["hits"]["hits"][0]["_source"]
+            view_state = doc.get("view_state", {})
+            breakdown_option = view_state.get("breakdownOption", breakdown_option)
             color_scale_type = view_state.get("colorScaleType", color_scale_type)
             color_scheme_name = view_state.get("colorSchemeName", color_scheme_name)
             spatial_aggregation = admin_levels[
@@ -139,43 +147,49 @@ def transform_fn(document, source_client):
             )
             selected_output_index = view_state.get("selectedOutputIndex", 0)
 
-            # Apply data_state
-            data_state = document.get("data_state", {})
-            selected_model_run_ids = data_state.get("selectedScenarioIds", [])
+            # data_state
+            data_state = doc.get("data_state", {})
+            selected_model_run_ids = data_state.get("selectedScenarioIds", selected_model_run_ids)
             selected_transform = data_state.get("selectedTransform", selected_transform)
             selected_timestamp = data_state.get("selectedTimestamp", selected_timestamp)
-            selected_region_ids = data_state.get("selectedRegionIds", [])
-            selected_years = data_state.get("selectedYears", [])
-            active_reference_options = data_state.get("activeReferenceOptions", [])
-            selected_output_variables = data_state.get("selectedOutputVariables", [])
-            selected_qualifier_values = data_state.get("selectedQualifierValues", [])
+            selected_region_ids = data_state.get("selectedRegionIds", selected_region_ids)
+            baseline_timeseries_id = data_state.get("relativeTo", baseline_timeseries_id)
+            selected_years = data_state.get("selectedYears", selected_years)
+            active_reference_options = data_state.get(
+                "activeReferenceOptions", active_reference_options
+            )
+            selected_output_variables = data_state.get(
+                "selectedOutputVariables", selected_output_variables
+            )
+            selected_qualifier_values = data_state.get(
+                "selectedQualifierValues", selected_qualifier_values
+            )
 
             # Overwrite the state with selected feature state
-            selected_feature = data_state["activeFeatures"][selected_output_index]
-            selected_feature = selected_feature.get("name", selected_feature)
-            selected_transform = selected_feature.get("transform", selected_transform)
-            temporal_resolution = selected_feature.get("temporalResolution", temporal_resolution)
-            spatial_aggregation_method = selected_feature.get(
+            selected_feature_obj = data_state["activeFeatures"][selected_output_index]
+            selected_feature_name = selected_feature_obj.get("name", selected_feature_name)
+            selected_transform = selected_feature_obj.get("transform", selected_transform)
+            temporal_resolution = selected_feature_obj.get(
+                "temporalResolution", temporal_resolution
+            )
+            spatial_aggregation_method = selected_feature_obj.get(
                 "spatialAggregation", spatial_aggregation_method
             )
-            temporal_aggregation_method = selected_feature.get(
+            temporal_aggregation_method = selected_feature_obj.get(
                 "temporalAggregation", temporal_aggregation_method
             )
-            # Apply breakdown state
-
-            print(doc)
-
     default_state = {
-        "dataId": data_id,
+        "dataId": data_id,  # Do we need this?
         "breakdownState": get_break_down_state(
             breakdown_option,
             selected_model_run_ids,
-            selected_feature,
+            selected_feature_name,
             selected_region_ids,
             selected_years,
             active_reference_options,
             selected_output_variables,
             selected_qualifier_values,
+            baseline_timeseries_id,
         ),
         "mapDisplayOptions": {
             "selectedMapBaseLayer": selected_map_base_layer,
@@ -186,13 +200,12 @@ def transform_fn(document, source_client):
             "colorScaleType": color_scale_type,
             "numberOfColorBins": number_of_color_bins,
         },
-        "selectedTimestamp": selected_timestamp,  # Do we need this?
-        "selectedTransform": selected_transform,  # empty string or null?
+        "selectedTimestamp": selected_timestamp,
+        "selectedTransform": selected_transform,
         "spatialAggregationMethod": spatial_aggregation_method,
         "temporalAggregationMethod": temporal_aggregation_method,
         "spatialAggregation": spatial_aggregation,
         "temporalResolution": temporal_resolution,
     }
     document["default_state"] = default_state
-    # Modify document and return
     return document
