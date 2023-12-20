@@ -342,7 +342,9 @@ def transform_reindex(
         for h in hits:
             h["_index"] = destination["index"]
             if transform is not None:
-                transformed = transform(h["_source"])
+                transformed = transform(
+                    h["_source"], source_client=source_client, destination_client=destination_client
+                )
                 h["_source"] = transformed
                 h["_id"] = transformed["id"]
             yield h

@@ -7,13 +7,13 @@ import common
 
 ES_CONFIG = {
     "url": os.getenv("ES_URL", "http://localhost:9200"),
-    "usr": os.getenv("ES_USER", ""),
+    "user": os.getenv("ES_USER", ""),
     "pwd": os.getenv("ES_PWD", ""),
 }
 
 CAUSEMOS_CONFIG = {
     "url": os.getenv("CAUSEMOS_URL", "http://localhost:3000"),
-    "usr": os.getenv("CAUSEMOS_USER", ""),
+    "user": os.getenv("CAUSEMOS_USER", ""),
     "pwd": os.getenv("CAUSEMOS_PWD", ""),
 }
 
