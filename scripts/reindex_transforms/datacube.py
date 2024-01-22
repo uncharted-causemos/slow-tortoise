@@ -158,9 +158,20 @@ def transform_fn(document, **args):
             active_reference_options = data_state.get(
                 "activeReferenceOptions", active_reference_options
             )
-            selected_output_variables = data_state.get(
-                "selectedOutputVariables", selected_output_variables
+
+            # Note: selectedOutputVariables in data_state are display output names not actual output names.
+            # Re map the display names to output names.
+            def toOutputName(display_name):
+                for feature in data_state["activeFeatures"]:
+                    if feature["display_name"] == display_name:
+                        return feature["name"]
+                return None
+
+            selected_output_variables = map(
+                toOutputName, data_state.get("selectedOutputVariables", selected_output_variables)
             )
+            selected_output_variables = [v for v in selected_output_variables if isinstance(v, str)]
+
             selected_qualifier_values = data_state.get(
                 "selectedQualifierValues", selected_qualifier_values
             )
