@@ -349,7 +349,11 @@ def transform_reindex(
                 h["_id"] = transformed["id"]
             yield h
 
-    (success, errors) = bulk(destination_client, _update_doc(docs))
+    # Note: Reduced chunk size from default 500 to 250, since the write requests failed with timeout sometimes.
+    # `bulk` tries to process data by chunk and if a chunk size is too big and takes longer to process, it times out.
+    # In that case reducing chunk size will help. Alternatively you can give the larger request_timeout value
+    # e.g. bulk(destination_client, _update_doc(docs), request_timeout=60 * 3)
+    (success, errors) = bulk(destination_client, _update_doc(docs), chunk_size=250)
     return (success, errors)
 
 
