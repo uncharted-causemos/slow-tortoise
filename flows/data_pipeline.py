@@ -779,7 +779,8 @@ def record_region_lists(df, dest, model_id, run_id) -> Tuple[list, list]:
 
     region_cols = extract_region_columns(df)
     if len(region_cols) == 0:
-        raise SKIP("No regional information available")
+        feature_list = df["feature"].unique().dropna().compute().tolist()
+        return region_cols, feature_list
 
     save_df = df.copy()
     print(

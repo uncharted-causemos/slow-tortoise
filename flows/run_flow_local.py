@@ -14,10 +14,10 @@ parameter_sets = [
         data_paths=[f"file://{Path(os.getcwd()).parent}/tests/data/geo-test-data.parquet"],
         selected_output_tasks=[
             "compute_global_timeseries",
-            "compute_regional_stats",
-            "compute_regional_timeseries",
-            "compute_regional_aggregation",
-            "compute_tiles",
+            # "compute_regional_stats",
+            # "compute_regional_timeseries",
+            # "compute_regional_aggregation",
+            # "compute_tiles",
         ],
     ),
     # 1: Maxhop
@@ -188,6 +188,21 @@ parameter_sets = [
             "fill_timestamp": 0,
             "is_indicator": true,
             "model_id": "76b6ec52-183e-49db-9b8f-01c0aaf0255c",
+            "raw_count_threshold": 10000,
+            "run_id": "indicator",
+            "selected_output_tasks": null,
+            "weight_column": ""
+        } 
+    """
+    ),
+    # 12 Dataset with no available region columns (more details: https://gitlab.uncharted.software/WM/slow-tortoise/-/issues/45#note_404940)
+    json.loads(
+        """
+        {
+            "data_paths": ["https://jataware-world-modelers.s3.amazonaws.com/transition/datasets/75a8ad46-a535-4557-9137-0033d8bd2531/75a8ad46-a535-4557-9137-0033d8bd2531.parquet.gzip"],
+            "fill_timestamp": 0,
+            "is_indicator": true,
+            "model_id": "test_indicator",
             "raw_count_threshold": 10000,
             "run_id": "indicator",
             "selected_output_tasks": null,
