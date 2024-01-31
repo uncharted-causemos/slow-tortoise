@@ -14,10 +14,10 @@ parameter_sets = [
         data_paths=[f"file://{Path(os.getcwd()).parent}/tests/data/geo-test-data.parquet"],
         selected_output_tasks=[
             "compute_global_timeseries",
-            # "compute_regional_stats",
-            # "compute_regional_timeseries",
-            # "compute_regional_aggregation",
-            # "compute_tiles",
+            "compute_regional_stats",
+            "compute_regional_timeseries",
+            "compute_regional_aggregation",
+            "compute_tiles",
         ],
     ),
     # 1: Maxhop
