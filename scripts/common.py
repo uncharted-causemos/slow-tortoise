@@ -410,3 +410,34 @@ def copy_project(
         query=project_id_query,
         transform=_assign_new_project_id,
     )
+
+
+def copy_analyses(
+    config: ESConnectionConfig,
+    source_project_id: str,
+    dest_project_id: str,
+):
+    def _assign_dest_project_id(doc, source_client, destination_client):
+        # Assign new uuid to ID
+        new_id = str(uuid.uuid4())
+        doc["id"] = new_id
+        doc["project_id"] = dest_project_id
+        return doc
+
+    query = {
+        "query": {
+            "bool": {
+                "filter": [
+                    # Search for analyses in the source project
+                    {"term": {"project_id": source_project_id}},
+                ],
+            }
+        }
+    }
+
+    transform_reindex(
+        {**config, "index": ES_INDEX_ANALYSIS},
+        {**config, "index": ES_INDEX_ANALYSIS},
+        query=query,
+        transform=_assign_dest_project_id,
+    )
