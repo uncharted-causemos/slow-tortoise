@@ -195,6 +195,21 @@ parameter_sets = [
         } 
     """
     ),
+    # 12 Dataset with no available region columns (more details: https://gitlab.uncharted.software/WM/slow-tortoise/-/issues/45#note_404940)
+    json.loads(
+        """
+        {
+            "data_paths": ["https://jataware-world-modelers.s3.amazonaws.com/transition/datasets/75a8ad46-a535-4557-9137-0033d8bd2531/75a8ad46-a535-4557-9137-0033d8bd2531.parquet.gzip"],
+            "fill_timestamp": 0,
+            "is_indicator": true,
+            "model_id": "test_indicator",
+            "raw_count_threshold": 10000,
+            "run_id": "indicator",
+            "selected_output_tasks": null,
+            "weight_column": ""
+        } 
+    """
+    ),
 ]
 
 if __name__ == "__main__":
